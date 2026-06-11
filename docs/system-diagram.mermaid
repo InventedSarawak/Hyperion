@@ -1,0 +1,117 @@
+graph TD
+    %% --- Style Definitions (Bright, distinct colors) ---
+    classDef external fill:#f39c12,stroke:#e67e22,color:#ffffff,stroke-width:2px,stroke-dasharray: 5 5;
+    classDef client fill:#3498db,stroke:#2980b9,color:#ffffff,stroke-width:2px;
+    classDef ingress fill:#9b59b6,stroke:#8e44ad,color:#ffffff,stroke-width:2px;
+    classDef service fill:#2ecc71,stroke:#27ae60,color:#ffffff,stroke-width:2px;
+    classDef broker fill:#e74c3c,stroke:#c0392b,color:#ffffff,stroke-width:2px;
+    classDef storage fill:#34495e,stroke:#2c3e50,color:#ffffff,stroke-width:2px;
+    classDef ai fill:#e67e22,stroke:#d35400,color:#ffffff,stroke-width:2px;
+    classDef observability fill:#1abc9c,stroke:#16a085,color:#ffffff,stroke-width:2px;
+
+    %% --- 1. External Sources ---
+    subgraph External [External Integrations]
+        NVD([NVD API / CVEs]):::external
+        GitHub([GitHub API / Repos]):::external
+        ExploitDB([Exploit-DB]):::external
+    end
+
+    %% --- 2. Client & Access Layer ---
+    subgraph Access [Client Layer]
+        Hacker([User: Hacker]):::client
+        Manager([User: Manager]):::client
+        TUI(TUI Dashboard<br/>Bubble Tea):::client
+        Web(Web Dashboard<br/>Next.js):::client
+        
+        Hacker --> TUI
+        Manager --> Web
+    end
+
+    %% --- 3. Ingress & Control Plane ---
+    subgraph Control [Ingress & Control Plane]
+        LB{Nginx Load Balancer}:::ingress
+        Gateway(API Gateway<br/>GraphQL / gRPC):::ingress
+        Keycloak(Keycloak<br/>AuthN / AuthZ):::ingress
+        Lago(Lago<br/>Billing Hook):::ingress
+        Redis[(Redis<br/>Rate Limit / Cache)]:::storage
+
+        TUI -->|gRPC| Gateway
+        Web -->|HTTPS| LB
+        LB -->|/api| Gateway
+        LB -->|/auth| Keycloak
+        Gateway -.->|Async Event| Lago
+        Gateway <--> Redis
+    end
+
+    %% --- 4. Event Streaming Backbone ---
+    subgraph EventBus [Event Streaming Backbone]
+        Kafka{{Apache Kafka<br/>raw-signals topic}}:::broker
+        Zookeeper{{Zookeeper}}:::broker
+        Kafka <--> Zookeeper
+    end
+
+    %% --- 5. Core Processing & AI Layer ---
+    subgraph Processing [Processing & Intelligence Workers]
+        Ingest(Ingestion Worker):::service
+        Intel(Intelligence Service<br/>Indexer & Blast Radius):::service
+        Archiver(Lake Archiver):::service
+        Copilot(CTF Copilot<br/>RAG Pipeline):::ai
+        Sandbox[Docker Sandbox<br/>Exploit Runner]:::ai
+
+        NVD -->|Fetch 10m| Ingest
+        GitHub -->|Fetch Deps| Ingest
+        ExploitDB -->|Scrape| Copilot
+
+        Ingest -->|Push Events| Kafka
+        Kafka -->|Consume| Intel
+        Kafka -->|Consume| Archiver
+
+        Gateway <-->|gRPC / Stream| Intel
+        Gateway <-->|gRPC / Stream| Copilot
+        Copilot -->|Execute Script| Sandbox
+    end
+
+    %% --- 6. Data & Persistence Layer ---
+    subgraph Persistence [Data Persistence Layer]
+        Postgres[(PostgreSQL<br/>Meta & Users)]:::storage
+        Elastic[(Elasticsearch<br/>Percolator & Search)]:::storage
+        Neo4j[(Neo4j<br/>Dependency Graph)]:::storage
+        Qdrant[(Qdrant<br/>Vector Store)]:::storage
+        MinIO[(MinIO<br/>Parquet & Raw Code)]:::storage
+        DuckDB[(DuckDB<br/>Analytics)]:::storage
+        Ollama[[Ollama<br/>Local LLM]]:::ai
+
+        Intel <--> Postgres
+        Intel <--> Elastic
+        Intel <--> Neo4j
+        
+        Archiver -->|Write Parquet| MinIO
+        DuckDB <-->|Query Parquet| MinIO
+        
+        Copilot <--> Qdrant
+        Copilot <--> MinIO
+        Copilot <-->|Chat Completion| Ollama
+    end
+
+    %% --- 7. Telemetry & Observability Layer ---
+    subgraph Telemetry [Observability & GitOps]
+        OTEL(OpenTelemetry<br/>Collector):::observability
+        Prometheus[(Prometheus<br/>Metrics)]:::storage
+        Loki[(Grafana Loki<br/>Logs)]:::storage
+        Tempo[(Grafana Tempo<br/>Traces)]:::storage
+        GrafanaUI(Grafana<br/>Dashboards):::observability
+        ArgoCD(ArgoCD<br/>K3s GitOps Sync):::observability
+
+        OTEL --> Prometheus
+        OTEL --> Loki
+        OTEL --> Tempo
+        GrafanaUI --> Prometheus
+        GrafanaUI --> Loki
+        GrafanaUI --> Tempo
+
+        %% Telemetry Data Flow
+        Gateway -.->|Traces & Logs| OTEL
+        Ingest -.->|Metrics| OTEL
+        Intel -.->|Traces| OTEL
+        Copilot -.->|Logs| OTEL
+    end
