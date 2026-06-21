@@ -5,22 +5,24 @@ hyperion/
 github.com/vedant/hyperion/
 ├── .github/workflows/          # CI/CD
 ├── apps/
-│   ├── hermes-gateway/         # 🧠 Go: API Gateway (GraphQL/gRPC Entry)
+│   ├── nexus/                  # 🧠 Go: API Gateway (GraphQL/gRPC Entry)
 │   │   ├── cmd/server/main.go
 │   │   ├── internal/auth/      # JWT Validation
 │   │   └── internal/graph/     # GraphQL Resolvers
-│   ├── artemis-worker/         # 📡 Go: Ingestion (Fetches Data)
+│   ├── siphon/                 # 📡 Go: Ingestion (Fetches Data)
 │   │   ├── cmd/worker/main.go
 │   │   └── internal/adapters/  # NVD/GitHub Clients
-│   ├── athena-service/         # 🔍 Go: Intelligence (Search & Graph Logic)
+│   ├── cortex/                 # 🔍 Go: Intelligence (Search & Graph Logic)
 │   │   └── internal/domain/    # DDD Entities (Repo, CVE)
-│   ├── prometheus-copilot/     # 🤖 Go: CTF Copilot (AI & Vectors)
+│   ├── ghost/                  # 🤖 Go: CTF Copilot (AI & Vectors)
 │   │   └── internal/llm/       # Ollama Client
-│   ├── oceanus-archiver/       # 🗄️ Go: Lake Archiver (Parquet / MinIO)
+│   ├── relic/                  # 🗄️ Go: Lake Archiver (Parquet / MinIO)
 │   │   └── cmd/archiver/main.go
-│   ├── pythia-tui/             # 📟 Go: Terminal UI (Bubble Tea)
+│   ├── deck/                   # 📟 Go: Terminal UI (Bubble Tea)
 │   │   └── cmd/tui/main.go
-│   └── olympus-web/            # 🌍 TS: Web Dashboard (Next.js SaaS)
+│   ├── credits/                # 💳️ Go: Credits & Subscription (Lago)
+│   │   └── cmd/internal/main.go
+│   └── console/                # 🌍 TS: Web Dashboard (Next.js SaaS)
 │       ├── src/app/            # App Router (Pages)
 │       ├── package.json        # NPM Config
 │       └── next.config.js

@@ -1,6 +1,6 @@
 # Hyperion: The CVE Intelligence Platform
 
-Hyperion is a simple, lightweight, and efficient TUI based CVE monitoring and analysis tool built with Go. It consists of two main applications: Artemis service that fetches CVE data from the NVD API and Athena Service that processes, indexes, and serves this data for querying. The project is structured as a monorepo, with shared domain contracts to ensure consistency across applications.
+Hyperion is a simple, lightweight, and efficient TUI based CVE monitoring and analysis tool built with Go. It consists of two main applications: Siphon service that fetches CVE data from the NVD API and Cortex Service that processes, indexes, and serves this data for querying. The project is structured as a monorepo, with shared domain contracts to ensure consistency across applications.
 
 ---
 
@@ -10,13 +10,14 @@ Hyperion is a simple, lightweight, and efficient TUI based CVE monitoring and an
 hyperion/
 github.com/vedant/hyperion/
 └── apps/
-    ├── hermes-gateway/         # Go: API Gateway (GraphQL/gRPC Entry)
-    ├── artemis-worker/         # Go: Ingestion (Fetches Data)
-    ├── athena-service/         # Go: Intelligence (Search & Graph Logic)
-    ├── prometheus-copilot/     # Go: CTF Copilot (AI & Vectors)
-    ├── oceanus-archiver/       # Go: Lake Archiver (Parquet / MinIO)
-    ├── pythia-tui/             # Go: Terminal UI (Bubble Tea)
-    └── olympus-web/            # TS: Web Dashboard (Next.js SaaS)
+    ├── nexus/                  # Go: API Gateway (GraphQL/gRPC Entry)
+    ├── siphon/                 # Go: Ingestion (Fetches Data)
+    ├── cortex/                 # Go: Intelligence (Search & Graph Logic)
+    ├── ghost/                  # Go: CTF Copilot (AI & Vectors)
+    ├── relic/                  # Go: Lake Archiver (Parquet / MinIO)
+    ├── deck/                   # Go: Terminal UI (Bubble Tea)
+    ├── credits/                # Go: Billing & Credits (Lago)
+    └── console/                # TS: Web Dashboard (Next.js SaaS)
 ```
 
 ## Progress
