@@ -1,0 +1,25 @@
+version: '3'
+
+tasks:
+    default:
+        desc: List all available tasks
+        cmds:
+            - task --list-all
+
+    web:
+        desc: Starts the web ui with landing and payments
+        cmds:
+            - pnpm i && pnpm dev
+        silent: true
+
+    tui:
+        desc: Starts the Go TUI application
+        cmds:
+            - cd apps/tui && task run
+        silent: true
+
+    backend:
+        desc: Starts the Go backend application
+        cmds:
+            - cd apps/backend && task run
+        silent: true
