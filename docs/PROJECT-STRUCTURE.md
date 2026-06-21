@@ -4,6 +4,7 @@
 hyperion/
 github.com/vedant/hyperion/
 ├── .github/workflows/          # CI/CD
+├── docs/                       # Project Documentation
 ├── apps/
 │   ├── nexus/                  # 🧠 Go: API Gateway (GraphQL/gRPC Entry)
 │   │   ├── cmd/server/main.go
@@ -31,14 +32,14 @@ github.com/vedant/hyperion/
 │   │   ├── ingestion/v1/
 │   │   ├── intelligence/v1/
 │   │   └── buf.yaml
-│   ├── common-go/              # 📦 Go: Shared Utils (Kafka, Errors)
-│   ├── telemetry-go/           # 📊 Go: OTEL, Logger configurations
-│   ├── api-sdk/                # 📦 TS: Generated Axios Client
-│   └── ui-kit/                 # 🎨 TS: Shared React Components
+│   ├── common/                 # 📦 Go: Shared Utils (Kafka, Errors)
+│   ├── telemetry/              # 📊 Go: OTEL, Logger configurations
+│   ├── sdk/                    # 📦 TS: Generated Axios Client
+│   └── ui/                     # 🎨 TS: Shared React Components
 ├── deploy/                     # ☁️ Infrastructure
 │   ├── docker-compose.yml
 │   └── k8s/
-├── tools/                      # 🛠️ Scripts
+├── scripts/                      # 🛠️ Scripts
 ├── go.work                     # 🔗 Go Workspace Config
 ├── turbo.json                  # 🚀 Build Orchestration
 ├── Taskfile.yml                # ⚡ Go Task Runner
