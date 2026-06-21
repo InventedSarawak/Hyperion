@@ -1,25 +1,46 @@
 version: '3'
 
+vars:
+  GO_APPS:
+    sh: find apps -maxdepth 2 -name "go.mod" -exec dirname {} \; | sed 's|^\./||'
+
 tasks:
-    default:
-        desc: List all available tasks
-        cmds:
-            - task --list-all
+  default:
+    cmds:
+      - task: dev
 
-    web:
-        desc: Starts the web ui with landing and payments
-        cmds:
-            - pnpm i && pnpm dev
-        silent: true
+  dev:
+    desc: Start frontend and backend
+    deps:
+      - dev:frontend
+      - dev:backend
 
-    tui:
-        desc: Starts the Go TUI application
-        cmds:
-            - cd apps/tui && task run
-        silent: true
+  dev:frontend:
+    cmds:
+      - pnpm run dev
 
-    backend:
-        desc: Starts the Go backend application
-        cmds:
-            - cd apps/backend && task run
-        silent: true
+  dev:backend:
+    cmds:
+      - echo "Backend is running (placeholder)"
+      - tail -f /dev/null # replace this later with your backend command
+
+  build:
+    desc: Build everything using TurboRepo
+    cmds:
+      - pnpm run build
+
+  build:go:
+    desc: Compile all Go microservices
+    cmds:
+      - |
+        for app in {{.GO_APPS}}; do
+          echo "Building $$app..."
+          cd $$app && go build -o bin/server ./cmd/server/main.go
+          cd ../..
+        done
+
+  tidy:
+    desc: Run go mod tidy across all Go microservices
+    cmds:
+      - ./scripts/tidy-go-files.sh
+    

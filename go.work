@@ -1,1 +1,14 @@
-go 1.25.5
+go 1.26.3
+
+use (
+	./apps/cortex
+	./apps/credits
+	./apps/deck
+	./apps/ghost
+	./apps/nexus
+	./apps/relic
+	./apps/siphon
+	./packages/common
+	./packages/contracts
+	./packages/telemetry
+)
