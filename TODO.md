@@ -4,8 +4,8 @@
 
 ### Project Setup (Monorepo)
 
-- [ ] Initialize Git repository
-- [ ] Initialize Go Workspace (`go work init`)
+- [x] Initialize Git repository
+- [x] Initialize Go Workspace (`go work init`)
 - [ ] Setup `Taskfile.yml` for automation (build, run, test)
 - [ ] Setup `turbo.json` for build caching
 - [ ] Create directory structure (`apps/`, `packages/`, `deploy/`)

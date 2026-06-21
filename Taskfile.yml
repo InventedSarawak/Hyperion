@@ -43,4 +43,14 @@ tasks:
     desc: Run go mod tidy across all Go microservices
     cmds:
       - ./scripts/tidy-go-files.sh
+
+  test:go:
+    desc: Run Go tests across all workspace modules
+    cmds:
+      - ./scripts/test-go-files.sh
+
+  test:go:rich:
+    desc: Run Go tests across all workspace modules with RichGo output
+    cmds:
+      - GO_TEST_RUNNER="richgo test" ./scripts/test-go-files.sh
     
