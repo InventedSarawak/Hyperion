@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package hyperion.intelligence.v1;
+
+import "hyperion/common/v1/vulnerability.proto";
+
+// IntelligenceService is cortex's internal gRPC API. nexus (the gateway)
+// calls it to serve external GraphQL queries; cortex implements it against
+// its search index.
+service IntelligenceService {
+  // Search runs a full-text query over indexed vulnerabilities.
+  rpc Search(SearchRequest) returns (SearchResponse);
+}
+
+message SearchRequest {
+  string query = 1; // free-text, e.g. "log4j"
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message SearchResult {
+  hyperion.common.v1.Vulnerability vulnerability = 1;
+  double score = 2; // relevance score from the search index
+}
+
+message SearchResponse {
+  repeated SearchResult results = 1;
+  string next_page_token = 2;
+}

@@ -21,12 +21,12 @@
 
 ### Domain Contracts (The "Law") — do this FIRST
 
-- [x] Create `packages/contracts` module (go.mod exists; no protos yet)
-- [ ] Setup `buf.yaml` + `buf.gen.yaml` (codegen config) and wire `task codegen`
-- [ ] Define `proto/hyperion/common/v1/vulnerability.proto` (shared domain types)
-- [ ] Define `proto/hyperion/events/v1/signal_events.proto` (the `SignalEvent`)
-- [ ] Define `proto/hyperion/intelligence/v1/intelligence_service.proto` (the search RPC)
-- [ ] Generate Go into `packages/contracts` and confirm all services can import it via `go.work`
+- [x] Create `packages/contracts` module
+- [x] Setup `buf.yaml` + `buf.gen.yaml` (managed mode, local plugins) and wire `task codegen`
+- [x] Define `proto/hyperion/common/v1/vulnerability.proto` (shared normalized types)
+- [x] Define `proto/hyperion/events/v1/signal_events.proto` (`SignalDiscovered`)
+- [x] Define `proto/hyperion/intelligence/v1/intelligence_service.proto` (the `Search` RPC)
+- [x] Generate Go into `packages/contracts/gen` and confirm services can import via `go.work` (verified from siphon)
 
 ### App: Ingestion Worker (`apps/siphon`)
 

@@ -1,0 +1,14 @@
+version: v2
+managed:
+  enabled: true
+  override:
+    # Generated Go import path = this prefix + the proto file's relative dir.
+    - file_option: go_package_prefix
+      value: github.com/inventedsarawak/hyperion/packages/contracts/gen
+plugins:
+  - local: protoc-gen-go
+    out: gen
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: gen
+    opt: paths=source_relative

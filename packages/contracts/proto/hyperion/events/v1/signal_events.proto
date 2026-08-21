@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package hyperion.events.v1;
+
+import "google/protobuf/timestamp.proto";
+import "hyperion/common/v1/vulnerability.proto";
+
+// SourceKind identifies the upstream feed a signal originated from.
+enum SourceKind {
+  SOURCE_KIND_UNSPECIFIED = 0;
+  SOURCE_KIND_NVD = 1;
+  SOURCE_KIND_GITHUB_ADVISORY = 2;
+  SOURCE_KIND_CISA_KEV = 3;
+  SOURCE_KIND_EXPLOIT_DB = 4;
+}
+
+// SignalDiscovered is emitted by siphon when it observes a vulnerability
+// signal from an upstream source. This is the event contract that cortex
+// consumes off the message bus (topic: raw-signals).
+message SignalDiscovered {
+  string signal_id = 1; // stable dedupe / idempotency key
+  SourceKind source = 2;
+  hyperion.common.v1.Vulnerability vulnerability = 3;
+  google.protobuf.Timestamp discovered_at = 4;
+  string raw_ref = 5; // pointer to the archived raw payload (e.g. object key)
+}

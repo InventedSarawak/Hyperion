@@ -40,6 +40,14 @@ tasks:
           (cd "$app" && go build ./...)
         done
 
+  codegen:
+    desc: Generate Go code from protobuf contracts (buf + local protoc-gen plugins)
+    dir: packages/contracts
+    cmds:
+      - buf lint
+      - buf generate
+      - go mod tidy
+
   tidy:
     desc: Run go mod tidy across all Go microservices
     cmds:
