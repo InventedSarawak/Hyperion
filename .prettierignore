@@ -1,0 +1,17 @@
+# Dependencies
+**/node_modules
+# Build output
+**/.next
+**/dist
+**/bin
+**/.turbo
+# Go build cache
+.cache
+# Generated protobuf Go code (source of truth is the .proto)
+packages/contracts/gen
+# Next.js generated
+**/next-env.d.ts
+# Lockfiles / checksums
+pnpm-lock.yaml
+go.work.sum
+**/go.sum

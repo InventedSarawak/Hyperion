@@ -4,16 +4,16 @@
 
 Services use codenames in `apps/`. Map to their role:
 
-| Codename    | Role                         | Language | Descriptive name (old docs) |
-| :---------- | :--------------------------- | :------- | :-------------------------- |
-| **nexus**   | API Gateway (GraphQL/gRPC)   | Go       | api-gateway                 |
-| **siphon**  | Ingestion Worker             | Go       | ingestion-worker            |
-| **cortex**  | Intelligence (search/graph)  | Go       | intelligence-service        |
-| **ghost**   | CTF Copilot (AI/RAG)         | Go       | ctf-copilot                 |
-| **relic**   | Lake Archiver (Parquet/MinIO)| Go       | lake-archiver               |
-| **deck**    | Terminal UI (Bubble Tea)     | Go       | tui-dashboard               |
-| **credits** | Billing/Subscriptions (Lago) | Go       | —                           |
-| **console** | Web Dashboard (Next.js)      | TS       | web-dashboard               |
+| Codename    | Role                          | Language | Descriptive name (old docs) |
+| :---------- | :---------------------------- | :------- | :-------------------------- |
+| **nexus**   | API Gateway (GraphQL/gRPC)    | Go       | api-gateway                 |
+| **siphon**  | Ingestion Worker              | Go       | ingestion-worker            |
+| **cortex**  | Intelligence (search/graph)   | Go       | intelligence-service        |
+| **ghost**   | CTF Copilot (AI/RAG)          | Go       | ctf-copilot                 |
+| **relic**   | Lake Archiver (Parquet/MinIO) | Go       | lake-archiver               |
+| **deck**    | Terminal UI (Bubble Tea)      | Go       | tui-dashboard               |
+| **credits** | Billing/Subscriptions (Lago)  | Go       | —                           |
+| **console** | Web Dashboard (Next.js)       | TS       | web-dashboard               |
 
 ## Project Root
 
