@@ -2,30 +2,40 @@
 
 ## TODO v1: The Foundation (MVP)
 
+> **Plan (decided 2026-08-22):** first vertical slice is **siphon → cortex → nexus**
+> (NVD ingest → `SignalEvent` → cortex stores/indexes → `query { search }` via nexus).
+> **Contracts-first:** define protobuf in `packages/contracts` and generate Go before wiring
+> services. Keep **per-service `go.mod`**. `ghost` (exploit gen) is **parked** — not built yet.
+> See `CURRENT_PROGRESS.md` for the live snapshot.
+
 ### Project Setup (Monorepo)
 
 - [x] Initialize Git repository
-- [x] Initialize Go Workspace (`go work init`)
-- [ ] Setup `Taskfile.yml` for automation (build, run, test)
-- [ ] Setup `turbo.json` for build caching
-- [ ] Create directory structure (`apps/`, `packages/`, `deploy/`)
-- [ ] Configure `deploy/docker-compose.yml` (Postgres, Elasticsearch)
+- [x] Initialize Go Workspace (`go work init`) — 7 service modules + 3 Go packages wired in `go.work`
+- [x] Setup `Taskfile.yml` for automation (build, run, test) — `task build:go` fixed (space-separated app list; `go build ./...` compile-check, no binaries until a real `func main` exists)
+- [x] Setup `turbo.json` for build caching
+- [x] Create directory structure (`apps/`, `packages/`, `deploy/`)
+- [x] Scaffold Ginkgo test harnesses per service (smoke-level; `task test:go` passes)
+- [x] Remove deprecated empty `api/` dir (contracts live in `packages/contracts`)
+- [ ] Configure `deploy/docker-compose.yml` (currently empty — Postgres, Elasticsearch)
 
-### Domain Contracts (The "Law")
+### Domain Contracts (The "Law") — do this FIRST
 
-- [ ] Create `packages/contracts`
-- [ ] Define `ingestion/v1/signal.proto` (The data structure)
-- [ ] Define `intelligence/v1/search.proto` (The API structure)
-- [ ] Setup `buf.yaml` and generate Go structs
+- [x] Create `packages/contracts` module (go.mod exists; no protos yet)
+- [ ] Setup `buf.yaml` + `buf.gen.yaml` (codegen config) and wire `task codegen`
+- [ ] Define `proto/hyperion/common/v1/vulnerability.proto` (shared domain types)
+- [ ] Define `proto/hyperion/events/v1/signal_events.proto` (the `SignalEvent`)
+- [ ] Define `proto/hyperion/intelligence/v1/intelligence_service.proto` (the search RPC)
+- [ ] Generate Go into `packages/contracts` and confirm all services can import it via `go.work`
 
-### App: Ingestion Worker (`apps/ingestion-worker`)
+### App: Ingestion Worker (`apps/siphon`)
 
 - [ ] **Infrastructure:** Implement NVD API Client (HTTP adapter)
 - [ ] **Domain:** Define `Vulnerability` entity
 - [ ] **Application:** Create Cron Job (ticker) to fetch CVEs every 10m
 - [ ] **Infrastructure:** Implement `PostgresRepository` to save raw metadata
 
-### App: Intelligence Service (`apps/intelligence-service`)
+### App: Intelligence Service (`apps/cortex`)
 
 - [ ] **Infrastructure:** Implement Elasticsearch Client
 - [ ] **Application:** Create `Indexer` service (Postgres -> Elastic sync)
@@ -54,7 +64,7 @@
   - Logic: `MERGE (r:Repo)-[:DEPENDS_ON]->(l:Lib)`
 - [ ] **Query:** Add `FindBlastRadius` (Recursive graph traversal)
 
-### App: TUI Dashboard (`apps/tui-dashboard`)
+### App: TUI Dashboard (`apps/deck`)
 
 - [ ] Initialize Bubble Tea project
 - [ ] **Infrastructure:** Create gRPC Client adapter
@@ -75,7 +85,7 @@
 
 - [ ] Add **Apache Kafka** & Zookeeper to `docker-compose.yml`
 - [ ] Add **Redis** (for caching/deduplication)
-- [ ] Create `packages/common-go/kafka` (Producer/Consumer wrappers)
+- [ ] Create `packages/common/kafka` (Producer/Consumer wrappers)
 
 ### Refactor: Event-Driven Architecture
 
@@ -106,7 +116,7 @@
 ### Data Lake Strategy
 
 - [ ] Add **MinIO** to `docker-compose.yml`
-- [ ] **New App:** `apps/lake-archiver`
+- [ ] **App:** `apps/relic` (Lake Archiver)
   - [ ] Consume `raw-signals` topic
   - [ ] Buffer events and write `Parquet` files to MinIO
 - [ ] **Analytics:** Integrate **DuckDB** to query Parquet files
@@ -117,7 +127,7 @@
 - [ ] **App: API Gateway:**
   - [ ] Implement `RateLimitMiddleware` using Redis
   - [ ] Add `BillingHook` to report usage to Lago
-- [ ] **Web Dashboard:** Create `apps/web-dashboard` (Next.js)
+- [ ] **Web Dashboard:** Build out `apps/console` (Next.js)
   - [ ] User Login (Keycloak)
   - [ ] Subscription Management UI
 
@@ -138,7 +148,7 @@
 - [ ] Add **Qdrant** (Vector DB) to `docker-compose.yml`
 - [ ] Pull `deepseek-coder` or `llama3` model
 
-### App: CTF Copilot (`apps/ctf-copilot`)
+### App: CTF Copilot (`apps/ghost`)
 
 - [ ] **Domain:** Define `Exploit` and `Target` entities
 - [ ] **Infrastructure:**
@@ -176,7 +186,7 @@
 
 ### Application Instrumentation
 
-- [ ] **Packages:** Create `packages/telemetry-go` for shared OTel setup
+- [ ] **Packages:** Build out `packages/telemetry` for shared OTel setup
 - [ ] **Gateway & Services:** Implement OTel Go SDK libraries for distributed tracing
   - [ ] Propagate trace context across gRPC bounds
   - [ ] Propagate trace context across Kafka bounds (Producer/Consumer headers)

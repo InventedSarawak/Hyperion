@@ -11,16 +11,22 @@
 Hyperion is a Hybrid Monorepo orchestrated via **TurboRepo** and **Taskfile**, utilizing Go Workspaces (`go.work`). It strictly enforces **Domain-Driven Design (DDD)** and **Hexagonal Architecture** (Ports & Adapters).
 
 ### 2.1 Microservices (`/apps`)
-* **`api-gateway` (Go):** The edge. Exposes GraphQL (reads) and REST (webhooks), routes gRPC traffic internally.
-* **`ingestion-worker` (Go):** The scavenger. Polls NVD, GitHub, arXiv, Exploit-DB, and publishes `SignalEvents` to Kafka.
-* **`intelligence-service` (Go):** The brain. Consumes Kafka streams, constructs dependency graphs (Neo4j), and builds full-text indexes (Elasticsearch).
-* **`ctf-copilot` (Go):** The AI sidecar. Connects to the Vector DB and Local LLM for exploit generation.
-* **`tui-dashboard` (Go):** Terminal UI built with Bubble Tea for CLI-native power users and hackers.
-* **`web-dashboard` (TypeScript):** Next.js 14 SaaS dashboard for security managers and reporting.
+Services use **codenames**. Each is a Go module (except `console`) following the ports-and-adapters layout in `docs/PROJECT-STRUCTURE.md`.
+* **`nexus` (Go):** The edge / API Gateway. Exposes GraphQL (reads) and REST (webhooks), routes gRPC traffic internally.
+* **`siphon` (Go):** The scavenger / Ingestion Worker. Polls NVD, GitHub Advisory, CISA KEV, Exploit-DB, and publishes `SignalEvents` to Kafka.
+* **`cortex` (Go):** The brain / Intelligence Service. Consumes Kafka streams, constructs dependency graphs (Neo4j), and builds full-text indexes (Elasticsearch).
+* **`ghost` (Go):** The AI sidecar / CTF Copilot. Connects to the Vector DB and Local LLM for exploit generation. *(Parked — not built until later; see docs/TODO.md v5.)*
+* **`relic` (Go):** The Lake Archiver. Consumes the Kafka firehose and writes Parquet batches to MinIO.
+* **`credits` (Go):** Billing & subscriptions. Meters usage and syncs with Lago/Stripe.
+* **`deck` (Go):** Terminal UI built with Bubble Tea for CLI-native power users and hackers.
+* **`console` (TypeScript):** Next.js SaaS dashboard for security managers and reporting.
 
 ### 2.2 Shared Packages (`/packages`)
-* **`contracts`:** Protobuf definitions. **The absolute single source of truth** for all service-to-service communication.
-* **`api-sdk`:** Auto-generated TypeScript Axios client derived from OpenAPI specs (generated via Protobuf).
+* **`contracts`:** Protobuf definitions (own Go module). **The absolute single source of truth** for all service-to-service communication.
+* **`common` (Go):** Shared utilities (Kafka helpers, errors).
+* **`telemetry` (Go):** Shared OpenTelemetry / logger setup.
+* **`sdk` (TS):** Auto-generated TypeScript client derived from OpenAPI specs (generated via Protobuf).
+* **`ui` (TS):** Shared React components. **`eslint-config` / `typescript-config`:** shared frontend tooling.
 
 ---
 
@@ -54,7 +60,7 @@ Hyperion leverages containerization and container orchestration to manage its co
 
 ### 4.2 Orchestration & Scaling (Kubernetes)
 * **Management:** Kubernetes (K8s) is the backbone of Hyperion's deployments, handling service discovery, load balancing, and self-healing for all microservices.
-* **Auto-Scaling:** K8s Horizontal Pod Autoscalers (HPA) scale the `ingestion-worker` and `intelligence-service` dynamically based on CPU utilization or custom metrics (e.g., Kafka consumer group lag).
+* **Auto-Scaling:** K8s Horizontal Pod Autoscalers (HPA) scale the `siphon` and `cortex` dynamically based on CPU utilization or custom metrics (e.g., Kafka consumer group lag).
 * **Stateful Workloads:** StatefulSets and Persistent Volumes (PVs) manage the underlying polyglot persistence layer (Postgres, Neo4j, Qdrant) within the cluster.
 
 ### 4.3 Environment Progression
@@ -67,11 +73,11 @@ Hyperion leverages containerization and container orchestration to manage its co
 ## 5. Core Workflows
 
 1.  **The Intelligence Flow:**
-    * `NVD/Source` -> `ingestion-worker` -> `Protobuf SignalEvent` -> `Kafka`.
-    * `intelligence-service` consumes Kafka -> Travers Neo4j for affected repos -> Checks Elasticsearch Percolator for subscriber rules -> Queues alert in `RabbitMQ`.
+    * `NVD/Source` -> `siphon` -> `Protobuf SignalEvent` -> `Kafka`.
+    * `cortex` consumes Kafka -> Travers Neo4j for affected repos -> Checks Elasticsearch Percolator for subscriber rules -> Queues alert in `RabbitMQ`.
 2.  **The AI Exploit Flow (CTF Copilot):**
-    * User query via `tui-dashboard` ("Exploit Apache Struts").
-    * `ctf-copilot` vectorizes query -> Searches `Qdrant` for Python scripts from Exploit-DB.
+    * User query via `deck` ("Exploit Apache Struts").
+    * `ghost` vectorizes query -> Searches `Qdrant` for Python scripts from Exploit-DB.
     * Context injected into prompt -> `Ollama` generates PoC -> Streams back to terminal.
 3.  **The Type-Safety Flow (Codegen):**
     * Update `.proto` in `packages/contracts`.

@@ -1,8 +1,9 @@
 version: '3'
 
 vars:
+  # Space-separated (not newline) so it expands cleanly into a shell `for … in` list.
   GO_APPS:
-    sh: find apps -maxdepth 2 -name "go.mod" -exec dirname {} \; | sed 's|^\./||'
+    sh: find apps -maxdepth 2 -name "go.mod" -exec dirname {} \; | sed 's|^\./||' | tr '\n' ' '
 
 tasks:
   default:
@@ -30,13 +31,13 @@ tasks:
       - pnpm run build
 
   build:go:
-    desc: Compile all Go microservices
+    desc: Compile all Go microservices (compile-check; no binaries until services have a real func main)
     cmds:
       - |
+        set -e
         for app in {{.GO_APPS}}; do
-          echo "Building $$app..."
-          cd $$app && go build -o bin/server ./cmd/server/main.go
-          cd ../..
+          echo "Building $app..."
+          (cd "$app" && go build ./...)
         done
 
   tidy:

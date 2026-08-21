@@ -1,6 +1,8 @@
-# TECHNOLOGY.md: The SignalFuse Stack
+# TECHNOLOGY.md: The Hyperion Stack
 
-This document outlines the complete polyglot architecture of **SignalFuse Enterprise Edition**. Every technology selected is open-source, self-hostable, and serves a specific, isolated purpose in the event-driven intelligence pipeline.
+This document outlines the complete polyglot architecture of **Hyperion**. Every technology selected is open-source, self-hostable, and serves a specific, isolated purpose in the event-driven intelligence pipeline.
+
+> Version tags below indicate the roadmap phase each tech is introduced. They are kept in sync with `docs/TODO.md`, which is the authoritative working plan.
 
 ## 🏗️ Entry & Interfaces
 
@@ -36,6 +38,7 @@ This document outlines the complete polyglot architecture of **SignalFuse Enterp
 | **Neo4j** | Graph database. Maps the software supply chain (Repo -> Library -> CVE) to instantly calculate the dependency "blast radius." | **v2** |
 | **Redis** | In-memory cache. Used for API rate-limiting, deduping alert notifications, and storing fast-access session states. | **v3** |
 | **MinIO** | S3-compatible Data Lake. Archives the raw Kafka event firehose as Parquet files for long-term historical retention and auditing. | **v4** |
+| **DuckDB** | Embedded analytical (OLAP) engine. Queries the Parquet files in the MinIO data lake directly for ad-hoc historical analytics. | **v4** |
 | **Qdrant** | Vector database. Stores semantic embeddings of Exploit-DB scripts and academic papers for the AI retrieval pipeline. | **v5** |
 
 ## 🤖 AI & Intelligence
@@ -51,15 +54,17 @@ This document outlines the complete polyglot architecture of **SignalFuse Enterp
 | **Kubernetes (K8s) & Helm** | Container orchestration and package management. Manages the deployment, scaling, self-healing, and networking of the polyglot microservices. | **v4** |
 | **ArgoCD & GitHub Actions** | CI/CD pipelines and GitOps workflow. GitHub Actions handles testing and Docker image builds; ArgoCD automatically syncs repository changes to the Kubernetes cluster. | **v4** |
 | **Lago** | Self-hosted metered billing engine. Tracks API usage and alert generation to invoice premium users. | **v4** |
-| **Prometheus & Grafana** | Metrics scraping and visualization. Monitors Kafka lag, HTTP request latency, and Go routine health. | **v4** |
-| **OpenTelemetry & Jaeger** | Distributed tracing. Follows a single request across the GraphQL gateway, through gRPC services, and into the databases. | **v4** |
+| **Prometheus & Grafana** | Metrics scraping and visualization. Monitors Kafka lag, HTTP request latency, and Go routine health. | **v6** |
+| **Grafana Loki & Tempo** | Log aggregation (Loki) and trace storage (Tempo), unified in the Grafana UI. | **v6** |
+| **OpenTelemetry & Jaeger** | Distributed tracing. Follows a single request across the GraphQL gateway, through gRPC services, and into the databases. | **v6** |
 
 ---
 
 ### 🚀 Implementation Roadmap Summary
 
-* **v1 (The Foundation):** Go, PostgreSQL, Elasticsearch, GraphQL. *(Data scraping and basic search).*
+* **v1 (The Foundation):** Go, Protobuf/buf, PostgreSQL, Elasticsearch, GraphQL. *(Contracts, data scraping, and basic search).*
 * **v2 (The Structure):** Neo4j, gRPC, Bubble Tea. *(Dependency graphs and terminal interface).*
 * **v3 (The Stream):** Kafka, RabbitMQ, Redis. *(Real-time event processing and notifications).*
-* **v4 (The Platform):** Next.js, Nginx, Keycloak, MinIO, Lago, Kubernetes (K8s), Helm, ArgoCD, GitHub Actions, Observability. *(SaaS readiness, automated GitOps deployments, billing, and scale).*
+* **v4 (The Platform):** Next.js, Nginx, Keycloak, MinIO, DuckDB, Lago, Kubernetes (K8s), Helm, ArgoCD, GitHub Actions. *(SaaS readiness, automated GitOps deployments, billing, and scale).*
 * **v5 (The Endgame):** Ollama, Qdrant, Rust (optional). *(AI RAG pipeline, automated exploit generation, and low-latency system hooks).*
+* **v6 (Day-Two Ops):** Prometheus, Grafana, Loki, Tempo, OpenTelemetry, Jaeger. *(Metrics, logs, distributed tracing, and reliability).*

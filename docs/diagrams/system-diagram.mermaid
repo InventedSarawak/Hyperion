@@ -20,8 +20,8 @@ graph TD
     subgraph Access [Client Layer]
         Hacker([User: Hacker]):::client
         Manager([User: Manager]):::client
-        TUI(TUI Dashboard<br/>Bubble Tea):::client
-        Web(Web Dashboard<br/>Next.js):::client
+        TUI(deck: TUI Dashboard · Bubble Tea):::client
+        Web(console: Web Dashboard · Next.js):::client
         
         Hacker --> TUI
         Manager --> Web
@@ -30,10 +30,10 @@ graph TD
     %% --- 3. Ingress & Control Plane ---
     subgraph Control [Ingress & Control Plane]
         LB{Nginx Load Balancer}:::ingress
-        Gateway(API Gateway<br/>GraphQL / gRPC):::ingress
-        Keycloak(Keycloak<br/>AuthN / AuthZ):::ingress
-        Lago(Lago<br/>Billing Hook):::ingress
-        Redis[(Redis<br/>Rate Limit / Cache)]:::storage
+        Gateway(nexus: API Gateway · GraphQL / gRPC):::ingress
+        Keycloak(Keycloak: AuthN / AuthZ):::ingress
+        Lago(Lago: Billing Hook):::ingress
+        Redis[(Redis: Rate Limit / Cache)]:::storage
 
         TUI -->|gRPC| Gateway
         Web -->|HTTPS| LB
@@ -45,18 +45,18 @@ graph TD
 
     %% --- 4. Event Streaming Backbone ---
     subgraph EventBus [Event Streaming Backbone]
-        Kafka{{Apache Kafka<br/>raw-signals topic}}:::broker
+        Kafka{{Apache Kafka: raw-signals topic}}:::broker
         Zookeeper{{Zookeeper}}:::broker
         Kafka <--> Zookeeper
     end
 
     %% --- 5. Core Processing & AI Layer ---
     subgraph Processing [Processing & Intelligence Workers]
-        Ingest(Ingestion Worker):::service
-        Intel(Intelligence Service<br/>Indexer & Blast Radius):::service
-        Archiver(Lake Archiver):::service
-        Copilot(CTF Copilot<br/>RAG Pipeline):::ai
-        Sandbox[Docker Sandbox<br/>Exploit Runner]:::ai
+        Ingest(siphon: Ingestion Worker):::service
+        Intel(cortex: Intelligence · Indexer & Blast Radius):::service
+        Archiver(relic: Lake Archiver):::service
+        Copilot(ghost: CTF Copilot · RAG Pipeline):::ai
+        Sandbox[Docker Sandbox: Exploit Runner]:::ai
 
         NVD -->|Fetch 10m| Ingest
         GitHub -->|Fetch Deps| Ingest
@@ -73,13 +73,13 @@ graph TD
 
     %% --- 6. Data & Persistence Layer ---
     subgraph Persistence [Data Persistence Layer]
-        Postgres[(PostgreSQL<br/>Meta & Users)]:::storage
-        Elastic[(Elasticsearch<br/>Percolator & Search)]:::storage
-        Neo4j[(Neo4j<br/>Dependency Graph)]:::storage
-        Qdrant[(Qdrant<br/>Vector Store)]:::storage
-        MinIO[(MinIO<br/>Parquet & Raw Code)]:::storage
-        DuckDB[(DuckDB<br/>Analytics)]:::storage
-        Ollama[[Ollama<br/>Local LLM]]:::ai
+        Postgres[(PostgreSQL: Meta & Users)]:::storage
+        Elastic[(Elasticsearch: Percolator & Search)]:::storage
+        Neo4j[(Neo4j: Dependency Graph)]:::storage
+        Qdrant[(Qdrant: Vector Store)]:::storage
+        MinIO[(MinIO: Parquet & Raw Code)]:::storage
+        DuckDB[(DuckDB: Analytics)]:::storage
+        Ollama[[Ollama: Local LLM]]:::ai
 
         Intel <--> Postgres
         Intel <--> Elastic
@@ -95,12 +95,12 @@ graph TD
 
     %% --- 7. Telemetry & Observability Layer ---
     subgraph Telemetry [Observability & GitOps]
-        OTEL(OpenTelemetry<br/>Collector):::observability
-        Prometheus[(Prometheus<br/>Metrics)]:::storage
-        Loki[(Grafana Loki<br/>Logs)]:::storage
-        Tempo[(Grafana Tempo<br/>Traces)]:::storage
-        GrafanaUI(Grafana<br/>Dashboards):::observability
-        ArgoCD(ArgoCD<br/>K3s GitOps Sync):::observability
+        OTEL(OpenTelemetry: Collector):::observability
+        Prometheus[(Prometheus: Metrics)]:::storage
+        Loki[(Grafana Loki: Logs)]:::storage
+        Tempo[(Grafana Tempo: Traces)]:::storage
+        GrafanaUI(Grafana: Dashboards):::observability
+        ArgoCD(ArgoCD: K3s GitOps Sync):::observability
 
         OTEL --> Prometheus
         OTEL --> Loki
