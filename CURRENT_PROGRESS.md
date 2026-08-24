@@ -5,14 +5,32 @@ before each commit; move superseded entries into the changelog at the bottom.
 
 ---
 
-## Latest Update — 2026-08-22
+## Latest Update — 2026-08-24
 
 ### Overall status
 
-**Pre-v1, contracts foundation landed.** Monorepo wiring works and the protobuf contract layer
-now exists + generates Go; services are still empty stubs otherwise.
+**Pre-v1, siphon (ingestion) built as the first hexagonal slice.** Contracts foundation is in;
+`siphon` now runs end-to-end against live NVD, publishing protojson `SignalDiscovered` events.
+`cortex` + `nexus` still needed to close the query loop.
 
-### Contracts (NEW — done)
+### siphon — first vertical-slice service (NEW — done, not yet consuming a bus)
+
+- Full ports-and-adapters layout under `apps/siphon/internal/`:
+  - domain: `SourceSignal`/`CVSS`/`Severity` (model), `SourceKind` (VO), `SignalDiscovered` (event
+    with deterministic dedupe identity). Zero non-stdlib imports.
+  - ports (outbound): `SourceClient`, `SignalPublisher`.
+  - application: `PollSource` use case (fetch → validate → publish), unit-tested with fakes.
+  - adapters: `outbound/sources/nvd` (NVD API 2.0 HTTP → domain, httptest-tested),
+    `outbound/publisher` (domain → `events.v1.SignalDiscovered` proto → stdout; the ONLY place
+    importing `gen/`), `inbound/scheduler` (ticker driving PollSource).
+  - platform/config + `cmd/worker/main.go` composition root — siphon's first real `func main`.
+- Verified: `go build/vet/test` green (nvd/publisher/scheduler/workflow suites); ran vs live NVD
+  and emitted a real recent CVE as protojson.
+- Monorepo note: `apps/siphon/go.mod` uses a `replace` → `../../packages/contracts` so `go mod tidy`
+  resolves the local contracts module (cortex/nexus will need the same when they import contracts).
+- Still stdout, not Kafka (roadmap v3); no dedupe/checkpoint stores yet.
+
+### Contracts (done)
 
 - `buf` installed (v1.72.0). `packages/contracts` has `buf.yaml` + `buf.gen.yaml` (managed mode,
   local `protoc-gen-go`/`protoc-gen-go-grpc` plugins). `task codegen` = `buf lint && buf generate && go mod tidy`.
@@ -38,8 +56,9 @@ now exists + generates Go; services are still empty stubs otherwise.
 
 ### What does NOT work / is empty
 
-- All Go services are empty stubs (e.g. `apps/nexus/cmd/server/main.go` is just `package server`,
-  no `func main`) — no runnable service binaries exist. Contracts exist but no service _uses_ them yet.
+- `siphon` publishes to **stdout**, not a real bus — nothing consumes its events yet.
+- `nexus`, `cortex`, `ghost`, `relic`, `deck`, `credits` are still empty stubs (`package server`
+  etc., no `func main`) — `siphon` is the only runnable service.
 - `deploy/docker-compose.yml` is **empty (0 bytes)**; no real `k8s`/`terraform` manifests.
 
 ### Decisions made today
@@ -63,14 +82,18 @@ now exists + generates Go; services are still empty stubs otherwise.
 
 ### Next actions (immediate)
 
-1. Begin `siphon`: domain (`SourceSignal`, `SourceKind`) + `SourceClient` port + NVD outbound
-   adapter; map NVD JSON → domain → `SignalDiscovered` proto at the adapter boundary.
-2. Decide the transport for the first slice (in-process/stdout first, Kafka later per roadmap).
+1. Build `cortex`: domain `Vulnerability` + ports (`VulnerabilityRepo`, `SearchIndex`); inbound
+   adapter that consumes `SignalDiscovered` (proto → cortex domain) and an in-memory store first.
+2. Build `cortex` inbound gRPC adapter implementing `IntelligenceServiceServer.Search`.
+3. Build `nexus`: GraphQL `search` resolver → `IntelligenceClient` port → gRPC client to cortex.
+4. Then wire a real transport between siphon → cortex (Kafka, v3) and fill `docker-compose.yml`.
 
 ---
 
 ## Changelog
 
+- **2026-08-24** — Built `siphon` end-to-end as the first hexagonal slice (domain/ports/
+  application/adapters/platform); runs vs live NVD, publishes protojson `SignalDiscovered`.
 - **2026-08-22** — Contracts foundation: buf + `task codegen`, first 3 protos
   (common/events/intelligence v1), generated Go committed under `packages/contracts/gen`.
 - **2026-08-22** — Clean-slate housekeeping: removed `api/`, fixed `task build:go`, dropped

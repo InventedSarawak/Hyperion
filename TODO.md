@@ -30,10 +30,15 @@
 
 ### App: Ingestion Worker (`apps/siphon`)
 
-- [ ] **Infrastructure:** Implement NVD API Client (HTTP adapter)
-- [ ] **Domain:** Define `Vulnerability` entity
-- [ ] **Application:** Create Cron Job (ticker) to fetch CVEs every 10m
-- [ ] **Infrastructure:** Implement `PostgresRepository` to save raw metadata
+- [x] **Domain:** `SourceSignal` model, `SourceKind` VO, `SignalDiscovered` event (+ dedupe identity)
+- [x] **Ports:** `SourceClient`, `SignalPublisher` (outbound, defined in domain)
+- [x] **Application:** `PollSource` use case (fetch → validate → publish), fully unit-tested with fakes
+- [x] **Adapter (outbound):** NVD API 2.0 client (HTTP) → domain, httptest-tested
+- [x] **Adapter (outbound):** publisher maps domain event → `events.v1.SignalDiscovered` proto → stdout (Kafka later)
+- [x] **Adapter (inbound):** scheduler (ticker) drives `PollSource` on an interval
+- [x] **Platform:** config + `cmd/worker/main.go` composition root — siphon runs end-to-end vs live NVD
+- [ ] Later: swap stdout publisher → Kafka (v3); add dedupe/checkpoint stores (Redis, v3)
+- [ ] Note: siphon does NOT persist — it publishes; cortex owns storage (event-driven design)
 
 ### App: Intelligence Service (`apps/cortex`)
 
@@ -44,8 +49,8 @@
 
 ### Verification
 
-- [ ] Write Unit Tests with `Ginkgo` for the NVD parser
-- [ ] Manual Test: Run `task dev` and query GraphQL Playground for "log4j"
+- [x] Write Unit Tests with `Ginkgo` for the NVD parser (+ workflow, publisher, scheduler)
+- [ ] Manual Test: Run `task dev` and query GraphQL Playground for "log4j" (needs cortex + nexus)
 
 ---
 
