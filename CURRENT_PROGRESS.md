@@ -9,11 +9,27 @@ before each commit; move superseded entries into the changelog at the bottom.
 
 ### Overall status
 
-**Pre-v1, siphon (ingestion) built as the first hexagonal slice.** Contracts foundation is in;
-`siphon` now runs end-to-end against live NVD, publishing protojson `SignalDiscovered` events.
-`cortex` + `nexus` still needed to close the query loop.
+**Pre-v1, ingest → store pipeline works.** `siphon | cortex` runs end-to-end: live NVD →
+protojson `SignalDiscovered` → cortex → **Postgres**. Data is durably saved. `nexus` (query
+side) and Elasticsearch search are the remaining pieces to make it queryable.
 
-### siphon — first vertical-slice service (NEW — done, not yet consuming a bus)
+### cortex — storage-owning consumer (NEW — done)
+
+- Ports-and-adapters under `apps/cortex/internal/`:
+  - domain: own `Vulnerability`/`CVSS`/`Severity` + `Merge` reconciliation rule (source union).
+  - port (outbound): `VulnerabilityRepo` (Upsert/GetByCVE/Count).
+  - application: `IngestSignal` (validate → load existing → `Merge` → upsert), fake-repo tested.
+  - adapters: `inbound/consumer` (protojson `SignalDiscovered` → cortex domain; cortex's proto
+    boundary), `outbound/postgres` (pgx repo, JSONB columns, embedded migration).
+  - platform/config + `cmd/server/main.go` — connects Postgres, migrates, ingests from stdin.
+- Infra: `deploy/docker-compose.yml` now runs **Postgres 17** on host port **5433** (5432 was
+  taken locally). `task infra:up` / `task infra:down`.
+- Verified: unit suites green; Postgres integration suite passes vs the real container (opt-in via
+  `CORTEX_TEST_DATABASE_URL`, else skipped so `task test:go` stays green); ran
+  `siphon | cortex` and confirmed 48 live CVEs landed in the `vulnerabilities` table.
+- Transport is still a **pipe** (siphon stdout → cortex stdin), not Kafka (v3).
+
+### siphon — first vertical-slice service (done, publishes to stdout)
 
 - Full ports-and-adapters layout under `apps/siphon/internal/`:
   - domain: `SourceSignal`/`CVSS`/`Severity` (model), `SourceKind` (VO), `SignalDiscovered` (event
@@ -56,10 +72,11 @@ before each commit; move superseded entries into the changelog at the bottom.
 
 ### What does NOT work / is empty
 
-- `siphon` publishes to **stdout**, not a real bus — nothing consumes its events yet.
-- `nexus`, `cortex`, `ghost`, `relic`, `deck`, `credits` are still empty stubs (`package server`
-  etc., no `func main`) — `siphon` is the only runnable service.
-- `deploy/docker-compose.yml` is **empty (0 bytes)**; no real `k8s`/`terraform` manifests.
+- No **query path** yet: data is stored but nothing serves it — needs cortex's gRPC
+  `IntelligenceService.Search` + Elasticsearch index + `nexus` GraphQL.
+- Transport is a **pipe**, not Kafka; siphon and cortex are run manually, not as long-lived services.
+- `nexus`, `ghost`, `relic`, `deck`, `credits` are still empty stubs (no `func main`).
+- `deploy/docker-compose.yml` has **Postgres only**; no Elasticsearch/Kafka/etc.; no `k8s`.
 
 ### Decisions made today
 
@@ -82,16 +99,20 @@ before each commit; move superseded entries into the changelog at the bottom.
 
 ### Next actions (immediate)
 
-1. Build `cortex`: domain `Vulnerability` + ports (`VulnerabilityRepo`, `SearchIndex`); inbound
-   adapter that consumes `SignalDiscovered` (proto → cortex domain) and an in-memory store first.
-2. Build `cortex` inbound gRPC adapter implementing `IntelligenceServiceServer.Search`.
-3. Build `nexus`: GraphQL `search` resolver → `IntelligenceClient` port → gRPC client to cortex.
-4. Then wire a real transport between siphon → cortex (Kafka, v3) and fill `docker-compose.yml`.
+Two natural directions (user's call):
+
+- **Close the query loop:** add cortex `SearchIndex` port + Elasticsearch adapter (or a Postgres
+  `ILIKE` search first), a `Search` query use case, and the inbound gRPC `IntelligenceService.Search`
+  server; then `nexus` GraphQL `search` → gRPC client → cortex.
+- **Add more sources to siphon:** implement additional `SourceClient` adapters (CISA KEV, GitHub
+  Advisory, …) — each is one new adapter; domain/use-case/publisher unchanged.
 
 ---
 
 ## Changelog
 
+- **2026-08-24** — Built `cortex` storage side: consumer + Postgres repo + migration; docker-compose
+  Postgres (5433); `siphon | cortex` → Postgres verified with live NVD data.
 - **2026-08-24** — Built `siphon` end-to-end as the first hexagonal slice (domain/ports/
   application/adapters/platform); runs vs live NVD, publishes protojson `SignalDiscovered`.
 - **2026-08-22** — Contracts foundation: buf + `task codegen`, first 3 protos

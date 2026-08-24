@@ -17,7 +17,8 @@
 - [x] Create directory structure (`apps/`, `packages/`, `deploy/`)
 - [x] Scaffold Ginkgo test harnesses per service (smoke-level; `task test:go` passes)
 - [x] Remove deprecated empty `api/` dir (contracts live in `packages/contracts`)
-- [ ] Configure `deploy/docker-compose.yml` (currently empty — Postgres, Elasticsearch)
+- [x] Configure `deploy/docker-compose.yml` — Postgres (host port 5433); `task infra:up`/`infra:down`
+- [ ] Add Elasticsearch to `deploy/docker-compose.yml`
 
 ### Domain Contracts (The "Law") — do this FIRST
 
@@ -42,10 +43,15 @@
 
 ### App: Intelligence Service (`apps/cortex`)
 
+- [x] **Domain:** `Vulnerability` entity (+ `Merge` reconciliation), `VulnerabilityRepo` port
+- [x] **Application:** `IngestSignal` use case (load → merge → upsert), unit-tested with fake repo
+- [x] **Adapter (inbound):** consumer reads protojson `SignalDiscovered` (stdin) → cortex domain
+- [x] **Adapter (outbound):** Postgres repo (pgx) + embedded migration; integration-tested vs real DB
+- [x] **End-to-end:** `siphon | cortex` → Postgres verified (48 live NVD CVEs stored)
 - [ ] **Infrastructure:** Implement Elasticsearch Client
 - [ ] **Application:** Create `Indexer` service (Postgres -> Elastic sync)
 - [ ] **Application:** Implement `Search` use-case (Full-text query)
-- [ ] **Infrastructure:** Expose gRPC/GraphQL Server
+- [ ] **Infrastructure:** Expose gRPC `IntelligenceService.Search` server (for nexus)
 
 ### Verification
 

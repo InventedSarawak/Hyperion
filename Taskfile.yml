@@ -40,6 +40,16 @@ tasks:
           (cd "$app" && go build ./...)
         done
 
+  infra:up:
+    desc: Start local infrastructure (Postgres) via docker compose
+    cmds:
+      - docker compose -f deploy/docker-compose.yml up -d
+
+  infra:down:
+    desc: Stop local infrastructure (add -- -v to also drop volumes)
+    cmds:
+      - docker compose -f deploy/docker-compose.yml down {{.CLI_ARGS}}
+
   codegen:
     desc: Generate Go code from protobuf contracts (buf + local protoc-gen plugins)
     dir: packages/contracts
