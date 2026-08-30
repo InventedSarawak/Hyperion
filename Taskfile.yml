@@ -50,6 +50,40 @@ tasks:
     cmds:
       - docker compose -f deploy/docker-compose.yml down {{.CLI_ARGS}}
 
+  run:siphon:
+    desc: Run the ingestion worker (events to stdout, logs to stderr)
+    dir: apps/siphon
+    cmds:
+      - go run ./cmd/worker
+
+  run:cortex:
+    desc: Run the intelligence service (gRPC search API)
+    dir: apps/cortex
+    cmds:
+      - go run ./cmd/server
+
+  run:nexus:
+    desc: Run the API gateway (GraphQL at :8080/graphql, console at /playground)
+    dir: apps/nexus
+    cmds:
+      - go run ./cmd/server
+
+  ingest:
+    desc: Pipe one siphon poll straight into cortex (siphon | cortex)
+    cmds:
+      - |
+        set -e
+        cd apps/siphon && go run ./cmd/worker 2>/dev/null | \
+          (cd ../cortex && CORTEX_CONSUME_STDIN=true go run ./cmd/server)
+
+  test:go:integration:
+    desc: Run Go tests including the Postgres/Elasticsearch integration suites
+    env:
+      CORTEX_TEST_DATABASE_URL: postgres://hyperion:hyperion@localhost:5433/hyperion?sslmode=disable
+      CORTEX_TEST_ELASTICSEARCH_URL: http://localhost:9200
+    cmds:
+      - ./scripts/test-go-files.sh
+
   codegen:
     desc: Generate Go code from protobuf contracts (buf + local protoc-gen plugins)
     dir: packages/contracts

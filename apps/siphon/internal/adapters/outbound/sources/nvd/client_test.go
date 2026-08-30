@@ -2,8 +2,10 @@ package nvd_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -13,6 +15,9 @@ import (
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/model"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/valueobject"
 )
+
+// fast keeps the real rate limiter out of the way in tests.
+var fast = nvd.WithRequestDelay(time.Millisecond)
 
 // a trimmed but realistic NVD API 2.0 response.
 const sampleResponse = `{
@@ -43,6 +48,8 @@ const sampleResponse = `{
 }`
 
 var _ = Describe("NVD Client", func() {
+	ctx := context.Background()
+
 	It("maps an NVD response into domain SourceSignals", func() {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -50,10 +57,10 @@ var _ = Describe("NVD Client", func() {
 		}))
 		defer srv.Close()
 
-		client := nvd.New(srv.Client(), srv.URL, "")
+		client := nvd.New(srv.Client(), srv.URL, "", fast)
 		Expect(client.Kind()).To(Equal(valueobject.SourceKindNVD))
 
-		signals, err := client.Fetch(context.Background(), time.Time{})
+		signals, err := client.Fetch(ctx, time.Time{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(signals).To(HaveLen(1))
 
@@ -67,28 +74,116 @@ var _ = Describe("NVD Client", func() {
 		Expect(s.PublishedAt.Year()).To(Equal(2021))
 	})
 
-	It("returns an error on a non-200 status", func() {
+	It("returns an error on a non-retryable status", func() {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			http.Error(w, "rate limited", http.StatusForbidden)
+			http.Error(w, "bad request", http.StatusBadRequest)
 		}))
 		defer srv.Close()
 
-		_, err := nvd.New(srv.Client(), srv.URL, "").Fetch(context.Background(), time.Time{})
+		_, err := nvd.New(srv.Client(), srv.URL, "", fast).Fetch(ctx, time.Time{})
 		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("unexpected status 400"))
 	})
 
 	It("sends the incremental date filter when since is set", func() {
 		var gotQuery string
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			gotQuery = r.URL.RawQuery
-			_, _ = w.Write([]byte(`{"vulnerabilities":[]}`))
+			_, _ = w.Write([]byte(`{"totalResults":0,"vulnerabilities":[]}`))
 		}))
 		defer srv.Close()
 
 		since := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
-		_, err := nvd.New(srv.Client(), srv.URL, "").Fetch(context.Background(), since)
+		_, err := nvd.New(srv.Client(), srv.URL, "", fast).Fetch(ctx, since)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(gotQuery).To(ContainSubstring("lastModStartDate"))
 		Expect(gotQuery).To(ContainSubstring("lastModEndDate"))
+	})
+
+	It("clamps the request window to NVD's 120-day maximum", func() {
+		var gotStart string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotStart = r.URL.Query().Get("lastModStartDate")
+			_, _ = w.Write([]byte(`{"totalResults":0,"vulnerabilities":[]}`))
+		}))
+		defer srv.Close()
+
+		// Ask for two years back; the adapter must not request beyond 120 days.
+		_, err := nvd.New(srv.Client(), srv.URL, "", fast).Fetch(ctx, time.Now().Add(-2*365*24*time.Hour))
+		Expect(err).ToNot(HaveOccurred())
+
+		parsed, perr := time.Parse("2006-01-02T15:04:05.000", gotStart)
+		Expect(perr).ToNot(HaveOccurred())
+		Expect(time.Since(parsed)).To(BeNumerically("<=", 121*24*time.Hour))
+	})
+
+	It("walks pagination until the result set is drained", func() {
+		var calls int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&calls, 1)
+			startIndex := r.URL.Query().Get("startIndex")
+			id := "CVE-PAGE-1"
+			if startIndex == "2" {
+				id = "CVE-PAGE-2"
+			}
+			// totalResults=4 with pageSize=2 -> exactly two pages.
+			fmt.Fprintf(w, `{"totalResults":4,"vulnerabilities":[{"cve":{"id":%q}},{"cve":{"id":"%s-b"}}]}`, id, id)
+		}))
+		defer srv.Close()
+
+		client := nvd.New(srv.Client(), srv.URL, "", fast, nvd.WithPageSize(2))
+		signals, err := client.Fetch(ctx, time.Time{})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(atomic.LoadInt32(&calls)).To(Equal(int32(2)))
+		Expect(signals).To(HaveLen(4))
+		Expect(signals[0].CVEID).To(Equal("CVE-PAGE-1"))
+		Expect(signals[2].CVEID).To(Equal("CVE-PAGE-2"))
+	})
+
+	It("honours the max-pages bound", func() {
+		var calls int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			atomic.AddInt32(&calls, 1)
+			_, _ = w.Write([]byte(`{"totalResults":1000,"vulnerabilities":[{"cve":{"id":"CVE-X"}}]}`))
+		}))
+		defer srv.Close()
+
+		client := nvd.New(srv.Client(), srv.URL, "", fast, nvd.WithPageSize(1), nvd.WithMaxPages(3))
+		_, err := client.Fetch(ctx, time.Time{})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(atomic.LoadInt32(&calls)).To(Equal(int32(3)))
+	})
+
+	It("retries a throttled 429 and then succeeds", func() {
+		var calls int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			if atomic.AddInt32(&calls, 1) == 1 {
+				http.Error(w, "rate limited", http.StatusTooManyRequests)
+				return
+			}
+			_, _ = w.Write([]byte(sampleResponse))
+		}))
+		defer srv.Close()
+
+		signals, err := nvd.New(srv.Client(), srv.URL, "", fast).Fetch(ctx, time.Time{})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(atomic.LoadInt32(&calls)).To(Equal(int32(2)))
+		Expect(signals).To(HaveLen(1))
+	})
+
+	It("sends the apiKey header when a key is configured", func() {
+		var gotKey string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotKey = r.Header.Get("apiKey")
+			_, _ = w.Write([]byte(`{"totalResults":0,"vulnerabilities":[]}`))
+		}))
+		defer srv.Close()
+
+		_, err := nvd.New(srv.Client(), srv.URL, "secret-key", fast).Fetch(ctx, time.Time{})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(gotKey).To(Equal("secret-key"))
 	})
 })

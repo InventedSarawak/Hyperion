@@ -18,7 +18,9 @@
 - [x] Scaffold Ginkgo test harnesses per service (smoke-level; `task test:go` passes)
 - [x] Remove deprecated empty `api/` dir (contracts live in `packages/contracts`)
 - [x] Configure `deploy/docker-compose.yml` — Postgres (host port 5433); `task infra:up`/`infra:down`
-- [ ] Add Elasticsearch to `deploy/docker-compose.yml`
+- [x] Add Elasticsearch to `deploy/docker-compose.yml` (8.15.3, security off for local dev)
+- [x] Add `.env.sample` documenting env vars + formats for all 10 ingestion sources
+- [x] Load `.env` at startup in siphon/cortex/nexus (`packages/common/env`)
 
 ### Domain Contracts (The "Law") — do this FIRST
 
@@ -38,6 +40,9 @@
 - [x] **Adapter (outbound):** publisher maps domain event → `events.v1.SignalDiscovered` proto → stdout (Kafka later)
 - [x] **Adapter (inbound):** scheduler (ticker) drives `PollSource` on an interval
 - [x] **Platform:** config + `cmd/worker/main.go` composition root — siphon runs end-to-end vs live NVD
+- [x] **Rate limiting:** NVD paced to its documented limits (6s no key / 0.6s with key), pagination via startIndex/totalResults, 120-day window clamping, retry+backoff on 403/429/5xx
+- [x] **Multi-source:** `PollSources` fans out over every active source; one failure doesn't stop the rest
+- [x] **Source registry:** all 10 documented sources resolved at startup; inactive ones reported with a reason
 - [ ] Later: swap stdout publisher → Kafka (v3); add dedupe/checkpoint stores (Redis, v3)
 - [ ] Note: siphon does NOT persist — it publishes; cortex owns storage (event-driven design)
 
@@ -48,15 +53,22 @@
 - [x] **Adapter (inbound):** consumer reads protojson `SignalDiscovered` (stdin) → cortex domain
 - [x] **Adapter (outbound):** Postgres repo (pgx) + embedded migration; integration-tested vs real DB
 - [x] **End-to-end:** `siphon | cortex` → Postgres verified (48 live NVD CVEs stored)
-- [ ] **Infrastructure:** Implement Elasticsearch Client
-- [ ] **Application:** Create `Indexer` service (Postgres -> Elastic sync)
-- [ ] **Application:** Implement `Search` use-case (Full-text query)
-- [ ] **Infrastructure:** Expose gRPC `IntelligenceService.Search` server (for nexus)
+- [x] **Infrastructure:** Implement Elasticsearch Client (`SearchIndex` port + ES adapter + no-op fallback)
+- [x] **Application:** Dual-write on ingest (Postgres = truth, ES = search); ES failure is non-fatal
+- [x] **Application:** Implement `Search` use-case (full-text, paging, token validation)
+- [x] **Infrastructure:** Expose gRPC `IntelligenceService.Search` server (+ reflection for grpcurl)
 
 ### Verification
 
 - [x] Write Unit Tests with `Ginkgo` for the NVD parser (+ workflow, publisher, scheduler)
-- [ ] Manual Test: Run `task dev` and query GraphQL Playground for "log4j" (needs cortex + nexus)
+- [x] Manual Test: GraphQL query returns real ingested NVD data (verified end-to-end)
+
+### App: API Gateway (`apps/nexus`)
+
+- [x] **Domain/Ports:** `IntelligenceClient` port + view models
+- [x] **Application:** `SearchVulnerabilities` use case
+- [x] **Adapter (outbound):** gRPC client to cortex
+- [x] **Adapter (inbound):** GraphQL schema + handler + browser playground (`/playground`)
 
 ---
 

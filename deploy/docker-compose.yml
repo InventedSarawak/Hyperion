@@ -1,5 +1,5 @@
 # Local development infrastructure for Hyperion.
-# Bring up with:  docker compose -f deploy/docker-compose.yml up -d
+# Bring up with:  task infra:up   (or: docker compose -f deploy/docker-compose.yml up -d)
 name: hyperion
 
 services:
@@ -21,5 +21,25 @@ services:
       timeout: 3s
       retries: 10
 
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+    container_name: hyperion-elasticsearch
+    environment:
+      # Single-node dev cluster with security off: local only, never production.
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.security.http.ssl.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
 volumes:
   postgres_data:
+  elasticsearch_data:

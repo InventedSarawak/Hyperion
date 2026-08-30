@@ -10,6 +10,7 @@ import (
 
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/events"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/ports"
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/valueobject"
 )
 
 // PollSource is the use case: pull signals from one source and publish each as
@@ -53,3 +54,6 @@ func (p *PollSource) Run(ctx context.Context, since time.Time) (int, error) {
 	}
 	return published, nil
 }
+
+// Kind reports which source this use case polls.
+func (p *PollSource) Kind() valueobject.SourceKind { return p.source.Kind() }
