@@ -2,6 +2,8 @@ package postgres_test
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"os"
 	"time"
 
@@ -30,13 +32,29 @@ var _ = Describe("Postgres Repo (integration)", func() {
 		if dsn == "" {
 			Skip("set CORTEX_TEST_DATABASE_URL to run Postgres integration tests")
 		}
-		pool, err := postgres.Connect(ctx, dsn)
-		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(pool.Close)
 
-		Expect(postgres.Migrate(ctx, pool)).To(Succeed())
-		_, err = pool.Exec(ctx, "TRUNCATE vulnerabilities;")
+		// Run inside a throwaway schema so these tests can never touch real
+		// data in the target database (mirrors the ES suite's throwaway index).
+		schema := fmt.Sprintf("hyperion_test_%d", time.Now().UnixNano())
+
+		admin, err := postgres.Connect(ctx, dsn)
 		Expect(err).ToNot(HaveOccurred())
+		_, err = admin.Exec(ctx, "CREATE SCHEMA "+schema)
+		Expect(err).ToNot(HaveOccurred())
+		admin.Close()
+
+		pool, err := postgres.Connect(ctx, withSearchPath(dsn, schema))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(postgres.Migrate(ctx, pool)).To(Succeed())
+
+		DeferCleanup(func() {
+			pool.Close()
+			cleanup, err := postgres.Connect(ctx, dsn)
+			if err == nil {
+				_, _ = cleanup.Exec(ctx, "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
+				cleanup.Close()
+			}
+		})
 
 		repo = postgres.NewRepo(pool)
 	})
@@ -78,3 +96,13 @@ var _ = Describe("Postgres Repo (integration)", func() {
 		Expect(got.Description).To(Equal("new"))
 	})
 })
+
+// withSearchPath returns dsn with the connection's search_path pinned to schema.
+func withSearchPath(dsn, schema string) string {
+	u, err := url.Parse(dsn)
+	Expect(err).ToNot(HaveOccurred())
+	q := u.Query()
+	q.Set("search_path", schema)
+	u.RawQuery = q.Encode()
+	return u.String()
+}

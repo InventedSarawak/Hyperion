@@ -58,6 +58,33 @@ Verified with real data: a GraphQL query returns actual ingested CVEs with score
 - No auth on the GraphQL/gRPC endpoints yet (Keycloak is v4).
 - `ghost`, `relic`, `deck`, `credits` remain stubs; `console` is still the starter page.
 
+### Real-data run — 2026-09-01
+
+Executed the full v1 stack against live NVD with a real API key:
+
+- **siphon** pulled **1,906 real CVEs** (24h lookback) in ~47s using the authenticated
+  rate limit, and reported 1 of 10 sources ACTIVE with reasons for the other nine.
+- **cortex** ingested all 1,906 into Postgres **and** Elasticsearch with zero errors (~37s).
+  Both stores agree exactly (1906 = 1906); spot-checked a CVE field-by-field in each.
+- **Idempotency verified**: re-ingesting the same 1,906 events left the row count at
+  1,906, preserved `first_seen_at`, and bumped `last_seen_at` — the domain `Merge` +
+  upsert path is correct on real data.
+- **Query path verified** end-to-end (nexus GraphQL → cortex gRPC → Elasticsearch):
+  free-text search, exact-CVE lookup (ranks first at relevance 77.8 vs ~16 for text),
+  fuzzy match on a typo ("kubernets" still finds Kubernetes CVEs), two-page pagination
+  with no overlap, and the empty-term error path.
+- **gRPC verified standalone** via grpcurl using server reflection.
+- **Resilience verified**: with Elasticsearch stopped, cortex warned, disabled search,
+  and kept ingesting to Postgres — then recovered when ES came back.
+- Severity spread of the real corpus: 714 high, 638 medium, 263 critical, 178 low, 113 none.
+
+**Bug found and fixed during this run:** the Postgres integration suite ran `TRUNCATE
+vulnerabilities` against whatever database `CORTEX_TEST_DATABASE_URL` pointed at — it
+destroyed 1,906 real dev rows. It now creates a **throwaway schema per run**
+(`hyperion_test_<ts>`, dropped in cleanup), mirroring what the Elasticsearch suite
+already did with throwaway indices. Verified: tests pass, real data survives, no
+leftover schemas.
+
 ### How to run it
 
 ```bash
@@ -72,6 +99,9 @@ task run:nexus                      # GraphQL on :8080  → open /playground
 
 ## Changelog
 
+- **2026-09-01** — Full-stack run on real data (1,906 live NVD CVEs) through ingest → store →
+  index → gRPC → GraphQL; fixed a destructive Postgres integration test (now uses a
+  throwaway schema).
 - **2026-08-30** — v1 complete for NVD: NVD rate limiting/pagination/backoff, 10-source
   registry with active/inactive reporting, cortex Elasticsearch + gRPC search API,
   nexus GraphQL gateway + playground, `.env.sample` for all sources, `.env` loading.
