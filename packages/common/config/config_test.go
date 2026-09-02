@@ -1,6 +1,8 @@
 package config_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -20,6 +22,24 @@ var _ = Describe("namespaced config loader", func() {
 		l := config.For("siphon")
 		Expect(l.Key("NVD_API_KEY")).To(Equal("SIPHON_NVD_API_KEY"))
 		Expect(l.Key("nvd_api_key")).To(Equal("SIPHON_NVD_API_KEY"))
+	})
+
+	It("records where each value came from", func() {
+		GinkgoT().Setenv("SIPHON_POLL_INTERVAL", "3m")
+		l := config.For("siphon")
+		_ = l.Duration("POLL_INTERVAL", time.Hour)
+
+		e := l.Describe()[0]
+		Expect(e.Key).To(Equal("SIPHON_POLL_INTERVAL"))
+		Expect(e.From).To(Equal("env"))
+	})
+
+	It("reports whether a value is available", func() {
+		GinkgoT().Setenv("SIPHON_GITHUB_TOKEN", "t")
+		l := config.For("siphon")
+
+		Expect(l.Has("GITHUB_TOKEN")).To(BeTrue())
+		Expect(l.Has("NOTHING_HERE")).To(BeFalse())
 	})
 
 	It("reads typed values from the environment", func() {
@@ -77,5 +97,21 @@ var _ = Describe("namespaced config loader", func() {
 		l := config.For("testsvc")
 		Expect(l.Secret("NO_SUCH_TOKEN")).To(BeEmpty())
 		Expect(l.Describe()[0].Value).To(Equal("(unset)"))
+	})
+
+	It("lets a real environment variable beat a .env entry", func() {
+		// A shell override must win over the same key defined in .env.
+		dir := GinkgoT().TempDir()
+		Expect(os.WriteFile(filepath.Join(dir, ".env"),
+			[]byte("PRECSVC.MODE=from-dotenv\n"), 0o600)).To(Succeed())
+
+		cwd, err := os.Getwd()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(os.Chdir(dir)).To(Succeed())
+		DeferCleanup(func() { _ = os.Chdir(cwd) })
+
+		GinkgoT().Setenv("PRECSVC_MODE", "from-shell") // real env beats .env
+
+		Expect(config.For("precsvc").String("MODE", "default")).To(Equal("from-shell"))
 	})
 })

@@ -41,6 +41,13 @@ credentials masked. siphon/cortex/nexus all read through it; the old `packages/c
 is gone. `.env.sample` shrank 219 -> 92 lines, and is verified to match exactly the keys
 the code reads (no undocumented or stale vars).
 
+**Naming uses underscores, not a literal dot.** A dotted form (`SIPHON.NVD_API_KEY`) was
+tried and reverted: Go and godotenv handle dots fine, but no POSIX shell can export one
+(`export SIPHON.X=1` -> "not a valid identifier"), which makes one-off overrides
+impossible. `.env` is now **read into a map rather than injected** into the process
+environment, so precedence is explicit and correct: a real environment variable always
+beats a `.env` entry.
+
 ### Bugs found and fixed by running against real APIs
 
 - **Red Hat returns CVSS scores as JSON _strings_** ("7.8"); a `float64` DTO failed to

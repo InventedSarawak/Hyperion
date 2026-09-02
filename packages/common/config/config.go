@@ -1,15 +1,18 @@
 // Package config is Hyperion's centralized configuration system.
 //
 // Every setting is namespaced by the microservice that owns it. A logical name
-// written as SERVICE.VAR maps to the environment variable SERVICE_VAR:
+// SERVICE.VAR maps to the environment variable SERVICE_VAR:
 //
 //	siphon.NVD_API_KEY   -> SIPHON_NVD_API_KEY
 //	cortex.DATABASE_URL  -> CORTEX_DATABASE_URL
 //	nexus.HTTP_ADDR      -> NEXUS_HTTP_ADDR
 //
-// Each service creates one Loader (config.For("siphon")) and reads through it,
-// so the prefix is declared once and every lookup is consistent. Values already
-// present in the real environment always beat the .env file.
+// Underscores are used rather than a literal dot because POSIX shells cannot
+// export an identifier containing one ("export SIPHON.NVD_API_KEY=x" is a
+// syntax error), which would make one-off overrides impossible.
+//
+// Each service creates one Loader (config.For("siphon")) so the prefix is
+// declared once. A real environment variable always beats the .env file.
 package config
 
 import (
@@ -17,6 +20,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -32,8 +36,9 @@ type Loader struct {
 type Entry struct {
 	Key    string // full env var name, e.g. SIPHON_NVD_API_KEY
 	Value  string // masked when Secret is true
-	Set    bool   // whether the environment supplied it
+	Set    bool   // whether a value was supplied (rather than defaulted)
 	Secret bool
+	From   string // where it came from: "env", ".env", or "" when defaulted
 }
 
 // For creates a Loader for a service, loading the repo .env file on first use.
@@ -43,14 +48,29 @@ func For(service string) *Loader {
 	return &Loader{service: strings.ToUpper(strings.TrimSpace(service))}
 }
 
-// Key returns the full environment variable name for a logical name.
+// Key returns the full environment variable name for a logical setting.
 func (l *Loader) Key(name string) string {
 	return l.service + "_" + strings.ToUpper(strings.TrimSpace(name))
 }
 
-// Has reports whether the environment supplies a non-empty value.
+// Has reports whether a non-empty value is available for this setting.
 func (l *Loader) Has(name string) bool {
-	return strings.TrimSpace(os.Getenv(l.Key(name))) != ""
+	_, _, ok := l.lookup(name)
+	return ok
+}
+
+// lookup resolves a setting, checking the real environment before the .env
+// file so a one-off shell override always wins.
+func (l *Loader) lookup(name string) (value, source string, ok bool) {
+	key := l.Key(name)
+
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v, "env", true
+	}
+	if v := strings.TrimSpace(dotEnv()[key]); v != "" {
+		return v, ".env", true
+	}
+	return "", "", false
 }
 
 // String reads a string setting, falling back to def.
@@ -114,10 +134,8 @@ func (l *Loader) Describe() []Entry { return l.seen }
 
 // record resolves one value and remembers it for Describe.
 func (l *Loader) record(name, def string, secret bool) string {
-	key := l.Key(name)
-	raw := strings.TrimSpace(os.Getenv(key))
+	raw, from, set := l.lookup(name)
 
-	set := raw != ""
 	value := raw
 	if !set {
 		value = def
@@ -127,7 +145,13 @@ func (l *Loader) record(name, def string, secret bool) string {
 	if secret {
 		shown = mask(value)
 	}
-	l.seen = append(l.seen, Entry{Key: key, Value: shown, Set: set, Secret: secret})
+	l.seen = append(l.seen, Entry{
+		Key:    l.Key(name),
+		Value:  shown,
+		Set:    set,
+		Secret: secret,
+		From:   from,
+	})
 
 	return value
 }
@@ -144,26 +168,55 @@ func mask(v string) string {
 	}
 }
 
-// LoadDotEnv walks up from the working directory to find a .env file and loads
-// it. A missing .env is not an error: everything has a default and credentials
-// are optional. Real environment variables are never overwritten.
-func LoadDotEnv() {
+var (
+	dotEnvOnce   sync.Once
+	dotEnvValues map[string]string
+)
+
+// dotEnv returns the parsed .env contents, reading the file at most once.
+//
+// The file is read into a map rather than injected into the process
+// environment. That keeps the precedence rule honest: the loader can tell a
+// real environment variable apart from a .env entry, so an explicit shell
+// override always wins.
+func dotEnv() map[string]string {
+	dotEnvOnce.Do(func() {
+		dotEnvValues = map[string]string{}
+
+		path, ok := findDotEnv()
+		if !ok {
+			return
+		}
+		if values, err := godotenv.Read(path); err == nil {
+			dotEnvValues = values
+		}
+	})
+	return dotEnvValues
+}
+
+// findDotEnv walks up from the working directory looking for a .env file, so a
+// service started from apps/<name> still picks up the repo-root file.
+func findDotEnv() (string, bool) {
 	dir, err := os.Getwd()
 	if err != nil {
-		return
+		return "", false
 	}
 
 	for range 6 {
 		candidate := filepath.Join(dir, ".env")
 		if _, statErr := os.Stat(candidate); statErr == nil {
-			_ = godotenv.Load(candidate)
-			return
+			return candidate, true
 		}
 
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return // reached the filesystem root
+			return "", false // reached the filesystem root
 		}
 		dir = parent
 	}
+	return "", false
 }
+
+// LoadDotEnv primes the .env cache. A missing .env is not an error: everything
+// has a default and credentials are optional.
+func LoadDotEnv() { _ = dotEnv() }
