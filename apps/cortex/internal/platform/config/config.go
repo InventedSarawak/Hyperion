@@ -1,11 +1,11 @@
-// Package config loads cortex's runtime configuration from the environment.
+// Package config loads cortex's settings through Hyperion's centralized,
+// namespaced config system. Every key is cortex.<NAME> -> CORTEX_<NAME>.
 package config
 
-import (
-	"os"
-	"strconv"
-	"strings"
-)
+import "github.com/inventedsarawak/hyperion/packages/common/config"
+
+// Service is the config namespace for this microservice.
+const Service = "cortex"
 
 // Defaults for local development via deploy/docker-compose.yml.
 const (
@@ -23,32 +23,28 @@ type Config struct {
 	GRPCAddr         string
 	ServeGRPC        bool
 	ConsumeStdin     bool
+
+	loader *config.Loader
 }
 
 // Load reads configuration from the environment, applying defaults.
 func Load() Config {
+	l := config.For(Service)
 	return Config{
-		DatabaseURL:      getenv("CORTEX_DATABASE_URL", DefaultDatabaseURL),
-		ElasticsearchURL: getenv("CORTEX_ELASTICSEARCH_URL", DefaultElasticsearchURL),
-		IndexName:        getenv("CORTEX_INDEX_NAME", DefaultIndexName),
-		GRPCAddr:         getenv("CORTEX_GRPC_ADDR", DefaultGRPCAddr),
-		ServeGRPC:        getbool("CORTEX_SERVE_GRPC", true),
-		ConsumeStdin:     getbool("CORTEX_CONSUME_STDIN", false),
+		loader:           l,
+		DatabaseURL:      l.String("DATABASE_URL", DefaultDatabaseURL),
+		ElasticsearchURL: l.String("ELASTICSEARCH_URL", DefaultElasticsearchURL),
+		IndexName:        l.String("INDEX_NAME", DefaultIndexName),
+		GRPCAddr:         l.String("GRPC_ADDR", DefaultGRPCAddr),
+		ServeGRPC:        l.Bool("SERVE_GRPC", true),
+		ConsumeStdin:     l.Bool("CONSUME_STDIN", false),
 	}
 }
 
-func getenv(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
+// Describe returns every resolved setting with secrets masked.
+func (c Config) Describe() []config.Entry {
+	if c.loader == nil {
+		return nil
 	}
-	return fallback
-}
-
-func getbool(key string, fallback bool) bool {
-	if v := os.Getenv(key); v != "" {
-		if b, err := strconv.ParseBool(strings.TrimSpace(v)); err == nil {
-			return b
-		}
-	}
-	return fallback
+	return c.loader.Describe()
 }

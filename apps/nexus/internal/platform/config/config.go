@@ -1,10 +1,11 @@
-// Package config loads nexus's runtime configuration from the environment.
+// Package config loads nexus's settings through Hyperion's centralized,
+// namespaced config system. Every key is nexus.<NAME> -> NEXUS_<NAME>.
 package config
 
-import (
-	"os"
-	"strings"
-)
+import "github.com/inventedsarawak/hyperion/packages/common/config"
+
+// Service is the config namespace for this microservice.
+const Service = "nexus"
 
 // Defaults for local development.
 const (
@@ -16,19 +17,24 @@ const (
 type Config struct {
 	HTTPAddr   string
 	CortexAddr string
+
+	loader *config.Loader
 }
 
 // Load reads configuration from the environment, applying defaults.
 func Load() Config {
+	l := config.For(Service)
 	return Config{
-		HTTPAddr:   getenv("NEXUS_HTTP_ADDR", DefaultHTTPAddr),
-		CortexAddr: getenv("NEXUS_CORTEX_GRPC_ADDR", DefaultCortexAddr),
+		loader:     l,
+		HTTPAddr:   l.String("HTTP_ADDR", DefaultHTTPAddr),
+		CortexAddr: l.String("CORTEX_GRPC_ADDR", DefaultCortexAddr),
 	}
 }
 
-func getenv(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
+// Describe returns every resolved setting with secrets masked.
+func (c Config) Describe() []config.Entry {
+	if c.loader == nil {
+		return nil
 	}
-	return fallback
+	return c.loader.Describe()
 }

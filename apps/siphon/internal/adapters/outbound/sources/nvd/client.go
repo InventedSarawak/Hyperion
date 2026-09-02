@@ -97,7 +97,9 @@ func WithRequestDelay(d time.Duration) Option {
 // with the much lower anonymous rate limit).
 func New(httpClient *http.Client, baseURL, apiKey string, opts ...Option) *Client {
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 60 * time.Second}
+		// A full 2000-record page is several MB; NVD is a bulk API and streaming
+		// one page can take well over a minute.
+		httpClient = &http.Client{Timeout: 180 * time.Second}
 	}
 	if baseURL == "" {
 		baseURL = DefaultBaseURL

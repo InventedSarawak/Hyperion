@@ -16,8 +16,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
-	"github.com/inventedsarawak/hyperion/packages/common/env"
-
 	intelv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/intelligence/v1"
 
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/inbound/consumer"
@@ -32,9 +30,6 @@ import (
 )
 
 func main() {
-	// Load .env (if present) before reading any configuration.
-	env.Load()
-
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
 

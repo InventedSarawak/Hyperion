@@ -32,16 +32,28 @@ const (
 	SourceKind_SOURCE_KIND_GITHUB_ADVISORY SourceKind = 2
 	SourceKind_SOURCE_KIND_CISA_KEV        SourceKind = 3
 	SourceKind_SOURCE_KIND_EXPLOIT_DB      SourceKind = 4
+	SourceKind_SOURCE_KIND_MITRE           SourceKind = 5
+	SourceKind_SOURCE_KIND_VENDOR_ADVISORY SourceKind = 6
+	SourceKind_SOURCE_KIND_OSINT           SourceKind = 7
+	SourceKind_SOURCE_KIND_PACKAGE_FEED    SourceKind = 8
+	SourceKind_SOURCE_KIND_SHODAN          SourceKind = 9
+	SourceKind_SOURCE_KIND_GSD             SourceKind = 10
 )
 
 // Enum value maps for SourceKind.
 var (
 	SourceKind_name = map[int32]string{
-		0: "SOURCE_KIND_UNSPECIFIED",
-		1: "SOURCE_KIND_NVD",
-		2: "SOURCE_KIND_GITHUB_ADVISORY",
-		3: "SOURCE_KIND_CISA_KEV",
-		4: "SOURCE_KIND_EXPLOIT_DB",
+		0:  "SOURCE_KIND_UNSPECIFIED",
+		1:  "SOURCE_KIND_NVD",
+		2:  "SOURCE_KIND_GITHUB_ADVISORY",
+		3:  "SOURCE_KIND_CISA_KEV",
+		4:  "SOURCE_KIND_EXPLOIT_DB",
+		5:  "SOURCE_KIND_MITRE",
+		6:  "SOURCE_KIND_VENDOR_ADVISORY",
+		7:  "SOURCE_KIND_OSINT",
+		8:  "SOURCE_KIND_PACKAGE_FEED",
+		9:  "SOURCE_KIND_SHODAN",
+		10: "SOURCE_KIND_GSD",
 	}
 	SourceKind_value = map[string]int32{
 		"SOURCE_KIND_UNSPECIFIED":     0,
@@ -49,6 +61,12 @@ var (
 		"SOURCE_KIND_GITHUB_ADVISORY": 2,
 		"SOURCE_KIND_CISA_KEV":        3,
 		"SOURCE_KIND_EXPLOIT_DB":      4,
+		"SOURCE_KIND_MITRE":           5,
+		"SOURCE_KIND_VENDOR_ADVISORY": 6,
+		"SOURCE_KIND_OSINT":           7,
+		"SOURCE_KIND_PACKAGE_FEED":    8,
+		"SOURCE_KIND_SHODAN":          9,
+		"SOURCE_KIND_GSD":             10,
 	}
 )
 
@@ -168,14 +186,21 @@ const file_hyperion_events_v1_signal_events_proto_rawDesc = "" +
 	"\x06source\x18\x02 \x01(\x0e2\x1e.hyperion.events.v1.SourceKindR\x06source\x12G\n" +
 	"\rvulnerability\x18\x03 \x01(\v2!.hyperion.common.v1.VulnerabilityR\rvulnerability\x12?\n" +
 	"\rdiscovered_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\fdiscoveredAt\x12\x17\n" +
-	"\araw_ref\x18\x05 \x01(\tR\x06rawRef*\x95\x01\n" +
+	"\araw_ref\x18\x05 \x01(\tR\x06rawRef*\xaf\x02\n" +
 	"\n" +
 	"SourceKind\x12\x1b\n" +
 	"\x17SOURCE_KIND_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fSOURCE_KIND_NVD\x10\x01\x12\x1f\n" +
 	"\x1bSOURCE_KIND_GITHUB_ADVISORY\x10\x02\x12\x18\n" +
 	"\x14SOURCE_KIND_CISA_KEV\x10\x03\x12\x1a\n" +
-	"\x16SOURCE_KIND_EXPLOIT_DB\x10\x04B\xed\x01\n" +
+	"\x16SOURCE_KIND_EXPLOIT_DB\x10\x04\x12\x15\n" +
+	"\x11SOURCE_KIND_MITRE\x10\x05\x12\x1f\n" +
+	"\x1bSOURCE_KIND_VENDOR_ADVISORY\x10\x06\x12\x15\n" +
+	"\x11SOURCE_KIND_OSINT\x10\a\x12\x1c\n" +
+	"\x18SOURCE_KIND_PACKAGE_FEED\x10\b\x12\x16\n" +
+	"\x12SOURCE_KIND_SHODAN\x10\t\x12\x13\n" +
+	"\x0fSOURCE_KIND_GSD\x10\n" +
+	"B\xed\x01\n" +
 	"\x16com.hyperion.events.v1B\x11SignalEventsProtoP\x01ZVgithub.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/events/v1;eventsv1\xa2\x02\x03HEX\xaa\x02\x12Hyperion.Events.V1\xca\x02\x12Hyperion\\Events\\V1\xe2\x02\x1eHyperion\\Events\\V1\\GPBMetadata\xea\x02\x14Hyperion::Events::V1b\x06proto3"
 
 var (

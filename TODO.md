@@ -20,7 +20,8 @@
 - [x] Configure `deploy/docker-compose.yml` — Postgres (host port 5433); `task infra:up`/`infra:down`
 - [x] Add Elasticsearch to `deploy/docker-compose.yml` (8.15.3, security off for local dev)
 - [x] Add `.env.sample` documenting env vars + formats for all 10 ingestion sources
-- [x] Load `.env` at startup in siphon/cortex/nexus (`packages/common/env`)
+- [x] Centralized namespaced config (`packages/common/config`): SERVICE.VAR -> SERVICE_VAR,
+      typed getters, masked secrets, `.env` autoloading — used by siphon/cortex/nexus
 
 ### Domain Contracts (The "Law") — do this FIRST
 
@@ -43,6 +44,11 @@
 - [x] **Rate limiting:** NVD paced to its documented limits (6s no key / 0.6s with key), pagination via startIndex/totalResults, 120-day window clamping, retry+backoff on 403/429/5xx
 - [x] **Multi-source:** `PollSources` fans out over every active source; one failure doesn't stop the rest
 - [x] **Source registry:** all 10 documented sources resolved at startup; inactive ones reported with a reason
+- [x] **All 10 source adapters implemented:** NVD, GitHub Advisory, CISA KEV, Exploit-DB, MITRE,
+      Vendor (Red Hat), OSINT RSS, Package feeds (OSV watchlist), Shodan CVEDB, GSD/OSV —
+      each with fixture-backed tests and per-source rate limiting
+- [x] **Shared adapter plumbing:** `sourcehttp` (pacing + bounded retry/backoff) and `cveid`
+      (CVE/URL extraction) so transport concerns are written once
 - [ ] Later: swap stdout publisher → Kafka (v3); add dedupe/checkpoint stores (Redis, v3)
 - [ ] Note: siphon does NOT persist — it publishes; cortex owns storage (event-driven design)
 

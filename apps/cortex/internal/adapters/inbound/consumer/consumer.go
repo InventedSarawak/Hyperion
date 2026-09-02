@@ -135,6 +135,18 @@ func sourcesFrom(k eventsv1.SourceKind) []string {
 		return []string{"cisa_kev"}
 	case eventsv1.SourceKind_SOURCE_KIND_EXPLOIT_DB:
 		return []string{"exploit_db"}
+	case eventsv1.SourceKind_SOURCE_KIND_MITRE:
+		return []string{"mitre"}
+	case eventsv1.SourceKind_SOURCE_KIND_VENDOR_ADVISORY:
+		return []string{"vendor_advisory"}
+	case eventsv1.SourceKind_SOURCE_KIND_OSINT:
+		return []string{"osint"}
+	case eventsv1.SourceKind_SOURCE_KIND_PACKAGE_FEED:
+		return []string{"package_feed"}
+	case eventsv1.SourceKind_SOURCE_KIND_SHODAN:
+		return []string{"shodan"}
+	case eventsv1.SourceKind_SOURCE_KIND_GSD:
+		return []string{"gsd"}
 	default:
 		return nil
 	}

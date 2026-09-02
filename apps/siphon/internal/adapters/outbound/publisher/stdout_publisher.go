@@ -96,6 +96,18 @@ func toProtoSourceKind(k valueobject.SourceKind) eventsv1.SourceKind {
 		return eventsv1.SourceKind_SOURCE_KIND_CISA_KEV
 	case valueobject.SourceKindExploitDB:
 		return eventsv1.SourceKind_SOURCE_KIND_EXPLOIT_DB
+	case valueobject.SourceKindMITRE:
+		return eventsv1.SourceKind_SOURCE_KIND_MITRE
+	case valueobject.SourceKindVendorAdvisory:
+		return eventsv1.SourceKind_SOURCE_KIND_VENDOR_ADVISORY
+	case valueobject.SourceKindOSINT:
+		return eventsv1.SourceKind_SOURCE_KIND_OSINT
+	case valueobject.SourceKindPackageFeed:
+		return eventsv1.SourceKind_SOURCE_KIND_PACKAGE_FEED
+	case valueobject.SourceKindShodan:
+		return eventsv1.SourceKind_SOURCE_KIND_SHODAN
+	case valueobject.SourceKindGSD:
+		return eventsv1.SourceKind_SOURCE_KIND_GSD
 	default:
 		return eventsv1.SourceKind_SOURCE_KIND_UNSPECIFIED
 	}

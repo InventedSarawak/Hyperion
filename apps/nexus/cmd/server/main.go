@@ -12,8 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/inventedsarawak/hyperion/packages/common/env"
-
 	graphqladapter "github.com/inventedsarawak/hyperion/apps/nexus/internal/adapters/inbound/graphql"
 	grpcadapter "github.com/inventedsarawak/hyperion/apps/nexus/internal/adapters/outbound/grpc"
 	"github.com/inventedsarawak/hyperion/apps/nexus/internal/application/queries"
@@ -21,9 +19,6 @@ import (
 )
 
 func main() {
-	// Load .env (if present) before reading any configuration.
-	env.Load()
-
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
 
