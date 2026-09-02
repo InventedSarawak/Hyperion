@@ -17,7 +17,7 @@
 - [x] Create directory structure (`apps/`, `packages/`, `deploy/`)
 - [x] Scaffold Ginkgo test harnesses per service (smoke-level; `task test:go` passes)
 - [x] Remove deprecated empty `api/` dir (contracts live in `packages/contracts`)
-- [x] Configure `deploy/docker-compose.yml` — Postgres (host port 5433); `task infra:up`/`infra:down`
+- [x] Configure `deploy/docker-compose.yml` — Postgres + Elasticsearch on default ports (5432/9200); `task up`/`task down`
 - [x] Add Elasticsearch to `deploy/docker-compose.yml` (8.15.3, security off for local dev)
 - [x] Add `.env.sample` documenting env vars + formats for all 10 ingestion sources
 - [x] Centralized namespaced config (`packages/common/config`): SERVICE.VAR -> SERVICE_VAR,
@@ -83,7 +83,7 @@
 ### Infrastructure Upgrade
 
 - [ ] Add **Neo4j** to `docker-compose.yml`
-- [ ] Add **gRPC** reflection to all services
+- [x] Add **gRPC** reflection (done on cortex; add to future services as they gain gRPC)
 
 ### App: Intelligence Service (Upgrade)
 
