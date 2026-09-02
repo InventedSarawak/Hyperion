@@ -107,4 +107,6 @@ Hyperion leverages containerization and container orchestration to manage its co
 - **Rule 4: Polyglot Discipline.** Do not force relational data into Neo4j, and do not try to do graph traversals in Postgres. Route data to its designated persistence layer based on its query pattern.
 - **Rule 5: AI Must Remain Local.** Do not route sensitive internal architecture, vulnerability data, or explicit exploit requests to public OpenAI/Anthropic APIs. Always default to the local Ollama instance for the CTF Copilot.
 - **Rule 6: Delegate the UI.** Do not build custom authentication screens or billing dashboards. Rely strictly on Keycloak for identity flows and Lago/Stripe for checkout and metering. Focus engineering cycles on the core threat engine.
-- **Rule 7: Containerize Everything.** Code is not "done" until it runs seamlessly inside a Docker container and can be orchestrated via standard K8s manifests or Helm charts.
+- **Rule 7: Containerize Everything.** _(Currently VIOLATED in local dev: the Go
+  services run natively via `scripts/system.sh`; only Postgres and Elasticsearch are
+  containers. Tracked in `docs/TECHNICAL-DEBT.md`, to be repaid in v4.)_ Code is not "done" until it runs seamlessly inside a Docker container and can be orchestrated via standard K8s manifests or Helm charts.

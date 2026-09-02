@@ -1,5 +1,9 @@
 # Hyperion Project Structure
 
+> Some directories below are placeholders for planned work. See
+> [TECHNICAL-DEBT.md](./TECHNICAL-DEBT.md) for what is genuinely implemented versus
+> scaffolded, and the shortcuts taken to get here.
+
 ## Service Codenames
 
 Services use codenames in `apps/`. Map to their role:
@@ -55,8 +59,9 @@ hyperion/                       # module prefix: github.com/inventedsarawak/hype
 │   ├── eslint-config/          # 🧹 Shared ESLint config
 │   └── typescript-config/      # 🧩 Shared tsconfig bases
 ├── deploy/                     # ☁️ Infrastructure
-│   ├── docker-compose.yml
-│   └── k8s/
+│   ├── docker-compose.yml      # Postgres + Elasticsearch (local dev ONLY)
+│   ├── k8s/                    # ⚠️ EMPTY — no manifests yet (v4)
+│   └── terraform/              # ⚠️ EMPTY — no .tf files yet (v4)
 ├── api/                        # ⚠️ DEPRECATED empty dir (openapi/, protobuf/) — to be
 │                               #    removed; contracts live in packages/contracts
 ├── scripts/                      # 🛠️ Scripts

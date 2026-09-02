@@ -108,6 +108,21 @@
 
 ---
 
+## Cross-cutting: Technical Debt
+
+Registered in `docs/TECHNICAL-DEBT.md`. Highest-value items, roughly in order:
+
+- [ ] **Per-source lookback/interval** — one global `SIPHON_LOOKBACK` makes three
+      low-cadence sources return 0 at the 2h default (small change, high clarity)
+- [ ] **Persist the ingestion watermark** — currently in-memory, so a restart refetches
+      the whole window and a long outage loses signals
+- [ ] Health endpoints on `cortex` and `siphon` (only `nexus` has one)
+- [ ] Versioned migrations (`goose`/`golang-migrate`) instead of run-everything-idempotently
+- [ ] Graceful shutdown for in-flight ingest (Postgres can end up ahead of Elasticsearch)
+- [ ] Elasticsearch alias + reindex strategy for mapping changes
+
+---
+
 ## TODO v3: The Nervous System (Streaming)
 
 ### Infrastructure Upgrade
@@ -162,6 +177,15 @@
 
 ### DevOps (GitOps)
 
+> Infra debt registered in `docs/TECHNICAL-DEBT.md`. `deploy/k8s/` and
+> `deploy/terraform/` are currently **empty directories**.
+
+- [ ] **Dockerfiles:** multi-stage build per Go service (repays AGENTS.md Rule 7 —
+      services currently run natively via `scripts/system.sh`)
+- [ ] Add the Go services to `docker-compose.yml` with `restart: unless-stopped`
+- [ ] Add resource limits to all compose services
+- [ ] **CI:** `.github/workflows/` is empty — add build + test + lint + typecheck
+- [ ] Decide whether `deploy/terraform/` is real (fill it) or aspirational (delete it)
 - [ ] Create `deploy/k8s/helm-chart`
 - [ ] Setup local **K3s** cluster
 - [ ] Install **ArgoCD** in K3s
