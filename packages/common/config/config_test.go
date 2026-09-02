@@ -114,4 +114,22 @@ var _ = Describe("namespaced config loader", func() {
 
 		Expect(config.For("precsvc").String("MODE", "default")).To(Equal("from-shell"))
 	})
+
+	It("treats a stray .env comment as unset rather than a value", func() {
+		// godotenv keeps "# comment" as the value when the setting is blank:
+		//   SIPHON_GITHUB_TOKEN=   # format: ghp_...
+		// Sending that upstream as a credential produced a real 401.
+		dir := GinkgoT().TempDir()
+		Expect(os.WriteFile(filepath.Join(dir, ".env"),
+			[]byte("CMTSVC_TOKEN=   # format: ghp_xxx\n"), 0o600)).To(Succeed())
+
+		cwd, err := os.Getwd()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(os.Chdir(dir)).To(Succeed())
+		DeferCleanup(func() { _ = os.Chdir(cwd) })
+
+		l := config.For("cmtsvc")
+		Expect(l.Secret("TOKEN")).To(BeEmpty())
+		Expect(l.Has("TOKEN")).To(BeFalse())
+	})
 })

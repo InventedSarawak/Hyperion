@@ -5,10 +5,13 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/inbound/scheduler"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/publisher"
@@ -18,6 +21,12 @@ import (
 )
 
 func main() {
+	checkSources := flag.Bool("check-sources", false,
+		"probe every ingestion source once, print a status report, and exit")
+	checkLookback := flag.Duration("check-lookback", 24*time.Hour,
+		"how far back the -check-sources probe reaches")
+	flag.Parse()
+
 	// Logs go to stderr; published events go to stdout (kept separate on purpose).
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
@@ -29,6 +38,13 @@ func main() {
 
 	// Resolve which of the documented sources are usable this run.
 	registry := sources.Build(cfg, nil)
+
+	// Diagnostic mode: probe each source, report, exit. Publishes nothing.
+	if *checkSources {
+		runSourceCheck(ctx, registry, *checkLookback)
+		return
+	}
+
 	reportConfig(logger, cfg)
 	reportSources(logger, registry)
 
@@ -79,5 +95,19 @@ func reportConfig(logger *slog.Logger, cfg siphonconfig.Config) {
 			continue // unset optional credentials are covered by the source report
 		}
 		logger.Debug("config", "key", e.Key, "value", e.Value, "from_env", e.Set)
+	}
+}
+
+// runSourceCheck probes every source and prints a report on stdout. It exits
+// non-zero when an active source fails, so it is usable as a health gate in
+// scripts and CI.
+func runSourceCheck(ctx context.Context, registry *sources.Registry, lookback time.Duration) {
+	results := registry.Check(ctx, lookback)
+	fmt.Print(sources.Summary(results))
+
+	for _, r := range results {
+		if r.Active && r.Err != nil {
+			os.Exit(1)
+		}
 	}
 }

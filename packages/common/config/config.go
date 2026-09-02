@@ -67,11 +67,20 @@ func (l *Loader) lookup(name string) (value, source string, ok bool) {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v, "env", true
 	}
-	if v := strings.TrimSpace(dotEnv()[key]); v != "" {
+	if v := strings.TrimSpace(dotEnv()[key]); v != "" && !isStrayComment(v) {
 		return v, ".env", true
 	}
 	return "", "", false
 }
+
+// isStrayComment guards a .env footgun: godotenv strips a trailing "# comment"
+// only when the line has a value, so a blank setting written as
+//
+//	SIPHON_GITHUB_TOKEN=   # format: ghp_...
+//
+// yields the comment itself as the value. Treating a leading '#' as unset stops
+// that from being sent upstream as a credential.
+func isStrayComment(v string) bool { return strings.HasPrefix(v, "#") }
 
 // String reads a string setting, falling back to def.
 func (l *Loader) String(name, def string) string {

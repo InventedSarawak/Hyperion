@@ -8,22 +8,38 @@ vars:
 tasks:
   default:
     cmds:
-      - task: dev
+      - task: status
 
-  dev:
-    desc: Start frontend and backend
-    deps:
-      - dev:frontend
-      - dev:backend
+  up:
+    desc: Start the whole system (infra + cortex + nexus)
+    cmds:
+      - ./scripts/system.sh up
+
+  down:
+    desc: Stop the whole system (services, then infra)
+    cmds:
+      - ./scripts/system.sh down
+
+  status:
+    desc: Show what is running, with health and data counts
+    cmds:
+      - ./scripts/system.sh status
+
+  logs:
+    desc: Tail the running service logs
+    cmds:
+      - ./scripts/system.sh logs
+
+  sources:check:
+    desc: Probe every ingestion source once and report which are working
+    dir: apps/siphon
+    cmds:
+      - go run ./cmd/worker -check-sources {{.CLI_ARGS}}
 
   dev:frontend:
+    desc: Start the Next.js console in dev mode
     cmds:
       - pnpm run dev
-
-  dev:backend:
-    cmds:
-      - echo "Backend is running (placeholder)"
-      - tail -f /dev/null # replace this later with your backend command
 
   build:
     desc: Build everything using TurboRepo
@@ -79,7 +95,7 @@ tasks:
   test:go:integration:
     desc: Run Go tests including the Postgres/Elasticsearch integration suites
     env:
-      CORTEX_TEST_DATABASE_URL: postgres://hyperion:hyperion@localhost:5433/hyperion?sslmode=disable
+      CORTEX_TEST_DATABASE_URL: postgres://hyperion:hyperion@localhost:5432/hyperion?sslmode=disable
       CORTEX_TEST_ELASTICSEARCH_URL: http://localhost:9200
     cmds:
       - ./scripts/test-go-files.sh

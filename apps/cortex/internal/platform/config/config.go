@@ -9,7 +9,7 @@ const Service = "cortex"
 
 // Defaults for local development via deploy/docker-compose.yml.
 const (
-	DefaultDatabaseURL      = "postgres://hyperion:hyperion@localhost:5433/hyperion?sslmode=disable"
+	DefaultDatabaseURL      = "postgres://hyperion:hyperion@localhost:5432/hyperion?sslmode=disable"
 	DefaultElasticsearchURL = "http://localhost:9200"
 	DefaultIndexName        = "hyperion-vulnerabilities"
 	DefaultGRPCAddr         = ":50051"

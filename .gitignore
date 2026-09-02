@@ -38,3 +38,6 @@ yarn-error.log*
 .DS_Store
 *.pem
 .agents/
+
+# Local process state from scripts/system.sh
+.run/

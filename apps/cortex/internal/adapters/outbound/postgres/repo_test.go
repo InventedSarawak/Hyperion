@@ -19,7 +19,7 @@ import (
 // is set, e.g.:
 //
 //	docker compose -f deploy/docker-compose.yml up -d
-//	CORTEX_TEST_DATABASE_URL=postgres://hyperion:hyperion@localhost:5433/hyperion?sslmode=disable \
+//	CORTEX_TEST_DATABASE_URL=postgres://hyperion:hyperion@localhost:5432/hyperion?sslmode=disable \
 //	  go test ./internal/adapters/outbound/postgres/...
 var _ = Describe("Postgres Repo (integration)", func() {
 	var (
