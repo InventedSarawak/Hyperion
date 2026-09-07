@@ -5,6 +5,9 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
+
+	"github.com/inventedsarawak/hyperion/apps/deck/internal/domain/model"
 )
 
 // Styles. Colours are ANSI-256 so the UI degrades gracefully over SSH and in
@@ -100,22 +103,34 @@ func (m Model) feedView() string {
 	}
 
 	for i, hit := range m.feed.Hits {
-		v := hit.Vulnerability
-		severity := v.SeverityLabel()
-
-		marker := "  "
-		line := fmt.Sprintf("%-18s %-9s %s", v.CVEID, severity, truncate(v.Headline(), m.headlineWidth()))
-		if i == m.cursor {
-			marker = styleSelected.Render("▸ ")
-			line = styleSelected.Render(line)
-		} else {
-			line = styleCVE.Render(fmt.Sprintf("%-18s ", v.CVEID)) +
-				severityStyle(severity).Render(fmt.Sprintf("%-9s ", severity)) +
-				truncate(v.Headline(), m.headlineWidth())
-		}
-		b.WriteString(marker + line + "\n")
+		b.WriteString(m.feedRow(hit.Vulnerability, i == m.cursor) + "\n")
 	}
 	return b.String()
+}
+
+// Column widths, in terminal cells. The id column fits a GHSA identifier
+// (19 cells), which is longer than a CVE id — sizing it to the CVE would make
+// every GHSA row shunt the columns to its right.
+const (
+	colMarker   = 2
+	colID       = 19
+	colSeverity = 9
+)
+
+// feedRow renders one row. Selected and unselected rows are laid out by the
+// same code on purpose: when the two were built separately they drifted, and a
+// row that measured correctly in one path wrapped in the other.
+func (m Model) feedRow(v model.Vulnerability, selected bool) string {
+	severity := v.SeverityLabel()
+	id := pad(truncate(v.CVEID, colID), colID)
+	sev := pad(severity, colSeverity)
+	headline := truncate(v.Headline(), m.headlineWidth())
+
+	if selected {
+		return styleSelected.Render("▸ " + id + " " + sev + " " + headline)
+	}
+	return "  " + styleCVE.Render(id) + " " +
+		severityStyle(severity).Render(sev) + " " + headline
 }
 
 func (m Model) graphView() string {
@@ -149,18 +164,29 @@ func (m Model) footer() string {
 // headlineWidth keeps a long summary from wrapping the row. It falls back to a
 // sane width before the terminal has reported its size.
 func (m Model) headlineWidth() int {
-	const chrome = 34 // marker + cve column + severity column
+	chrome := colMarker + colID + 1 + colSeverity + 1
 	if m.width <= chrome+10 {
 		return 60
 	}
 	return m.width - chrome
 }
 
-// truncate shortens s to at most width runes, marking the cut with an ellipsis.
+// truncate shortens s to at most width terminal cells, marking the cut with an
+// ellipsis. Width is measured in cells rather than runes because they are not
+// the same thing: a CJK character occupies two columns, so counting runes would
+// let a row overflow the terminal and wrap.
 func truncate(s string, width int) string {
-	runes := []rune(s)
-	if width <= 1 || len(runes) <= width {
+	if width <= 1 || runewidth.StringWidth(s) <= width {
 		return s
 	}
-	return string(runes[:width-1]) + "…"
+	return runewidth.Truncate(s, width, "…")
+}
+
+// pad right-pads s to exactly width cells, so columns line up whatever the
+// content is. A value already at or over the width is returned unchanged.
+func pad(s string, width int) string {
+	if gap := width - runewidth.StringWidth(s); gap > 0 {
+		return s + strings.Repeat(" ", gap)
+	}
+	return s
 }

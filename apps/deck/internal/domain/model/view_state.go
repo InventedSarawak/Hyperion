@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // CVSS is one scored assessment as deck displays it.
@@ -68,15 +69,34 @@ func (v Vulnerability) SeverityLabel() string {
 }
 
 // Headline is the one-line summary shown in the feed.
+//
+// Advisory titles routinely contain tabs and newlines — NVD and vendor feeds
+// wrap their text — and those must not survive into a table row. A tab renders
+// as up to eight columns while counting as one character, so a row containing
+// one is wider on screen than any width calculation believes; it wraps, and the
+// wrap desynchronises the frame diff, leaving fragments of the previous frame
+// on screen. OneLine is what keeps that from happening.
 func (v Vulnerability) Headline() string {
-	title := strings.TrimSpace(v.Title)
+	title := OneLine(v.Title)
 	if title == "" {
-		title = strings.TrimSpace(v.Description)
+		title = OneLine(v.Description)
 	}
 	if title == "" {
 		return v.CVEID
 	}
 	return title
+}
+
+// OneLine flattens text to a single line: every control character becomes a
+// space, and runs of whitespace collapse to one.
+func OneLine(s string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
+	return strings.Join(strings.Fields(cleaned), " ")
 }
 
 // SearchHit is one scored result.

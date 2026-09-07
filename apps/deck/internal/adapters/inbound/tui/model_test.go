@@ -3,9 +3,12 @@ package tui_test
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-runewidth"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -36,6 +39,22 @@ type stubExplorer struct {
 func (s *stubExplorer) Handle(_ context.Context, cveID string, _ int) (model.BlastRadius, error) {
 	s.gotCVE = cveID
 	return s.radius, s.err
+}
+
+// ansiPattern matches the escape sequences lipgloss emits, so specs can assert
+// on the text a user actually sees.
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+
+func stripANSI(s string) string { return ansiPattern.ReplaceAllString(s, "") }
+
+// column reports the terminal column where substr starts. It measures display
+// cells rather than bytes: the selected row is marked with "▸", three bytes for
+// one column, so a byte offset would compare two different things.
+func column(line, substr string) int {
+	GinkgoHelper()
+	at := strings.Index(line, substr)
+	Expect(at).To(BeNumerically(">=", 0), "%q not found in %q", substr, line)
+	return runewidth.StringWidth(line[:at])
 }
 
 // key builds a keypress message.
@@ -246,5 +265,116 @@ var _ = Describe("TUI model", func() {
 		for _, line := range strings.Split(got.View(), "\n") {
 			Expect(len([]rune(line))).To(BeNumerically("<=", 120))
 		}
+	})
+})
+
+var _ = Describe("Feed row rendering", func() {
+	var (
+		search   *stubSearch
+		explorer *stubExplorer
+	)
+
+	// render returns the feed rows of a loaded model, stripped of styling.
+	render := func(feed model.Feed, width int) []string {
+		GinkgoHelper()
+		search = &stubSearch{feed: feed}
+		explorer = &stubExplorer{}
+		m := tui.New(search, explorer, tui.Options{Query: "cve", PageSize: 25})
+
+		got, cmd := apply(m, key("r"))
+		got, _ = apply(got, cmd())
+		if width > 0 {
+			got, _ = apply(got, tea.WindowSizeMsg{Width: width, Height: 40})
+		}
+
+		var rows []string
+		for _, line := range strings.Split(stripANSI(got.View()), "\n") {
+			if strings.Contains(line, "CVE-") || strings.Contains(line, "GHSA-") {
+				rows = append(rows, line)
+			}
+		}
+		return rows
+	}
+
+	It("flattens a tab inside an advisory title", func() {
+		// Real data: NVD and vendor feeds wrap their titles, so tabs and
+		// newlines arrive embedded. A tab counts as one rune but renders as
+		// up to eight columns, which overflows the row and corrupts the frame.
+		rows := render(model.Feed{Hits: []model.SearchHit{{
+			Vulnerability: model.Vulnerability{
+				CVEID: "CVE-2025-70290",
+				Title: "[ADVISORY] Multiple Integer Overflows in U-Boot Filesystem\tParsing",
+			},
+		}}}, 200)
+
+		Expect(rows).To(HaveLen(1))
+		Expect(rows[0]).ToNot(ContainSubstring("\t"))
+		Expect(rows[0]).To(ContainSubstring("Filesystem Parsing"))
+	})
+
+	It("flattens newlines and collapses the whitespace around them", func() {
+		rows := render(model.Feed{Hits: []model.SearchHit{{
+			Vulnerability: model.Vulnerability{
+				CVEID: "CVE-2026-14297",
+				Title: "A buffer overflow in the Bluetooth\n     Monitoring Service",
+			},
+		}}}, 200)
+
+		Expect(rows[0]).ToNot(ContainSubstring("\n"))
+		Expect(rows[0]).To(ContainSubstring("Bluetooth Monitoring Service"))
+	})
+
+	It("never emits a control character in a row", func() {
+		rows := render(model.Feed{Hits: []model.SearchHit{{
+			Vulnerability: model.Vulnerability{
+				CVEID: "CVE-1", Title: "a\tb\nc\rd\ve",
+			},
+		}}}, 200)
+
+		for _, r := range rows[0] {
+			Expect(unicode.IsControl(r)).To(BeFalse(), "control character %q leaked into a row", r)
+		}
+	})
+
+	It("keeps every row within the terminal width, selected or not", func() {
+		// The selected and unselected paths used to be built separately and
+		// drifted apart; a row that fitted in one wrapped in the other.
+		hits := []model.SearchHit{}
+		for _, id := range []string{"CVE-2025-70290", "CVE-2025-70291", "CVE-2025-70292"} {
+			hits = append(hits, model.SearchHit{Vulnerability: model.Vulnerability{
+				CVEID: id,
+				Title: "[ADVISORY] Multiple Integer Overflows in U-Boot Filesystem\tParsing (CVE-2025-70290 through CVE-2025-70293)",
+			}})
+		}
+
+		const width = 100
+		for _, line := range render(model.Feed{Hits: hits}, width) {
+			Expect(runewidth.StringWidth(line)).To(BeNumerically("<=", width),
+				"row wider than the terminal will wrap and corrupt the frame: %q", line)
+		}
+	})
+
+	It("keeps columns aligned when an id is longer than a CVE id", func() {
+		// GHSA identifiers are 19 cells; a narrower id column would shunt
+		// every column to their right.
+		rows := render(model.Feed{Hits: []model.SearchHit{
+			{Vulnerability: model.Vulnerability{CVEID: "CVE-2021-44228", Title: "short",
+				Scores: []model.CVSS{{BaseScore: 10, Severity: "CRITICAL"}}}},
+			{Vulnerability: model.Vulnerability{CVEID: "GHSA-jfh8-c2jp-5v3q", Title: "short",
+				Scores: []model.CVSS{{BaseScore: 10, Severity: "CRITICAL"}}}},
+		}}, 200)
+
+		Expect(rows).To(HaveLen(2))
+		Expect(column(rows[0], "CRITICAL")).To(Equal(column(rows[1], "CRITICAL")))
+		Expect(column(rows[0], "short")).To(Equal(column(rows[1], "short")))
+	})
+
+	It("measures width in cells, not runes, for wide characters", func() {
+		const width = 60
+		rows := render(model.Feed{Hits: []model.SearchHit{{
+			Vulnerability: model.Vulnerability{CVEID: "CVE-1", Title: strings.Repeat("東", 200)},
+		}}}, width)
+
+		Expect(runewidth.StringWidth(rows[0])).To(BeNumerically("<=", width))
 	})
 })
