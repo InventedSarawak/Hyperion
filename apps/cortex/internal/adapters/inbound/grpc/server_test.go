@@ -51,7 +51,7 @@ var _ = Describe("gRPC Server", func() {
 			NextPageToken: "25",
 		}}
 
-		resp, err := grpcadapter.NewServer(stub).Search(ctx, &intelv1.SearchRequest{
+		resp, err := grpcadapter.NewServer(stub, nil, nil).Search(ctx, &intelv1.SearchRequest{
 			Query:    "log4j",
 			PageSize: 25,
 		})
@@ -71,7 +71,7 @@ var _ = Describe("gRPC Server", func() {
 
 	It("forwards the page token", func() {
 		stub := &stubSearcher{}
-		_, err := grpcadapter.NewServer(stub).Search(ctx, &intelv1.SearchRequest{Query: "log4j", PageToken: "50"})
+		_, err := grpcadapter.NewServer(stub, nil, nil).Search(ctx, &intelv1.SearchRequest{Query: "log4j", PageToken: "50"})
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(stub.gotToken).To(Equal("50"))
@@ -80,7 +80,7 @@ var _ = Describe("gRPC Server", func() {
 	It("returns InvalidArgument when the use case rejects the request", func() {
 		stub := &stubSearcher{err: errors.New("query must not be empty")}
 
-		_, err := grpcadapter.NewServer(stub).Search(ctx, &intelv1.SearchRequest{})
+		_, err := grpcadapter.NewServer(stub, nil, nil).Search(ctx, &intelv1.SearchRequest{})
 
 		Expect(err).To(HaveOccurred())
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))

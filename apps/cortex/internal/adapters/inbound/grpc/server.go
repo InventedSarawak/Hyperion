@@ -23,14 +23,30 @@ type Searcher interface {
 	Handle(ctx context.Context, query string, pageSize int, pageToken string) (queries.Result, error)
 }
 
+// DependencyIngester records a repository's manifest in the dependency graph.
+type DependencyIngester interface {
+	Handle(ctx context.Context, snapshot model.RepositorySnapshot) (int, error)
+}
+
+// BlastRadiusCalculator answers which repositories a vulnerability reaches.
+type BlastRadiusCalculator interface {
+	Handle(ctx context.Context, cveID string, maxDepth, limit int) (model.BlastRadius, error)
+}
+
 // Server implements intelv1.IntelligenceServiceServer.
 type Server struct {
 	intelv1.UnimplementedIntelligenceServiceServer
 	search Searcher
+	deps   DependencyIngester
+	blast  BlastRadiusCalculator
 }
 
-// NewServer wires the gRPC adapter to the search use case.
-func NewServer(search Searcher) *Server { return &Server{search: search} }
+// NewServer wires the gRPC adapter to cortex's use cases. The graph use cases
+// may be nil when no graph backend is configured; the RPCs that need them then
+// report Unavailable rather than answering wrongly.
+func NewServer(search Searcher, deps DependencyIngester, blast BlastRadiusCalculator) *Server {
+	return &Server{search: search, deps: deps, blast: blast}
+}
 
 // Search handles the RPC: proto request -> use case -> proto response.
 func (s *Server) Search(ctx context.Context, req *intelv1.SearchRequest) (*intelv1.SearchResponse, error) {

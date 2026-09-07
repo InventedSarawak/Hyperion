@@ -21,6 +21,8 @@ import (
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/inbound/consumer"
 	grpcadapter "github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/inbound/grpc"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/elasticsearch"
+	graphadapter "github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/neo4j"
+	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/noopgraph"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/noopindex"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/postgres"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/application/commands"
@@ -53,8 +55,13 @@ func main() {
 	// Compose the hexagon: outbound adapters -> use cases -> inbound adapters.
 	repo := postgres.NewRepo(pool)
 	index := buildSearchIndex(ctx, logger, cfg)
+	graph, closeGraph := buildDependencyGraph(ctx, logger, cfg)
+	defer closeGraph()
+
 	ingest := commands.NewIngestSignal(repo, index)
+	ingestDeps := commands.NewIngestDependency(graph)
 	search := queries.NewSearch(index)
+	blast := queries.NewCalculateBlastRadius(graph, cfg.BlastRadiusMaxDepth)
 
 	if cfg.ConsumeStdin {
 		runStdinConsumer(ctx, logger, ingest, repo)
@@ -65,7 +72,34 @@ func main() {
 		logger.Error("nothing to do: enable CORTEX_SERVE_GRPC or CORTEX_CONSUME_STDIN")
 		os.Exit(1)
 	}
-	serveGRPC(ctx, logger, cfg, search)
+	serveGRPC(ctx, logger, cfg, search, ingestDeps, blast)
+}
+
+// buildDependencyGraph returns the Neo4j adapter when the server answers,
+// otherwise the no-op graph. Unlike search, the no-op refuses every call: an
+// empty blast radius must never be mistaken for "nothing is affected".
+func buildDependencyGraph(ctx context.Context, logger *slog.Logger, cfg config.Config) (ports.DependencyGraph, func()) {
+	graph, err := graphadapter.Connect(ctx, graphadapter.Config{
+		URI:      cfg.Neo4jURI,
+		Username: cfg.Neo4jUsername,
+		Password: cfg.Neo4jPassword,
+		Database: cfg.Neo4jDatabase,
+	})
+	if err != nil {
+		logger.Warn("neo4j unavailable; dependency graph and blast radius disabled",
+			"uri", cfg.Neo4jURI, "error", err)
+		return noopgraph.New(), func() {}
+	}
+
+	if err := graph.EnsureSchema(ctx); err != nil {
+		logger.Warn("neo4j schema setup failed; dependency graph disabled",
+			"uri", cfg.Neo4jURI, "error", err)
+		_ = graph.Close(ctx)
+		return noopgraph.New(), func() {}
+	}
+
+	logger.Info("neo4j ready", "uri", cfg.Neo4jURI, "database", cfg.Neo4jDatabase)
+	return graph, func() { _ = graph.Close(context.WithoutCancel(ctx)) }
 }
 
 // buildSearchIndex returns the Elasticsearch adapter when the cluster answers,
@@ -96,7 +130,14 @@ func runStdinConsumer(ctx context.Context, logger *slog.Logger, ingest *commands
 }
 
 // serveGRPC runs the intelligence API until the context is cancelled.
-func serveGRPC(ctx context.Context, logger *slog.Logger, cfg config.Config, search *queries.Search) {
+func serveGRPC(
+	ctx context.Context,
+	logger *slog.Logger,
+	cfg config.Config,
+	search *queries.Search,
+	ingestDeps *commands.IngestDependency,
+	blast *queries.CalculateBlastRadius,
+) {
 	listener, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
 		logger.Error("grpc listen failed", "addr", cfg.GRPCAddr, "error", err)
@@ -104,7 +145,7 @@ func serveGRPC(ctx context.Context, logger *slog.Logger, cfg config.Config, sear
 	}
 
 	server := grpc.NewServer()
-	intelv1.RegisterIntelligenceServiceServer(server, grpcadapter.NewServer(search))
+	intelv1.RegisterIntelligenceServiceServer(server, grpcadapter.NewServer(search, ingestDeps, blast))
 	reflection.Register(server) // enables grpcurl / grpc_cli exploration
 
 	go func() {
