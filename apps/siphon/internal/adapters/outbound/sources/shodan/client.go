@@ -11,6 +11,7 @@ package shodan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -68,6 +69,14 @@ func (c *Client) Fetch(ctx context.Context, since time.Time) ([]model.SourceSign
 
 	var payload response
 	if err := c.http.GetJSON(ctx, u.String(), &payload); err != nil {
+		// CVEDB answers an empty window with 404 {"detail":"No information
+		// available"} rather than an empty list. At a short lookback that is
+		// the normal case — no CVE has been published yet today — so treating
+		// it as a failure would make every poll log an error for a
+		// perfectly healthy source.
+		if errors.Is(err, sourcehttp.ErrNotFound) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("shodan cvedb: %w", err)
 	}
 

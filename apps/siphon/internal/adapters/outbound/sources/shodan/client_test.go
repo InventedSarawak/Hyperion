@@ -108,3 +108,38 @@ var _ = Describe("Shodan CVEDB adapter", func() {
 		Expect(gotQuery).ToNot(ContainSubstring("sort_by_epss"))
 	})
 })
+
+var _ = Describe("Shodan CVEDB empty windows", func() {
+	ctx := context.Background()
+
+	It("treats a 404 as an empty window rather than a failure", func() {
+		// CVEDB answers a window containing no CVEs with 404 and
+		// {"detail":"No information available"}. At a short lookback that is
+		// the normal case, not a broken source.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"No information available"}`))
+		}))
+		defer srv.Close()
+
+		got, err := shodan.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()),
+			sourcehttp.WithRateLimit(time.Millisecond)).Fetch(ctx, time.Now().Add(-time.Hour))
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got).To(BeEmpty())
+	})
+
+	It("still reports a genuine failure", func() {
+		// A non-retryable status keeps this fast; sourcehttp's own suite
+		// covers the retry/backoff path for 5xx.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+		}))
+		defer srv.Close()
+
+		_, err := shodan.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()),
+			sourcehttp.WithRateLimit(time.Millisecond)).Fetch(ctx, time.Now().Add(-time.Hour))
+
+		Expect(err).To(HaveOccurred())
+	})
+})
