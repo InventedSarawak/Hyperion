@@ -38,6 +38,19 @@ no manifests, Helm charts, or `.tf` files whatsoever.
   only once there is real cloud infra to describe — an empty `deploy/terraform/`
   should either be filled or deleted.
 
+### 🟢 Local infra assumes the default ports are free
+
+`deploy/docker-compose.yml` binds Postgres to :5432, Elasticsearch to :9200 and
+Neo4j to :7687 on the host.
+
+- **Cost:** on a machine already running another project's database, `task up`
+  fails to bind and the stack comes up half-started. This is real: v2 was
+  verified against a throwaway Postgres on :55432 because an unrelated
+  `ledgera-postgres-1` container held :5432.
+- **Fix:** make the host ports configurable (`${HYPERION_POSTGRES_PORT:-5432}`
+  in compose, matching the existing namespaced config), so the stack can move
+  aside without editing a committed file.
+
 ### 🟡 No CI pipeline
 
 `.github/workflows/` is empty. Nothing runs tests, lint, or builds on push.
@@ -119,7 +132,66 @@ Documents are written straight to a fixed index name.
 
 ---
 
-## 3. Security
+## 3. Dependency Graph & Supply Chain (v2)
+
+### 🟡 Dependency reporting is a synchronous gRPC call
+
+siphon calls `IntelligenceService.IngestDependencies` directly. The advisory path
+publishes events; this one blocks on a reply.
+
+- **Why:** v2 has no message bus. "Send to the intelligence service" was the
+  shape the roadmap called for, and a real RPC proved the contract end to end.
+- **Cost:** a scan fails when cortex is down, with no replay. siphon and cortex
+  are coupled at runtime in a way the event path deliberately is not.
+- **Fix in v3:** publish `DependencyObserved` to Kafka. Only the outbound
+  adapter changes — the workflow and domain do not.
+
+### 🟡 Library-to-library edges reach only as far as the watchlist
+
+`(:Library)-[:DEPENDS_ON]->(:Library)` edges are derived from scanned repositories
+that publish a module: the module's direct requirements become its own edges.
+
+- **Why:** it is the only transitive data a manifest actually contains, and it
+  makes `DEPENDS_ON*1..n` genuinely recursive rather than decorative.
+- **Cost:** transitivity stops at the edge of the watchlist. A repository
+  depending on a library nobody scanned looks one hop deep, so a real blast
+  radius can be **understated** — the failure mode that matters most here.
+- **Fix in v3+:** ingest a real module graph (deps.dev, an SBOM feed, or
+  `go mod graph` / lockfiles) instead of inferring it from what we happened to scan.
+
+### 🟡 Only _reviewed_ GitHub advisories carry package linkage
+
+The advisory feed is dominated by `unreviewed` records — automated NVD imports with
+`vulnerabilities: []`. siphon makes a second `type=reviewed` pass to get the
+package data, but the volume is low: roughly **one reviewed advisory per 6 hours**.
+
+- **Cost:** at the 2h default `SIPHON_LOOKBACK`, the graph gains essentially no
+  CVE-to-library linkage, and blast radius stays empty for reasons that look like
+  a bug but are not. A 30-day window yields 100 reviewed advisories, all with packages.
+- **Fix:** per-source lookback (already registered above). Until then, seed the
+  graph with a long `SIPHON_LOOKBACK` on first run.
+
+### 🟡 The repository watchlist is manual
+
+`SIPHON_REPO_WATCHLIST` is a hand-written list of `owner/name` entries.
+
+- **Cost:** the graph only knows about repositories someone remembered to add.
+  For a tenant-facing product, "what do you own?" has to be discovered.
+- **Fix in v4:** org-level enumeration via the GitHub App installation, scoped
+  per tenant.
+
+### 🟢 Neo4j migrations are implicit
+
+`EnsureSchema` creates uniqueness constraints idempotently on boot. There is no
+version table and no way to evolve a constraint.
+
+- **Cost:** the same shortcut as the Postgres migration runner, one layer over.
+- **Fix in v3:** fold the graph schema into whatever versioned migration tool
+  replaces the Postgres runner.
+
+---
+
+## 4. Security
 
 ### 🔴 No authentication or authorization anywhere
 
@@ -149,7 +221,7 @@ port can query everything.
 
 ### 🟡 Default credentials committed in compose
 
-`hyperion/hyperion` for Postgres, in the repo.
+`hyperion/hyperion` for Postgres and `neo4j/hyperion` for Neo4j, in the repo.
 
 - **Cost:** harmless locally, catastrophic if the file were ever applied elsewhere.
 - **Fix in v4:** secrets via environment/secret manager, never in the compose file.
@@ -168,7 +240,7 @@ API keys are read from an unencrypted, gitignored file.
 
 ---
 
-## 4. Operability
+## 5. Operability
 
 ### 🟡 No health endpoint on cortex
 
@@ -204,13 +276,17 @@ Single-node with default replica settings, so replicas are unassignable.
 
 ---
 
-## 5. Scope Deliberately Deferred
+## 6. Scope Deliberately Deferred
 
 Not debt — planned roadmap work, listed so the gap between the docs and reality is explicit:
 
 - **`ghost`** (CTF copilot, Ollama + Qdrant) — parked, v5.
 - **`relic`** (Parquet archiver to MinIO) — stub, v4.
-- **`deck`** (Bubble Tea TUI) — stub, v2.
 - **`credits`** (Lago billing) — stub, v4.
 - **`console`** (Next.js dashboard) — still the Turborepo starter page, v4.
-- **Neo4j blast radius** — the platform's actual differentiator, v2.
+- ~~**`deck`** (Bubble Tea TUI)~~ — **built in v2**: live feed + graph explorer.
+- ~~**Neo4j blast radius**~~ — **built in v2**, and verified against live data.
+- **Blast radius is not exposed through nexus.** `deck` calls cortex directly;
+  the GraphQL gateway still serves only `search`. Adding a `blastRadius` query
+  is a small, obvious next step, deferred so v2 stayed inside its scope.
+- **gRPC streaming for the live feed** — `deck` polls; v3.

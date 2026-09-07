@@ -5,7 +5,93 @@ before each commit; move superseded entries into the changelog at the bottom.
 
 ---
 
-## Latest Update — 2026-09-02
+## Latest Update — 2026-09-07
+
+### Overall status
+
+**v2 is complete.** Hyperion now answers the question it was built for: _given a
+vulnerability, which repositories does it actually reach?_ Neo4j holds the supply chain,
+siphon reads real dependency manifests, and `deck` puts both in a terminal.
+
+### What v2 added
+
+| Area           | What landed                                                                                                                                                                                            |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Infrastructure | **Neo4j 5.26** in compose (bolt :7687, browser :7474), healthchecked; `system.sh` waits on it and reports node/relationship counts                                                                     |
+| Contracts      | `common/v1/package.proto`, `common/v1/repository.proto`; `IngestDependencies` + `GetBlastRadius` RPCs; `Vulnerability.affected_packages`                                                               |
+| cortex         | `Repository`/`Library`/`Author`/`Dependency` entities, `RepositorySnapshot` aggregate, `PackageRef`/`Ecosystem` VOs, `DependencyGraph` port, Neo4j adapter, `IngestDependency`, `CalculateBlastRadius` |
+| siphon         | GitHub repository adapter (`go.mod` / `package.json` via the contents API), `manifest` parsers, `ScanRepositories` workflow, gRPC dependency publisher                                                 |
+| deck           | Bubble Tea TUI — tabbed **Live Feed** (polling) and **Graph Explorer** (ASCII tree), gRPC client, 25 specs driving `Update`/`View` with no terminal                                                    |
+
+### The graph
+
+```
+(:Author)-[:MAINTAINS]->(:Repository)-[:DEPENDS_ON {version, direct}]->(:Library)
+(:Repository)-[:PUBLISHES]->(:Library)-[:DEPENDS_ON]->(:Library)
+(:Library)-[:AFFECTED_BY {affected_version}]->(:Vulnerability)
+```
+
+Libraries are keyed on **ecosystem + name without a version**, so every dependant of a
+package converges on one node and a single traversal finds them all; the pinned version
+lives on the edge. A scanned repository that publishes a module contributes that module's
+_direct_ requirements as library-to-library edges — which is what makes the
+`DEPENDS_ON*1..n` traversal genuinely recursive rather than one hop deep.
+
+### Verified end-to-end (2026-09-07, live data)
+
+- Ingest of 30 days of GitHub Advisory + OSV: **100 vulnerabilities linked to 31
+  libraries** via 134 `AFFECTED_BY` edges.
+- Repository scan of `ajv-validator/ajv`, `eslint/eslint`, `fleetdm/fleet`:
+  **651 dependency edges** written through the `IngestDependencies` RPC (44 / 88 / 519).
+- Graph totals: 656 `Library`, 100 `Vulnerability`, 3 `Repository`, 3 `Author`;
+  912 `DEPENDS_ON`, 134 `AFFECTED_BY`, 3 `PUBLISHES`, 3 `MAINTAINS`.
+- **Real transitive blast radius** over gRPC — `CVE-2026-13676` in `npm:fast-uri`:
+  - `ajv-validator/ajv` — depth 1, direct
+  - `eslint/eslint` — depth 2, path `eslint/eslint → npm:ajv → npm:fast-uri`
+  - `fleetdm/fleet` — reached through its own manifest
+- `deck` renders the live feed against cortex with severity colouring and the
+  graph explorer tree.
+- Full suite: **39 packages green**, including the Postgres, Elasticsearch and Neo4j
+  integration suites against real backends.
+
+### Bugs and gaps found by running it for real
+
+- **GitHub advisories carried no package data.** 42 of 43 advisories in a 6h window are
+  `unreviewed` — automated NVD imports with `vulnerabilities: []`. Only _reviewed_
+  advisories link a CVE to a library, and a recency-sorted window buries them. siphon now
+  makes a second `type=reviewed` pass and dedupes: that feed is **100% package-bearing**.
+- **Affected packages were never persisted.** The field reached the domain and the graph
+  but not Postgres, so the cross-source union could not survive a restart. Added
+  `affected_packages jsonb` (migration `0002`) with round-trip tests.
+- **Unauthenticated pacing made tests crawl** — the GitHub suite took 241s once a second
+  pass was added. `sourcehttp.WithRateLimit` now lets a test (or an operator tuning one
+  source) override the adapter's default pacing; the suite is back to 0.3s.
+- **`task up` cannot bind Postgres on this machine**: an unrelated project's container
+  (`ledgera-postgres-1`) holds :5432. v2 was verified against a throwaway Postgres on
+  :55432 rather than stopping someone else's database — see Technical Debt.
+
+### What does NOT work / is not built
+
+Full register with reasons and fix-by version: **[docs/TECHNICAL-DEBT.md](docs/TECHNICAL-DEBT.md)**.
+Headline gaps after v2:
+
+- **Transitivity reaches only as far as the watchlist.** Library-to-library edges come
+  from scanned repositories that publish a module; a real module graph (deps.dev, SBOM)
+  would close the rest.
+- **The default 2h lookback yields almost no package linkage** (~1 reviewed advisory per
+  6h). Per-source lookback is the fix; until then raise `SIPHON_LOOKBACK` to seed the graph.
+- **siphon calls cortex synchronously** for dependencies — no bus yet (v3), and the
+  advisory path is still a Unix pipe.
+- **The repository watchlist is manual** — no discovery of what an org actually owns.
+- **deck polls**; gRPC streaming is v3. Everything under Security and Operability below
+  is unchanged from v1: no auth, plaintext gRPC, no Dockerfiles, no CI, no telemetry.
+
+**Still stubs:** `ghost` (v5), `relic` (v4), `credits` (v4); `console` is the Turborepo
+starter page (v4).
+
+---
+
+## Superseded — 2026-09-02
 
 ### Overall status
 
@@ -130,6 +216,12 @@ not started.**
 
 ## Changelog
 
+- **2026-09-07** — **v2 complete**: Neo4j dependency graph, `Repository`/`Library`/`Author`
+  entities, `IngestDependency` + `FindBlastRadius`, `IngestDependencies`/`GetBlastRadius`
+  RPCs, siphon manifest scanner (`go.mod`/`package.json`) reporting over gRPC, CVE->package
+  linkage from reviewed GitHub advisories and OSV, and the `deck` Bubble Tea TUI (live feed
+  - ASCII graph explorer). Fixed: unreviewed-advisory blind spot, unpersisted affected
+    packages, slow unauthenticated test pacing.
 - **2026-09-02** — All 10 ingestion source adapters + centralized namespaced config
   (`packages/common/config`); `.env.sample` simplified 219->92 lines; extended
   `events.v1.SourceKind` to all 10 sources; fixed real-API decode bugs (Red Hat string

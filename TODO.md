@@ -78,33 +78,47 @@
 
 ---
 
-## TODO v2: The Structure (Graph & TUI)
+## TODO v2: The Structure (Graph & TUI) — COMPLETE
+
+> **Verified 2026-09-07** end to end on live data: 100 CVEs linked to 31 libraries,
+> 3 scanned repositories, 912 `DEPENDS_ON` edges, and a real transitive answer —
+> `eslint/eslint` is exposed to `CVE-2026-13676` at depth 2 via `npm:ajv` -> `npm:fast-uri`.
 
 ### Infrastructure Upgrade
 
-- [ ] Add **Neo4j** to `docker-compose.yml`
+- [x] Add **Neo4j** to `docker-compose.yml` — 5.26, bolt :7687, browser :7474,
+      `cypher-shell` healthcheck; `scripts/system.sh` waits on it and reports node counts
 - [x] Add **gRPC** reflection (done on cortex; add to future services as they gain gRPC)
 
 ### App: Intelligence Service (Upgrade)
 
-- [ ] **Domain:** Add `Repository`, `Library`, `Author` entities
-- [ ] **Infrastructure:** Implement `Neo4jRepository` (The Graph Adapter)
-- [ ] **Application:** Implement `IngestDependency` command
-  - Logic: `MERGE (r:Repo)-[:DEPENDS_ON]->(l:Lib)`
-- [ ] **Query:** Add `FindBlastRadius` (Recursive graph traversal)
+- [x] **Domain:** `Repository`, `Library`, `Author` entities (+ `Dependency`,
+      `RepositorySnapshot` aggregate, `PackageRef`/`Ecosystem` value objects)
+- [x] **Infrastructure:** `Neo4jRepository` — the `DependencyGraph` adapter, with
+      uniqueness constraints and a `noopgraph` fallback that **refuses** rather than
+      returning an empty radius (an empty answer would read as "nothing is affected")
+- [x] **Application:** `IngestDependency` command — `MERGE (r:Repository)-[:DEPENDS_ON]->(l:Library)`,
+      whole snapshot in one transaction, idempotent on re-read
+- [x] **Query:** `FindBlastRadius` (recursive `DEPENDS_ON*1..n` traversal, depth/result capped)
+- [x] **Contracts:** `IngestDependencies` + `GetBlastRadius` RPCs; `common/v1/package.proto`
+      and `common/v1/repository.proto`
+- [x] **Linkage:** `(:Library)-[:AFFECTED_BY]->(:Vulnerability)` from GitHub Advisory and
+      OSV affected-package data — without it the traversal has nothing to start from
 
 ### App: TUI Dashboard (`apps/deck`)
 
-- [ ] Initialize Bubble Tea project
-- [ ] **Infrastructure:** Create gRPC Client adapter
-- [ ] **UI:** Build `Model` (State) and `View` (Layout)
-- [ ] **Feature:** "Live Feed" list (polling API for now)
-- [ ] **Feature:** "Graph Explorer" (ASCII tree view of dependencies)
+- [x] Initialize Bubble Tea project (`cmd/tui`, hexagonal like the services)
+- [x] **Infrastructure:** gRPC client adapter (talks to cortex directly, not via nexus)
+- [x] **UI:** `Model` (state), `Update` (keys/messages) and `View` (layout), lipgloss-styled
+- [x] **Feature:** "Live Feed" list (polls on `DECK_REFRESH_INTERVAL`; streaming is v3)
+- [x] **Feature:** "Graph Explorer" (ASCII tree view of the blast radius)
 
 ### App: Ingestion Worker (Upgrade)
 
-- [ ] Add `GithubClient` adapter (Fetch `go.mod` / `package.json`)
-- [ ] Parse dependencies and send to Intelligence Service
+- [x] Add repository adapter (`repos/githubrepo`) fetching `go.mod` / `package.json`
+      via the GitHub contents API
+- [x] Parse dependencies (`repos/manifest`, using `x/mod/modfile`) and send them to the
+      Intelligence Service over gRPC (`ScanRepositories` workflow)
 
 ---
 
@@ -113,7 +127,14 @@
 Registered in `docs/TECHNICAL-DEBT.md`. Highest-value items, roughly in order:
 
 - [ ] **Per-source lookback/interval** — one global `SIPHON_LOOKBACK` makes three
-      low-cadence sources return 0 at the 2h default (small change, high clarity)
+      low-cadence sources return 0 at the 2h default (small change, high clarity).
+      **v2 raised the stakes:** GitHub's _reviewed_ advisories are the only source of
+      affected-package data, and only ~1 appears per 6h — so at the 2h default the
+      dependency graph gains almost no linkage. Verified: a 30-day window yields 100
+      reviewed advisories, all with packages.
+- [ ] **Library-to-library edges only come from scanned repositories** — a `PUBLISHES`
+      repo contributes its module's direct requirements, so transitivity reaches only as
+      far as the watchlist. A real module graph (deps.dev / SBOM) would close this.
 - [ ] **Persist the ingestion watermark** — currently in-memory, so a restart refetches
       the whole window and a long outage loses signals
 - [ ] Health endpoints on `cortex` and `siphon` (only `nexus` has one)
