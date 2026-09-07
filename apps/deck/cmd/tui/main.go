@@ -14,9 +14,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/inventedsarawak/hyperion/apps/deck/internal/adapters/inbound/tui"
+	graphqladapter "github.com/inventedsarawak/hyperion/apps/deck/internal/adapters/outbound/graphql"
 	grpcadapter "github.com/inventedsarawak/hyperion/apps/deck/internal/adapters/outbound/grpc"
 	"github.com/inventedsarawak/hyperion/apps/deck/internal/application/commands"
 	"github.com/inventedsarawak/hyperion/apps/deck/internal/application/queries"
+	"github.com/inventedsarawak/hyperion/apps/deck/internal/domain/ports"
 	"github.com/inventedsarawak/hyperion/apps/deck/internal/platform/config"
 )
 
@@ -26,10 +28,9 @@ func main() {
 
 	cfg := config.Load()
 
-	client, err := grpcadapter.Dial(cfg.CortexGRPCAddr)
+	client, err := dial(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "deck: cannot reach the intelligence service at %s: %v\n",
-			cfg.CortexGRPCAddr, err)
+		fmt.Fprintf(os.Stderr, "deck: cannot reach %s: %v\n", cfg.Endpoint(), err)
 		os.Exit(1)
 	}
 	defer client.Close()
@@ -43,7 +44,7 @@ func main() {
 			PageSize:        cfg.PageSize,
 			MaxDepth:        cfg.BlastRadiusMaxDepth,
 			RefreshInterval: cfg.RefreshInterval,
-			CortexAddr:      cfg.CortexGRPCAddr,
+			Endpoint:        cfg.Endpoint(),
 		},
 	)
 
@@ -51,4 +52,21 @@ func main() {
 		fmt.Fprintf(os.Stderr, "deck: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// intelligenceAPI is what both transports satisfy: the outbound port plus a
+// Close, so the composition root can treat them alike.
+type intelligenceAPI interface {
+	ports.IntelligenceAPI
+	Close() error
+}
+
+// dial picks the transport. The gateway is the default: routing through nexus
+// means deck is subject to the same edge policy as every other client, rather
+// than quietly bypassing it.
+func dial(cfg config.Config) (intelligenceAPI, error) {
+	if cfg.Transport == config.TransportGRPC {
+		return grpcadapter.Dial(cfg.CortexGRPCAddr)
+	}
+	return graphqladapter.New(cfg.GatewayURL, nil), nil
 }

@@ -45,7 +45,7 @@ type Options struct {
 	PageSize        int
 	MaxDepth        int
 	RefreshInterval time.Duration
-	CortexAddr      string
+	Endpoint        string
 }
 
 // Model is the Bubble Tea state.

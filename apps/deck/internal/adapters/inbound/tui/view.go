@@ -71,7 +71,7 @@ func (m Model) header() string {
 		tabs = append(tabs, styleTabOff.Render(label))
 	}
 
-	status := styleDim.Render("connected to " + m.opts.CortexAddr)
+	status := styleDim.Render("connected to " + m.opts.Endpoint)
 	if m.loading {
 		status = styleDim.Render("refreshing…")
 	}

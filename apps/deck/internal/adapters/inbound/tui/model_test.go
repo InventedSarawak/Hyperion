@@ -94,7 +94,7 @@ var _ = Describe("TUI model", func() {
 	BeforeEach(func() {
 		search = &stubSearch{feed: feedWith("CVE-2021-44228", "CVE-2021-23337")}
 		explorer = &stubExplorer{}
-		m = tui.New(search, explorer, tui.Options{Query: "cve", PageSize: 25, CortexAddr: "localhost:50051"})
+		m = tui.New(search, explorer, tui.Options{Query: "cve", PageSize: 25, Endpoint: "nexus http://localhost:8080/graphql"})
 	})
 
 	// loaded returns the model after a successful first refresh. Init batches
