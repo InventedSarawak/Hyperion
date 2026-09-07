@@ -2,10 +2,17 @@ package ports
 
 import (
 	"context"
+	"errors"
 
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/model"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/valueobject"
 )
+
+// ErrGraphUnavailable is returned when no graph backend is configured. It is
+// surfaced rather than swallowed: an empty blast radius from a missing graph
+// means "unknown", and reporting that as "nothing is affected" would be the
+// most dangerous answer this service could give.
+var ErrGraphUnavailable = errors.New("dependency graph: no backend configured")
 
 // DependencyGraph is an OUTBOUND port: the software supply chain as a graph.
 // Implemented by adapters/outbound/neo4j; a no-op implementation is used when
