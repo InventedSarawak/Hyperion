@@ -188,11 +188,17 @@ func (x *SearchResponse) GetNextPageToken() string {
 }
 
 type IngestDependenciesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Repository    *v1.Repository         `protobuf:"bytes,1,opt,name=repository,proto3" json:"repository,omitempty"`
-	Dependencies  []*v1.Dependency       `protobuf:"bytes,2,rep,name=dependencies,proto3" json:"dependencies,omitempty"`
-	Author        *v1.Author             `protobuf:"bytes,3,opt,name=author,proto3" json:"author,omitempty"` // the repository's owner, when known
-	ObservedAt    *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Repository   *v1.Repository         `protobuf:"bytes,1,opt,name=repository,proto3" json:"repository,omitempty"`
+	Dependencies []*v1.Dependency       `protobuf:"bytes,2,rep,name=dependencies,proto3" json:"dependencies,omitempty"`
+	Author       *v1.Author             `protobuf:"bytes,3,opt,name=author,proto3" json:"author,omitempty"` // the repository's owner, when known
+	ObservedAt   *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
+	// The library this repository itself publishes, read from the manifest
+	// (go.mod's "module" line, package.json's "name"). Set it and the direct
+	// dependencies below become that library's dependencies too, which is what
+	// gives the graph its library-to-library edges — and blast radius its reach
+	// beyond the repositories we happen to have scanned.
+	Publishes     *v1.PackageRef `protobuf:"bytes,5,opt,name=publishes,proto3" json:"publishes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -251,6 +257,13 @@ func (x *IngestDependenciesRequest) GetAuthor() *v1.Author {
 func (x *IngestDependenciesRequest) GetObservedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.ObservedAt
+	}
+	return nil
+}
+
+func (x *IngestDependenciesRequest) GetPublishes() *v1.PackageRef {
+	if x != nil {
+		return x.Publishes
 	}
 	return nil
 }
@@ -530,7 +543,7 @@ const file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc = "" +
 	"\x05score\x18\x02 \x01(\x01R\x05score\"z\n" +
 	"\x0eSearchResponse\x12@\n" +
 	"\aresults\x18\x01 \x03(\v2&.hyperion.intelligence.v1.SearchResultR\aresults\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\x90\x02\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xce\x02\n" +
 	"\x19IngestDependenciesRequest\x12>\n" +
 	"\n" +
 	"repository\x18\x01 \x01(\v2\x1e.hyperion.common.v1.RepositoryR\n" +
@@ -538,7 +551,8 @@ const file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc = "" +
 	"\fdependencies\x18\x02 \x03(\v2\x1e.hyperion.common.v1.DependencyR\fdependencies\x122\n" +
 	"\x06author\x18\x03 \x01(\v2\x1a.hyperion.common.v1.AuthorR\x06author\x12;\n" +
 	"\vobserved_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"observedAt\"O\n" +
+	"observedAt\x12<\n" +
+	"\tpublishes\x18\x05 \x01(\v2\x1e.hyperion.common.v1.PackageRefR\tpublishes\"O\n" +
 	"\x1aIngestDependenciesResponse\x121\n" +
 	"\x14dependencies_written\x18\x01 \x01(\x05R\x13dependenciesWritten\"a\n" +
 	"\x15GetBlastRadiusRequest\x12\x15\n" +
@@ -602,22 +616,23 @@ var file_hyperion_intelligence_v1_intelligence_service_proto_depIdxs = []int32{
 	10, // 3: hyperion.intelligence.v1.IngestDependenciesRequest.dependencies:type_name -> hyperion.common.v1.Dependency
 	11, // 4: hyperion.intelligence.v1.IngestDependenciesRequest.author:type_name -> hyperion.common.v1.Author
 	12, // 5: hyperion.intelligence.v1.IngestDependenciesRequest.observed_at:type_name -> google.protobuf.Timestamp
-	9,  // 6: hyperion.intelligence.v1.ImpactedRepository.repository:type_name -> hyperion.common.v1.Repository
-	13, // 7: hyperion.intelligence.v1.ImpactedRepository.via_package:type_name -> hyperion.common.v1.PackageRef
-	11, // 8: hyperion.intelligence.v1.ImpactedRepository.author:type_name -> hyperion.common.v1.Author
-	13, // 9: hyperion.intelligence.v1.GetBlastRadiusResponse.vulnerable_packages:type_name -> hyperion.common.v1.PackageRef
-	6,  // 10: hyperion.intelligence.v1.GetBlastRadiusResponse.repositories:type_name -> hyperion.intelligence.v1.ImpactedRepository
-	0,  // 11: hyperion.intelligence.v1.IntelligenceService.Search:input_type -> hyperion.intelligence.v1.SearchRequest
-	3,  // 12: hyperion.intelligence.v1.IntelligenceService.IngestDependencies:input_type -> hyperion.intelligence.v1.IngestDependenciesRequest
-	5,  // 13: hyperion.intelligence.v1.IntelligenceService.GetBlastRadius:input_type -> hyperion.intelligence.v1.GetBlastRadiusRequest
-	2,  // 14: hyperion.intelligence.v1.IntelligenceService.Search:output_type -> hyperion.intelligence.v1.SearchResponse
-	4,  // 15: hyperion.intelligence.v1.IntelligenceService.IngestDependencies:output_type -> hyperion.intelligence.v1.IngestDependenciesResponse
-	7,  // 16: hyperion.intelligence.v1.IntelligenceService.GetBlastRadius:output_type -> hyperion.intelligence.v1.GetBlastRadiusResponse
-	14, // [14:17] is the sub-list for method output_type
-	11, // [11:14] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	13, // 6: hyperion.intelligence.v1.IngestDependenciesRequest.publishes:type_name -> hyperion.common.v1.PackageRef
+	9,  // 7: hyperion.intelligence.v1.ImpactedRepository.repository:type_name -> hyperion.common.v1.Repository
+	13, // 8: hyperion.intelligence.v1.ImpactedRepository.via_package:type_name -> hyperion.common.v1.PackageRef
+	11, // 9: hyperion.intelligence.v1.ImpactedRepository.author:type_name -> hyperion.common.v1.Author
+	13, // 10: hyperion.intelligence.v1.GetBlastRadiusResponse.vulnerable_packages:type_name -> hyperion.common.v1.PackageRef
+	6,  // 11: hyperion.intelligence.v1.GetBlastRadiusResponse.repositories:type_name -> hyperion.intelligence.v1.ImpactedRepository
+	0,  // 12: hyperion.intelligence.v1.IntelligenceService.Search:input_type -> hyperion.intelligence.v1.SearchRequest
+	3,  // 13: hyperion.intelligence.v1.IntelligenceService.IngestDependencies:input_type -> hyperion.intelligence.v1.IngestDependenciesRequest
+	5,  // 14: hyperion.intelligence.v1.IntelligenceService.GetBlastRadius:input_type -> hyperion.intelligence.v1.GetBlastRadiusRequest
+	2,  // 15: hyperion.intelligence.v1.IntelligenceService.Search:output_type -> hyperion.intelligence.v1.SearchResponse
+	4,  // 16: hyperion.intelligence.v1.IntelligenceService.IngestDependencies:output_type -> hyperion.intelligence.v1.IngestDependenciesResponse
+	7,  // 17: hyperion.intelligence.v1.IntelligenceService.GetBlastRadius:output_type -> hyperion.intelligence.v1.GetBlastRadiusResponse
+	15, // [15:18] is the sub-list for method output_type
+	12, // [12:15] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_hyperion_intelligence_v1_intelligence_service_proto_init() }

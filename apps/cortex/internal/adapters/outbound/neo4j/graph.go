@@ -166,8 +166,21 @@ func (g *Graph) UpsertRepositorySnapshot(ctx context.Context, snapshot model.Rep
 		}
 
 		// A repository with no third-party requirements is a real fact: the
-		// node above is recorded, and there is simply nothing to UNWIND.
+		// node above is recorded, and there is simply nothing to UNWIND. It
+		// may still publish a library, so that is recorded either way.
 		if len(deps) == 0 {
+			if published, ok := snapshot.PublishedLibrary(); ok {
+				if _, err := tx.Run(ctx, mergePublishedLibraryCypher, map[string]any{
+					"full_name":   repo.FullName(),
+					"key":         published.Key(),
+					"ecosystem":   published.Ecosystem.String(),
+					"name":        published.Name,
+					"deps":        []any{},
+					"observed_at": observedAt,
+				}); err != nil {
+					return 0, err
+				}
+			}
 			return 0, nil
 		}
 
@@ -195,13 +208,60 @@ func (g *Graph) UpsertRepositorySnapshot(ctx context.Context, snapshot model.Rep
 		if err != nil {
 			return 0, err
 		}
-		return int(asInt(record, "written")), nil
+		written := int(asInt(record, "written"))
+
+		if published, ok := snapshot.PublishedLibrary(); ok {
+			direct := snapshot.DirectDependencies()
+			directRows := make([]any, 0, len(direct))
+			for _, d := range direct {
+				directRows = append(directRows, map[string]any{
+					"key":           d.Package.Key(),
+					"version":       d.Package.Version,
+					"manifest_path": d.ManifestPath,
+				})
+			}
+			if _, err := tx.Run(ctx, mergePublishedLibraryCypher, map[string]any{
+				"full_name":   repo.FullName(),
+				"key":         published.Key(),
+				"ecosystem":   published.Ecosystem.String(),
+				"name":        published.Name,
+				"deps":        directRows,
+				"observed_at": observedAt,
+			}); err != nil {
+				return 0, err
+			}
+		}
+		return written, nil
 	})
 	if err != nil {
 		return 0, fmt.Errorf("neo4j: upsert snapshot %s: %w", repo.FullName(), err)
 	}
 	return written.(int), nil
 }
+
+// mergePublishedLibraryCypher records the library this repository ships and
+// gives it the repository's own direct requirements. These library-to-library
+// edges are what make the DEPENDS_ON traversal recursive: without them the
+// graph is one hop deep no matter how many manifests we read.
+//
+// A module is never made to depend on itself, and the dependency libraries are
+// MATCHed rather than MERGEd because the statement before this one has already
+// created them.
+const mergePublishedLibraryCypher = `
+MATCH (r:Repository {full_name: $full_name})
+MERGE (pub:Library {key: $key})
+ON CREATE SET pub.ecosystem = $ecosystem, pub.name = $name
+SET pub.published_by = $full_name
+MERGE (r)-[:PUBLISHES]->(pub)
+WITH pub
+UNWIND $deps AS dep
+WITH pub, dep WHERE dep.key <> $key
+MATCH (l:Library {key: dep.key})
+MERGE (pub)-[e:DEPENDS_ON]->(l)
+SET e.version = dep.version,
+    e.direct = true,
+    e.manifest_path = dep.manifest_path,
+    e.observed_at = $observed_at`
 
 const linkVulnerabilityCypher = `
 MERGE (v:Vulnerability {cve_id: $cve_id})

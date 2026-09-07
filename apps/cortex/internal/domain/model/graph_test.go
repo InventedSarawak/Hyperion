@@ -114,6 +114,51 @@ var _ = Describe("RepositorySnapshot", func() {
 	})
 })
 
+var _ = Describe("RepositorySnapshot published library", func() {
+	repo := model.Repository{Owner: "gin-gonic", Name: "gin"}
+
+	base := func(deps ...model.Dependency) model.RepositorySnapshot {
+		return model.RepositorySnapshot{
+			Repository:   repo,
+			Publishes:    valueobject.NewPackageRef("go", "github.com/gin-gonic/gin", ""),
+			Dependencies: deps,
+		}
+	}
+
+	It("reports the library the repository ships", func() {
+		published, ok := base().PublishedLibrary()
+		Expect(ok).To(BeTrue())
+		Expect(published.Key()).To(Equal("go:github.com/gin-gonic/gin"))
+	})
+
+	It("treats a repository that publishes nothing as valid", func() {
+		snapshot := model.RepositorySnapshot{Repository: repo}
+		_, ok := snapshot.PublishedLibrary()
+		Expect(ok).To(BeFalse())
+		Expect(snapshot.Validate()).To(Succeed())
+	})
+
+	It("gives the published library only the repository's direct requirements", func() {
+		direct := base(
+			dep("golang.org/x/net", "v0.17.0", true),
+			dep("golang.org/x/sys", "v0.13.0", false),
+		).DirectDependencies()
+
+		Expect(direct).To(HaveLen(1))
+		Expect(direct[0].Package.Name).To(Equal("golang.org/x/net"))
+	})
+
+	It("never lets a module depend on itself", func() {
+		direct := base(
+			dep("github.com/gin-gonic/gin", "v1.9.1", true),
+			dep("golang.org/x/net", "v0.17.0", true),
+		).DirectDependencies()
+
+		Expect(direct).To(HaveLen(1))
+		Expect(direct[0].Package.Name).To(Equal("golang.org/x/net"))
+	})
+})
+
 var _ = Describe("BlastRadius", func() {
 	It("distinguishes 'nothing exposed' from 'CVE not linked to any library'", func() {
 		unlinked := model.BlastRadius{CVEID: "CVE-2021-44228"}

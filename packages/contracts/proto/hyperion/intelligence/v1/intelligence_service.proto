@@ -42,6 +42,12 @@ message IngestDependenciesRequest {
   repeated hyperion.common.v1.Dependency dependencies = 2;
   hyperion.common.v1.Author author = 3; // the repository's owner, when known
   google.protobuf.Timestamp observed_at = 4;
+  // The library this repository itself publishes, read from the manifest
+  // (go.mod's "module" line, package.json's "name"). Set it and the direct
+  // dependencies below become that library's dependencies too, which is what
+  // gives the graph its library-to-library edges — and blast radius its reach
+  // beyond the repositories we happen to have scanned.
+  hyperion.common.v1.PackageRef publishes = 5;
 }
 
 message IngestDependenciesResponse {

@@ -108,6 +108,14 @@ var _ = Describe("Neo4j DependencyGraph (integration)", func() {
 		return valueobject.NewPackageRef("go", prefix+"/"+name, "")
 	}
 
+	// publishing builds a snapshot for a repository that ships a library, so
+	// its direct requirements become that library's requirements too.
+	publishing := func(repoName, moduleName string, deps ...model.Dependency) model.RepositorySnapshot {
+		s := snapshot(repoName, deps...)
+		s.Publishes = valueobject.NewPackageRef("go", prefix+"/"+moduleName, "")
+		return s
+	}
+
 	It("is ready and creates its schema idempotently", func() {
 		Expect(graph.Ready(ctx)).To(Succeed())
 		Expect(graph.EnsureSchema(ctx)).To(Succeed())
@@ -245,6 +253,97 @@ var _ = Describe("Neo4j DependencyGraph (integration)", func() {
 				libRef("framework").Key(),
 				libRef("crypto").Key(),
 			}))
+		})
+
+		It("reaches through a library published by another scanned repository", func() {
+			// Two ordinary manifest reads, no hand-built edges: the framework
+			// repo publishes go:<prefix>/framework and requires crypto, so the
+			// app that requires framework is two hops from the vulnerability.
+			_, err := graph.UpsertRepositorySnapshot(ctx,
+				publishing("framework-repo", "framework", lib("crypto", "v0.1.0", true)))
+			Expect(err).ToNot(HaveOccurred())
+			_, err = graph.UpsertRepositorySnapshot(ctx,
+				snapshot("app", lib("framework", "v1.0.0", true)))
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(graph.LinkVulnerability(ctx, cveID, []valueobject.PackageRef{libRef("crypto")})).To(Succeed())
+
+			radius, err := graph.FindBlastRadius(ctx, cveID, 3, 100)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(radius.TotalRepositories()).To(Equal(2))
+
+			byName := map[string]model.ImpactedRepository{}
+			for _, r := range radius.Repositories {
+				byName[r.Repository.FullName()] = r
+			}
+
+			// The framework's own repository requires it directly.
+			Expect(byName).To(HaveKey(prefix + "/framework-repo"))
+			Expect(byName[prefix+"/framework-repo"].Depth).To(Equal(1))
+			Expect(byName[prefix+"/framework-repo"].Direct).To(BeTrue())
+
+			// The app never mentions crypto; it is exposed through framework.
+			Expect(byName).To(HaveKey(prefix + "/app"))
+			Expect(byName[prefix+"/app"].Depth).To(Equal(2))
+			Expect(byName[prefix+"/app"].Direct).To(BeFalse())
+			Expect(byName[prefix+"/app"].Path).To(Equal([]string{
+				prefix + "/app",
+				libRef("framework").Key(),
+				libRef("crypto").Key(),
+			}))
+		})
+
+		It("does not make a published module depend on itself", func() {
+			// A manifest that lists its own module is malformed but real; the
+			// self-edge would make every traversal loop back on itself.
+			_, err := graph.UpsertRepositorySnapshot(ctx,
+				publishing("framework-repo", "framework",
+					lib("framework", "v1.0.0", true),
+					lib("crypto", "v0.1.0", true)))
+			Expect(err).ToNot(HaveOccurred())
+
+			session := driver.NewSession(ctx, sdk.SessionConfig{DatabaseName: databaseName()})
+			defer session.Close(ctx)
+			result, err := session.Run(ctx,
+				`MATCH (l:Library {key: $key})-[e:DEPENDS_ON]->(l) RETURN count(e) AS loops`,
+				map[string]any{"key": libRef("framework").Key()})
+			Expect(err).ToNot(HaveOccurred())
+			record, err := result.Single(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(record.Values[0]).To(Equal(int64(0)))
+		})
+
+		It("does not give a published library its transitive requirements", func() {
+			// An indirect entry in go.mod belongs to whichever library pulled
+			// it in, not to the module being published.
+			_, err := graph.UpsertRepositorySnapshot(ctx,
+				publishing("framework-repo", "framework", lib("crypto", "v0.1.0", false)))
+			Expect(err).ToNot(HaveOccurred())
+
+			session := driver.NewSession(ctx, sdk.SessionConfig{DatabaseName: databaseName()})
+			defer session.Close(ctx)
+			result, err := session.Run(ctx,
+				`MATCH (:Library {key: $from})-[e:DEPENDS_ON]->(:Library {key: $to}) RETURN count(e) AS edges`,
+				map[string]any{"from": libRef("framework").Key(), "to": libRef("crypto").Key()})
+			Expect(err).ToNot(HaveOccurred())
+			record, err := result.Single(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(record.Values[0]).To(Equal(int64(0)))
+		})
+
+		It("records what a dependency-free repository publishes", func() {
+			_, err := graph.UpsertRepositorySnapshot(ctx, publishing("framework-repo", "framework"))
+			Expect(err).ToNot(HaveOccurred())
+
+			session := driver.NewSession(ctx, sdk.SessionConfig{DatabaseName: databaseName()})
+			defer session.Close(ctx)
+			result, err := session.Run(ctx,
+				`MATCH (:Repository {full_name: $full})-[p:PUBLISHES]->(:Library {key: $key}) RETURN count(p) AS n`,
+				map[string]any{"full": prefix + "/framework-repo", "key": libRef("framework").Key()})
+			Expect(err).ToNot(HaveOccurred())
+			record, err := result.Single(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(record.Values[0]).To(Equal(int64(1)))
 		})
 
 		It("does not report repositories beyond the requested depth", func() {
