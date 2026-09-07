@@ -91,7 +91,7 @@ tasks:
       - go run ./cmd/server
 
   scan:
-    desc: 'Scan watched repos into the dependency graph (needs cortex). Override: task scan -- -repos owner/name'
+    desc: 'Scan repos into the dependency graph (needs cortex). Override: task scan -- -repos owner/name | -orgs vercel'
     dir: apps/siphon
     cmds:
       - go run ./cmd/worker -scan-repos {{.CLI_ARGS}}

@@ -32,6 +32,8 @@ func main() {
 		"scan the watched repositories' manifests once, report, and exit")
 	repos := flag.String("repos", "",
 		"comma-separated owner/name list overriding SIPHON_REPO_WATCHLIST for this run")
+	orgs := flag.String("orgs", "",
+		"comma-separated GitHub orgs/users whose repositories are discovered and scanned")
 	flag.Parse()
 
 	// Logs go to stderr; published events go to stdout (kept separate on purpose).
@@ -56,7 +58,7 @@ func main() {
 	// cortex, exit. Runs without any ingestion source being active, because
 	// reading manifests has nothing to do with polling advisory feeds.
 	if *scanRepos {
-		runRepositoryScan(ctx, logger, cfg, *repos)
+		runRepositoryScan(ctx, logger, cfg, *repos, *orgs)
 		return
 	}
 
@@ -116,14 +118,16 @@ func startRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphoncon
 		return noop
 	}
 
-	scan := workflows.NewScanRepositories(
-		githubrepo.New(cfg.RepoScan.BaseURL, cfg.RepoScan.Token),
-		client,
-		cfg.RepoScan.Watchlist,
-	)
+	repos := githubrepo.New(cfg.RepoScan.BaseURL, cfg.RepoScan.Token)
+	scan := workflows.NewScanRepositories(repos, repos, client, workflows.Targets{
+		Repositories:  cfg.RepoScan.Watchlist,
+		Organizations: cfg.RepoScan.Organizations,
+		PerOwnerLimit: cfg.RepoScan.PerOwnerLimit,
+	})
 
 	logger.Info("repository scan starting",
 		"repositories", cfg.RepoScan.Watchlist,
+		"organizations", cfg.RepoScan.Organizations,
 		"interval", cfg.RepoScan.Interval.String(),
 		"cortex", cfg.RepoScan.CortexAddr,
 		"authenticated", cfg.RepoScan.Token != "",
@@ -183,13 +187,23 @@ func runSourceCheck(ctx context.Context, registry *sources.Registry, lookback ti
 
 // runRepositoryScan performs a single scan of the watched repositories and
 // exits non-zero if any of them failed, so it is usable as a CI or cron step.
-func runRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphonconfig.Config, override string) {
-	watchlist := cfg.RepoScan.Watchlist
-	if override != "" {
-		watchlist = splitList(override)
+func runRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphonconfig.Config, override, orgs string) {
+	targets := workflows.Targets{
+		Repositories:  cfg.RepoScan.Watchlist,
+		Organizations: cfg.RepoScan.Organizations,
+		PerOwnerLimit: cfg.RepoScan.PerOwnerLimit,
 	}
-	if len(watchlist) == 0 {
-		logger.Error("nothing to scan: set SIPHON_REPO_WATCHLIST or pass -repos owner/name,owner/name")
+	// An explicit flag replaces the configured targets entirely, so a one-off
+	// scan never drags in the whole watchlist by surprise.
+	if override != "" {
+		targets = workflows.Targets{Repositories: splitList(override), PerOwnerLimit: cfg.RepoScan.PerOwnerLimit}
+	}
+	if orgs != "" {
+		targets = workflows.Targets{Organizations: splitList(orgs), PerOwnerLimit: cfg.RepoScan.PerOwnerLimit}
+	}
+	if len(targets.Repositories) == 0 && len(targets.Organizations) == 0 {
+		logger.Error("nothing to scan: set SIPHON_REPO_WATCHLIST or SIPHON_REPO_ORGS, " +
+			"or pass -repos owner/name or -orgs vercel")
 		os.Exit(1)
 	}
 
@@ -202,15 +216,13 @@ func runRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphonconfi
 	defer client.Close()
 
 	logger.Info("scanning repositories",
-		"repositories", watchlist,
+		"repositories", targets.Repositories,
+		"organizations", targets.Organizations,
 		"cortex", cfg.RepoScan.CortexAddr,
 		"authenticated", cfg.RepoScan.Token != "")
 
-	scan := workflows.NewScanRepositories(
-		githubrepo.New(cfg.RepoScan.BaseURL, cfg.RepoScan.Token),
-		client,
-		watchlist,
-	)
+	repos := githubrepo.New(cfg.RepoScan.BaseURL, cfg.RepoScan.Token)
+	scan := workflows.NewScanRepositories(repos, repos, client, targets)
 
 	written, err := scan.Run(ctx, time.Time{})
 	if err != nil {

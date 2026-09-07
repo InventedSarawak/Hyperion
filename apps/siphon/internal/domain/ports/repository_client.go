@@ -22,3 +22,14 @@ type DependencyPublisher interface {
 	// receiving service wrote.
 	Publish(ctx context.Context, snapshot model.RepositorySnapshot) (int, error)
 }
+
+// RepositoryDiscoverer is an OUTBOUND port: enumerate the repositories an
+// owner has. It exists so the supply-chain graph is not limited to whatever
+// someone remembered to write in a watchlist — an unlisted repository is
+// invisible to blast radius, which makes exposure look smaller than it is.
+type RepositoryDiscoverer interface {
+	// Discover lists "owner/name" entries for an organization or user, newest
+	// activity first, capped at limit. Forks and archived repositories are
+	// excluded: neither tells us anything about what the owner actually ships.
+	Discover(ctx context.Context, owner string, limit int) ([]string, error)
+}

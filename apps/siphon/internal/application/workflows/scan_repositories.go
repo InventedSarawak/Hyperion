@@ -18,20 +18,90 @@ import (
 // is vulnerable?", and this answers "who depends on what?". Neither is useful
 // for blast radius without the other.
 type ScanRepositories struct {
-	client       ports.RepositoryClient
-	publisher    ports.DependencyPublisher
-	repositories []string // "owner/name"
-	log          *slog.Logger
+	client     ports.RepositoryClient
+	discoverer ports.RepositoryDiscoverer
+	publisher  ports.DependencyPublisher
+	targets    Targets
+	log        *slog.Logger
 }
 
-// NewScanRepositories wires the use case with its outbound ports.
-func NewScanRepositories(client ports.RepositoryClient, publisher ports.DependencyPublisher, repositories []string) *ScanRepositories {
+// Targets is what to scan: repositories named explicitly, plus every
+// repository belonging to the named owners.
+type Targets struct {
+	Repositories  []string // "owner/name"
+	Organizations []string // org or user logins to enumerate
+	PerOwnerLimit int      // cap per owner; each repository costs ~3 API calls
+}
+
+// NewScanRepositories wires the use case with its outbound ports. The
+// discoverer may be nil when only explicit repositories are configured.
+func NewScanRepositories(
+	client ports.RepositoryClient,
+	discoverer ports.RepositoryDiscoverer,
+	publisher ports.DependencyPublisher,
+	targets Targets,
+) *ScanRepositories {
 	return &ScanRepositories{
-		client:       client,
-		publisher:    publisher,
-		repositories: repositories,
-		log:          slog.Default(),
+		client:     client,
+		discoverer: discoverer,
+		publisher:  publisher,
+		targets:    targets,
+		log:        slog.Default(),
 	}
+}
+
+// resolve expands the configured owners into repository names and merges them
+// with the explicit list, removing duplicates.
+//
+// Discovery runs on every scan rather than once at startup: a repository
+// created after the process booted is exactly the one most likely to be
+// missing from anyone's hand-written watchlist.
+func (s *ScanRepositories) resolve(ctx context.Context) ([]string, []error) {
+	var (
+		errs []error
+		out  []string
+		seen = make(map[string]struct{})
+	)
+
+	add := func(entry string) {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			return
+		}
+		key := strings.ToLower(entry)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, entry)
+	}
+
+	for _, entry := range s.targets.Repositories {
+		add(entry)
+	}
+
+	for _, owner := range s.targets.Organizations {
+		owner = strings.TrimSpace(owner)
+		if owner == "" {
+			continue
+		}
+		if s.discoverer == nil {
+			errs = append(errs, fmt.Errorf("scan repositories: %q configured but discovery is unavailable", owner))
+			continue
+		}
+
+		found, err := s.discoverer.Discover(ctx, owner, s.targets.PerOwnerLimit)
+		if err != nil {
+			s.log.Error("repository discovery failed", "owner", owner, "error", err)
+			errs = append(errs, err)
+			continue
+		}
+		s.log.Info("repositories discovered", "owner", owner, "count", len(found))
+		for _, entry := range found {
+			add(entry)
+		}
+	}
+	return out, errs
 }
 
 // Run scans every watched repository and returns the total number of
@@ -44,12 +114,10 @@ func NewScanRepositories(client ports.RepositoryClient, publisher ports.Dependen
 // current contents are the whole truth, and there is no incremental window to
 // ask for.
 func (s *ScanRepositories) Run(ctx context.Context, _ time.Time) (int, error) {
-	var (
-		total int
-		errs  []error
-	)
+	repositories, errs := s.resolve(ctx)
+	total := 0
 
-	for _, entry := range s.repositories {
+	for _, entry := range repositories {
 		owner, name, err := splitRepository(entry)
 		if err != nil {
 			errs = append(errs, err)

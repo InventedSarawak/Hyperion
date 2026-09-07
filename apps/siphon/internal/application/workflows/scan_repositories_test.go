@@ -65,8 +65,8 @@ var _ = Describe("ScanRepositories use case", func() {
 		}}
 		pub := &fakePublisher{}
 
-		n, err := workflows.NewScanRepositories(client, pub,
-			[]string{"gin-gonic/gin", "acme/api"}).Run(ctx, time.Time{})
+		n, err := workflows.NewScanRepositories(client, nil, pub,
+			workflows.Targets{Repositories: []string{"gin-gonic/gin", "acme/api"}}).Run(ctx, time.Time{})
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(n).To(Equal(3))
@@ -76,8 +76,8 @@ var _ = Describe("ScanRepositories use case", func() {
 
 	It("rejects a watchlist entry that is not owner/name", func() {
 		client := &fakeRepoClient{}
-		_, err := workflows.NewScanRepositories(client, &fakePublisher{},
-			[]string{"just-a-name", "/missing-owner", "owner/"}).Run(ctx, time.Time{})
+		_, err := workflows.NewScanRepositories(client, nil, &fakePublisher{},
+			workflows.Targets{Repositories: []string{"just-a-name", "/missing-owner", "owner/"}}).Run(ctx, time.Time{})
 
 		Expect(err).To(MatchError(ContainSubstring("owner/name form")))
 		Expect(client.scanned).To(BeEmpty())
@@ -92,8 +92,8 @@ var _ = Describe("ScanRepositories use case", func() {
 		}
 		pub := &fakePublisher{}
 
-		n, err := workflows.NewScanRepositories(client, pub,
-			[]string{"acme/broken", "acme/api"}).Run(ctx, time.Time{})
+		n, err := workflows.NewScanRepositories(client, nil, pub,
+			workflows.Targets{Repositories: []string{"acme/broken", "acme/api"}}).Run(ctx, time.Time{})
 
 		Expect(err).To(MatchError(ContainSubstring("403 forbidden")))
 		Expect(n).To(Equal(1), "the healthy repository is still reported")
@@ -110,7 +110,7 @@ var _ = Describe("ScanRepositories use case", func() {
 		}
 		pub := &fakePublisher{}
 
-		n, err := workflows.NewScanRepositories(client, pub, []string{"acme/api"}).Run(ctx, time.Time{})
+		n, err := workflows.NewScanRepositories(client, nil, pub, workflows.Targets{Repositories: []string{"acme/api"}}).Run(ctx, time.Time{})
 
 		Expect(err).To(HaveOccurred())
 		Expect(n).To(Equal(1))
@@ -121,7 +121,7 @@ var _ = Describe("ScanRepositories use case", func() {
 		client := &fakeRepoClient{errs: map[string]error{"acme/api": errors.New("404 not found")}}
 		pub := &fakePublisher{}
 
-		_, err := workflows.NewScanRepositories(client, pub, []string{"acme/api"}).Run(ctx, time.Time{})
+		_, err := workflows.NewScanRepositories(client, nil, pub, workflows.Targets{Repositories: []string{"acme/api"}}).Run(ctx, time.Time{})
 
 		Expect(err).To(HaveOccurred())
 		Expect(pub.published).To(BeEmpty())
@@ -134,8 +134,8 @@ var _ = Describe("ScanRepositories use case", func() {
 		}}
 		pub := &fakePublisher{err: errors.New("cortex unavailable")}
 
-		n, err := workflows.NewScanRepositories(client, pub,
-			[]string{"acme/api", "acme/web"}).Run(ctx, time.Time{})
+		n, err := workflows.NewScanRepositories(client, nil, pub,
+			workflows.Targets{Repositories: []string{"acme/api", "acme/web"}}).Run(ctx, time.Time{})
 
 		Expect(err).To(MatchError(ContainSubstring("cortex unavailable")))
 		Expect(n).To(Equal(0))
@@ -143,8 +143,125 @@ var _ = Describe("ScanRepositories use case", func() {
 	})
 
 	It("does nothing with an empty watchlist", func() {
-		n, err := workflows.NewScanRepositories(&fakeRepoClient{}, &fakePublisher{}, nil).Run(ctx, time.Time{})
+		n, err := workflows.NewScanRepositories(&fakeRepoClient{}, nil, &fakePublisher{}, workflows.Targets{}).Run(ctx, time.Time{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(n).To(Equal(0))
+	})
+})
+
+// fakeDiscoverer enumerates repositories for an owner.
+type fakeDiscoverer struct {
+	byOwner   map[string][]string
+	errs      map[string]error
+	gotLimits map[string]int
+}
+
+func (f *fakeDiscoverer) Discover(_ context.Context, owner string, limit int) ([]string, error) {
+	if f.gotLimits == nil {
+		f.gotLimits = map[string]int{}
+	}
+	f.gotLimits[owner] = limit
+	if err := f.errs[owner]; err != nil {
+		return nil, err
+	}
+	return f.byOwner[owner], nil
+}
+
+var _ = Describe("ScanRepositories discovery", func() {
+	ctx := context.Background()
+
+	It("scans every repository an organization owns", func() {
+		client := &fakeRepoClient{snapshots: map[string]model.RepositorySnapshot{
+			"vercel/next.js":  snapshotFor("vercel", "next.js", "npm:react"),
+			"vercel/commerce": snapshotFor("vercel", "commerce", "npm:next"),
+		}}
+		disco := &fakeDiscoverer{byOwner: map[string][]string{
+			"vercel": {"vercel/next.js", "vercel/commerce"},
+		}}
+
+		n, err := workflows.NewScanRepositories(client, disco, &fakePublisher{}, workflows.Targets{
+			Organizations: []string{"vercel"}, PerOwnerLimit: 20,
+		}).Run(ctx, time.Time{})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(n).To(Equal(2))
+		Expect(client.scanned).To(ConsistOf("vercel/next.js", "vercel/commerce"))
+		Expect(disco.gotLimits["vercel"]).To(Equal(20))
+	})
+
+	It("merges discovered repositories with the explicit list, without duplicates", func() {
+		client := &fakeRepoClient{snapshots: map[string]model.RepositorySnapshot{
+			"vercel/commerce": snapshotFor("vercel", "commerce", "npm:next"),
+			"acme/api":        snapshotFor("acme", "api", "npm:next"),
+		}}
+		disco := &fakeDiscoverer{byOwner: map[string][]string{
+			"vercel": {"vercel/commerce"},
+		}}
+
+		_, err := workflows.NewScanRepositories(client, disco, &fakePublisher{}, workflows.Targets{
+			Repositories:  []string{"acme/api", "vercel/commerce"},
+			Organizations: []string{"vercel"},
+		}).Run(ctx, time.Time{})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(client.scanned).To(HaveLen(2), "vercel/commerce must not be scanned twice")
+	})
+
+	It("treats owner/name as case-insensitive when deduplicating", func() {
+		client := &fakeRepoClient{snapshots: map[string]model.RepositorySnapshot{
+			"Vercel/Commerce": snapshotFor("Vercel", "Commerce"),
+		}}
+		disco := &fakeDiscoverer{byOwner: map[string][]string{"vercel": {"vercel/commerce"}}}
+
+		_, err := workflows.NewScanRepositories(client, disco, &fakePublisher{}, workflows.Targets{
+			Repositories:  []string{"Vercel/Commerce"},
+			Organizations: []string{"vercel"},
+		}).Run(ctx, time.Time{})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(client.scanned).To(HaveLen(1))
+	})
+
+	It("keeps scanning the explicit list when discovery fails", func() {
+		client := &fakeRepoClient{snapshots: map[string]model.RepositorySnapshot{
+			"acme/api": snapshotFor("acme", "api", "npm:next"),
+		}}
+		disco := &fakeDiscoverer{errs: map[string]error{"vercel": errors.New("403 forbidden")}}
+
+		n, err := workflows.NewScanRepositories(client, disco, &fakePublisher{}, workflows.Targets{
+			Repositories:  []string{"acme/api"},
+			Organizations: []string{"vercel"},
+		}).Run(ctx, time.Time{})
+
+		Expect(err).To(MatchError(ContainSubstring("403 forbidden")))
+		Expect(n).To(Equal(1), "a discovery failure must not cost us the known repositories")
+	})
+
+	It("reports an organization configured with no discoverer wired", func() {
+		_, err := workflows.NewScanRepositories(&fakeRepoClient{}, nil, &fakePublisher{},
+			workflows.Targets{Organizations: []string{"vercel"}}).Run(ctx, time.Time{})
+
+		Expect(err).To(MatchError(ContainSubstring("discovery is unavailable")))
+	})
+
+	It("re-discovers on every run, so new repositories are picked up", func() {
+		client := &fakeRepoClient{snapshots: map[string]model.RepositorySnapshot{
+			"vercel/one": snapshotFor("vercel", "one"),
+			"vercel/two": snapshotFor("vercel", "two"),
+		}}
+		disco := &fakeDiscoverer{byOwner: map[string][]string{"vercel": {"vercel/one"}}}
+		scan := workflows.NewScanRepositories(client, disco, &fakePublisher{},
+			workflows.Targets{Organizations: []string{"vercel"}})
+
+		_, err := scan.Run(ctx, time.Time{})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(client.scanned).To(ConsistOf("vercel/one"))
+
+		// A repository created after startup is exactly the one a hand-written
+		// watchlist would miss.
+		disco.byOwner["vercel"] = []string{"vercel/one", "vercel/two"}
+		_, err = scan.Run(ctx, time.Time{})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(client.scanned).To(ConsistOf("vercel/one", "vercel/one", "vercel/two"))
 	})
 })

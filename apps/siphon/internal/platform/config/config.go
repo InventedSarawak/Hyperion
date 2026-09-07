@@ -41,12 +41,21 @@ type Config struct {
 // because an empty watchlist has nothing to scan and an unauthenticated GitHub
 // budget (60 requests/hour) is spent within a few repositories.
 type RepoScanConfig struct {
-	Enabled    bool
-	Watchlist  []string // "owner/name" entries
-	Interval   time.Duration
-	BaseURL    string
-	Token      string
-	CortexAddr string
+	Enabled bool
+	// Watchlist names repositories explicitly, as "owner/name".
+	Watchlist []string
+	// Organizations are GitHub org or user logins whose repositories are
+	// discovered automatically, so the graph is not limited to what someone
+	// remembered to list.
+	Organizations []string
+	// PerOwnerLimit caps how many repositories each owner contributes. Every
+	// repository costs roughly three API calls, so an unbounded org scan can
+	// exhaust the hourly budget on its own.
+	PerOwnerLimit int
+	Interval      time.Duration
+	BaseURL       string
+	Token         string
+	CortexAddr    string
 }
 
 // NVDConfig — source 1. Key optional: lifts 5 -> 50 req / 30s.
@@ -192,8 +201,10 @@ func Load() Config {
 		},
 
 		RepoScan: RepoScanConfig{
-			Enabled:   l.Bool("REPO_SCAN_ENABLED", false),
-			Watchlist: l.List("REPO_WATCHLIST", nil),
+			Enabled:       l.Bool("REPO_SCAN_ENABLED", false),
+			Watchlist:     l.List("REPO_WATCHLIST", nil),
+			Organizations: l.List("REPO_ORGS", nil),
+			PerOwnerLimit: l.Int("REPO_ORG_LIMIT", 20),
 			// Manifests change on the order of days, not minutes, and every
 			// scan costs GitHub quota — so this is deliberately far slower
 			// than the advisory poll.

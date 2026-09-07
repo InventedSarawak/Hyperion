@@ -163,9 +163,20 @@ task sources:check
 ### 3.2 Dependencies (who depends on what)
 
 ```bash
-task scan                                   # scans SIPHON_REPO_WATCHLIST, then exits
-task scan -- -repos gin-gonic/gin,eslint/eslint   # ad-hoc, ignores the watchlist
+task scan                                   # scans the configured targets, then exits
+task scan -- -repos gin-gonic/gin,eslint/eslint   # ad-hoc repositories
+task scan -- -orgs vercel                   # discover and scan everything an owner has
 ```
+
+**Prefer organizations over a hand-written list.** A repository nobody listed is invisible
+to blast radius, which makes exposure look smaller than it is — the one direction this
+system must not be wrong in. `SIPHON_REPO_ORGS=vercel` discovers them instead, skipping
+forks and archived repositories, capped by `SIPHON_REPO_ORG_LIMIT` (default 20) because
+each repository costs about three API calls. Discovery re-runs on every scan, so
+repositories created later are picked up automatically.
+
+Verified: `task scan -- -orgs vercel` discovered 20 repositories and wrote 611 dependency
+edges in one command, taking `CVE-2026-64646` (Next.js) from 1 exposed repository to 6.
 
 Reads each repository's `go.mod` and `package.json` from GitHub, parses them, and reports
 them to cortex over gRPC, which writes:
@@ -179,10 +190,12 @@ them to cortex over gRPC, which writes:
 CI step. It ignores `SIPHON_REPO_SCAN_ENABLED` — that flag only controls whether a
 long-running `task run:siphon` _also_ scans in the background on its own interval.
 
-Edit the default watchlist in `.env`:
+Configure the default targets in `.env`:
 
 ```bash
 SIPHON_REPO_WATCHLIST=gin-gonic/gin,ajv-validator/ajv,eslint/eslint
+SIPHON_REPO_ORGS=vercel
+SIPHON_REPO_ORG_LIMIT=20
 ```
 
 Each repository costs about three GitHub requests. Unauthenticated, you get 60 per hour.

@@ -198,3 +198,87 @@ var _ = Describe("GitHub repository adapter", func() {
 		Expect(gotAuth).To(Equal("Bearer ghp_secret"))
 	})
 })
+
+var _ = Describe("GitHub repository discovery", func() {
+	ctx := context.Background()
+
+	const orgRepos = `[
+	  {"full_name":"vercel/next.js","name":"next.js","fork":false,"archived":false,"owner":{"login":"vercel"}},
+	  {"full_name":"vercel/commerce","name":"commerce","fork":false,"archived":false,"owner":{"login":"vercel"}},
+	  {"full_name":"vercel/a-fork","name":"a-fork","fork":true,"owner":{"login":"vercel"}},
+	  {"full_name":"vercel/old","name":"old","archived":true,"owner":{"login":"vercel"}},
+	  {"full_name":"vercel/off","name":"off","disabled":true,"owner":{"login":"vercel"}}
+	]`
+
+	newClient := func(srv *httptest.Server) *githubrepo.Client {
+		return githubrepo.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()),
+			sourcehttp.WithRateLimit(time.Millisecond))
+	}
+
+	It("lists an organization's repositories, skipping forks and archived ones", func() {
+		srv := server(map[string]string{"/orgs/vercel/repos": orgRepos})
+		defer srv.Close()
+
+		got, err := newClient(srv).Discover(ctx, "vercel", 20)
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got).To(Equal([]string{"vercel/next.js", "vercel/commerce"}))
+	})
+
+	It("falls back to the user endpoint when the owner is not an organization", func() {
+		// GitHub 404s /orgs for a personal account, so the caller should not
+		// have to know which kind of owner they typed.
+		srv := server(map[string]string{
+			"/users/torvalds/repos": `[{"full_name":"torvalds/linux","name":"linux","owner":{"login":"torvalds"}}]`,
+		})
+		defer srv.Close()
+
+		got, err := newClient(srv).Discover(ctx, "torvalds", 20)
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got).To(Equal([]string{"torvalds/linux"}))
+	})
+
+	It("honours the per-owner limit", func() {
+		srv := server(map[string]string{"/orgs/vercel/repos": orgRepos})
+		defer srv.Close()
+
+		got, err := newClient(srv).Discover(ctx, "vercel", 1)
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got).To(HaveLen(1))
+	})
+
+	It("sorts by recent activity so a limit keeps the repositories that matter", func() {
+		var gotQuery string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotQuery = r.URL.RawQuery
+			_, _ = w.Write([]byte(orgRepos))
+		}))
+		defer srv.Close()
+
+		_, err := newClient(srv).Discover(ctx, "vercel", 20)
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(gotQuery).To(ContainSubstring("sort=pushed"))
+		Expect(gotQuery).To(ContainSubstring("direction=desc"))
+	})
+
+	It("reports an owner that exists as neither an organization nor a user", func() {
+		srv := server(nil)
+		defer srv.Close()
+
+		_, err := newClient(srv).Discover(ctx, "nobody", 20)
+
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("rejects an empty owner", func() {
+		srv := server(nil)
+		defer srv.Close()
+
+		_, err := newClient(srv).Discover(ctx, "", 20)
+
+		Expect(err).To(MatchError(ContainSubstring("owner is required")))
+	})
+})
