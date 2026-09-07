@@ -58,11 +58,12 @@ pid_of() {
 }
 
 up() {
-  log "starting infrastructure (postgres, elasticsearch)..."
+  log "starting infrastructure (postgres, elasticsearch, neo4j)..."
   $COMPOSE up -d
 
   wait_for "postgres" 60 docker exec hyperion-postgres pg_isready -U hyperion -d hyperion
   wait_for "elasticsearch" 120 curl -fsS http://localhost:9200/_cluster/health
+  wait_for "neo4j" 120 docker exec hyperion-neo4j cypher-shell -u neo4j -p hyperion "RETURN 1"
 
   mkdir -p "$RUN_DIR/bin"
 
@@ -152,6 +153,12 @@ status() {
     printf '  %-16s %-10s %s\n' "elasticsearch" "DOWN" "not responding on :9200"
   fi
 
+  if docker exec hyperion-neo4j cypher-shell -u neo4j -p hyperion "RETURN 1" >/dev/null 2>&1; then
+    printf '  %-16s %-10s %s\n' "neo4j" "UP" "bolt on :7687, browser on :7474"
+  else
+    printf '  %-16s %-10s %s\n' "neo4j" "DOWN" "not answering bolt on :7687"
+  fi
+
   for entry in "${SERVICES[@]}"; do
     IFS='|' read -r name _ _ port <<< "$entry"
     local holder; holder="$(port_holder "$port")"
@@ -171,6 +178,13 @@ status() {
   docs="$(curl -s http://localhost:9200/hyperion-vulnerabilities/_count 2>/dev/null \
     | sed -n 's/.*"count":\([0-9]*\).*/\1/p')"
   printf '  %-16s %-10s %s\n' "data" "-" "postgres rows=${rows:--} elasticsearch docs=${docs:--}"
+
+  local nodes edges
+  nodes="$(docker exec hyperion-neo4j cypher-shell -u neo4j -p hyperion --format plain \
+    "MATCH (n) RETURN count(n);" 2>/dev/null | tail -1 || echo '-')"
+  edges="$(docker exec hyperion-neo4j cypher-shell -u neo4j -p hyperion --format plain \
+    "MATCH ()-[r]->() RETURN count(r);" 2>/dev/null | tail -1 || echo '-')"
+  printf '  %-16s %-10s %s\n' "graph" "-" "neo4j nodes=${nodes:--} relationships=${edges:--}"
 }
 
 logs() {

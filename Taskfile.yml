@@ -57,7 +57,7 @@ tasks:
         done
 
   infra:up:
-    desc: Start local infrastructure (Postgres) via docker compose
+    desc: Start local infrastructure (Postgres, Elasticsearch, Neo4j) via docker compose
     cmds:
       - docker compose -f deploy/docker-compose.yml up -d
 
