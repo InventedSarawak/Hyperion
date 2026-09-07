@@ -91,6 +91,58 @@ starter page (v4).
 
 ---
 
+## Post-v2 hardening — 2026-09-08
+
+Fixes and improvements taken before starting v3, all verified against the live stack.
+
+### Bugs fixed
+
+- **TUI frame corruption.** Advisory titles contain literal tabs and newlines
+  (`CVE-2025-70290`: `"...U-Boot Filesystem\tParsing"`). A tab counts as one rune but
+  renders as up to eight columns, so rows overflowed, wrapped, and desynchronised Bubble
+  Tea's frame diff — leaving fragments of the previous frame on screen (`ParParsing`).
+  Control characters are now flattened at the source and widths measured in **cells**, not
+  runes. The selected and unselected row paths were also unified; they had drifted, which
+  is why only some rows corrupted.
+- **`pid_of` read the wrong PID file** — a latent bug in `scripts/system.sh` predating v2.
+  `local name="$1" file="$RUN_DIR/$name.pid"` expands `$name` _before_ the local is
+  assigned, so `file` used the caller's `name`. Invisible until a caller passed a name that
+  differed from the loop variable.
+- **Shodan CVEDB logged an error on every poll.** It answers an empty window with
+  `404 {"detail":"No information available"}`; at a short lookback that is the normal case,
+  not a failure. Now treated as an empty result.
+
+### Improvements
+
+- **Continuous ingest.** `task up` runs `siphon | cortex` detached in its own process
+  group, polling on `SIPHON_POLL_INTERVAL`. `HYPERION_INGEST=0` skips it.
+- **Repository discovery.** `SIPHON_REPO_ORGS=vercel` enumerates an owner's repositories
+  instead of relying on a hand-written watchlist, skipping forks and archived repos and
+  re-running each scan. Verified: one command discovered 20 repositories and wrote 611
+  dependency edges, taking `CVE-2026-64646` (Next.js) from 1 exposed repository to 6.
+- **Blast radius through the gateway.** nexus serves a `blastRadius` GraphQL query, and
+  `deck` now routes through nexus by default rather than calling cortex directly — so it is
+  subject to the edge policy that arrives in v4. `DECK_TRANSPORT=grpc` keeps the direct path.
+- **Redesigned TUI**: ASCII banner on first load, rounded panels, an animated working
+  indicator that stops when idle, and a search prompt pinned to the bottom.
+
+### Package linkage, explained
+
+The graph looked empty because **it genuinely was**: 0 of 2,683 stored CVEs carried package
+linkage. NVD, Red Hat, Shodan, MITRE, CISA KEV and OSINT never name a package — only
+GitHub's _reviewed_ advisories and OSV do.
+
+The fix that scales is **OSV by package**, which is queried by package rather than by date,
+so it returns a package's whole history and every record names its package. Verified:
+`npm:next,npm:lodash,PyPI:django` over a 7-year window returned **225 advisories, 100%
+package-bearing, reaching back to 2017**. NVD cannot do this — its API rejects ranges beyond
+120 consecutive days.
+
+**Current state:** 40 packages green; live stack carries 2,930 rows, 3,215 documents and a
+graph of 1,386 nodes / 2,062 relationships.
+
+---
+
 ## Superseded — 2026-09-02
 
 ### Overall status
@@ -216,6 +268,10 @@ not started.**
 
 ## Changelog
 
+- **2026-09-08** — Post-v2 hardening: fixed TUI frame corruption from control characters in
+  advisory titles, a latent `pid_of` bug in `system.sh`, and Shodan's empty-window 404s.
+  Added continuous ingest (`task up`), GitHub org repository discovery, a `blastRadius`
+  GraphQL query on nexus, and routed `deck` through the gateway. Redesigned the TUI.
 - **2026-09-07** — **v2 complete**: Neo4j dependency graph, `Repository`/`Library`/`Author`
   entities, `IngestDependency` + `FindBlastRadius`, `IngestDependencies`/`GetBlastRadius`
   RPCs, siphon manifest scanner (`go.mod`/`package.json`) reporting over gRPC, CVE->package

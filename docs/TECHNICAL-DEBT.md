@@ -171,14 +171,29 @@ package data, but the volume is low: roughly **one reviewed advisory per 6 hours
 - **Fix:** per-source lookback (already registered above). Until then, seed the
   graph with a long `SIPHON_LOOKBACK` on first run.
 
-### 🟡 The repository watchlist is manual
+### 🟢 ~~The repository watchlist is manual~~ — REPAID
 
-`SIPHON_REPO_WATCHLIST` is a hand-written list of `owner/name` entries.
+`SIPHON_REPO_ORGS` now discovers every repository an org or user owns, skipping
+forks and archived repositories, re-running on each scan so repositories created
+later are picked up. `SIPHON_REPO_WATCHLIST` remains for naming individual repos.
 
-- **Cost:** the graph only knows about repositories someone remembered to add.
-  For a tenant-facing product, "what do you own?" has to be discovered.
-- **Fix in v4:** org-level enumeration via the GitHub App installation, scoped
-  per tenant.
+- **What remains:** discovery is unauthenticated-org scale, capped by
+  `SIPHON_REPO_ORG_LIMIT` (default 20) because each repository costs ~3 API
+  calls. Per-tenant scoping via a GitHub App installation is still v4.
+
+### 🟢 The gateway adds a hop for the terminal client
+
+`deck` → nexus (GraphQL/HTTP) → cortex (gRPC), where it used to call cortex
+directly.
+
+- **Why:** the edge is where authentication, rate limiting, per-tenant scoping
+  and usage metering will live. A client that bypasses it bypasses all of them,
+  and "the TUI is internal" stops being true the moment anyone runs it over SSH
+  from a laptop.
+- **Cost:** one extra network hop and a JSON encode/decode per query. Negligible
+  against a human pressing keys; it would matter for a streaming firehose.
+- **Escape hatch:** `DECK_TRANSPORT=grpc` keeps the direct path for debugging a
+  cortex the gateway cannot reach.
 
 ### 🟢 Neo4j migrations are implicit
 
@@ -286,7 +301,9 @@ Not debt — planned roadmap work, listed so the gap between the docs and realit
 - **`console`** (Next.js dashboard) — still the Turborepo starter page, v4.
 - ~~**`deck`** (Bubble Tea TUI)~~ — **built in v2**: live feed + graph explorer.
 - ~~**Neo4j blast radius**~~ — **built in v2**, and verified against live data.
-- **Blast radius is not exposed through nexus.** `deck` calls cortex directly;
-  the GraphQL gateway still serves only `search`. Adding a `blastRadius` query
-  is a small, obvious next step, deferred so v2 stayed inside its scope.
+- ~~**Blast radius is not exposed through nexus.**~~ — **repaid**: the gateway
+  serves a `blastRadius` query, and `deck` now routes through nexus by default
+  (`DECK_TRANSPORT=grpc` still bypasses it for debugging). This matters because
+  auth, rate limiting and metering all land at the edge in v4; a client that
+  skips the gateway would skip all of them.
 - **gRPC streaming for the live feed** — `deck` polls; v3.
