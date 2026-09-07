@@ -78,6 +78,12 @@ tasks:
     cmds:
       - go run ./cmd/server
 
+  run:deck:
+    desc: Run the terminal UI (needs cortex on :50051)
+    dir: apps/deck
+    cmds:
+      - go run ./cmd/tui
+
   run:nexus:
     desc: Run the API gateway (GraphQL at :8080/graphql, console at /playground)
     dir: apps/nexus

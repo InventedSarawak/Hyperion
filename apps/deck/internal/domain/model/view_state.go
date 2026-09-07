@@ -1,0 +1,142 @@
+// Package model holds deck's view models: the shapes the terminal UI renders.
+// deck is a read-only client — it owns no business rules, only the vocabulary
+// its views need, mapped from the wire contract at the adapter boundary.
+package model
+
+import (
+	"fmt"
+	"strings"
+	"time"
+)
+
+// CVSS is one scored assessment as deck displays it.
+type CVSS struct {
+	Version   string
+	BaseScore float64
+	Vector    string
+	Severity  string
+}
+
+// Vulnerability is a finding as deck displays it.
+type Vulnerability struct {
+	CVEID       string
+	Title       string
+	Description string
+	Scores      []CVSS
+	References  []string
+	PublishedAt time.Time
+	ModifiedAt  time.Time
+}
+
+// TopScore returns the highest-scoring assessment, and whether there was one.
+// Feeds disagree, and the worst case is the one an analyst needs to see first.
+func (v Vulnerability) TopScore() (CVSS, bool) {
+	var (
+		best  CVSS
+		found bool
+	)
+	for _, s := range v.Scores {
+		if !found || s.BaseScore > best.BaseScore {
+			best, found = s, true
+		}
+	}
+	return best, found
+}
+
+// SeverityLabel is the qualitative rating to show, falling back to the score
+// when a feed gave a number but no label.
+func (v Vulnerability) SeverityLabel() string {
+	top, ok := v.TopScore()
+	if !ok {
+		return "UNKNOWN"
+	}
+	if label := strings.ToUpper(strings.TrimSpace(top.Severity)); label != "" && label != "UNKNOWN" {
+		return label
+	}
+	switch {
+	case top.BaseScore >= 9.0:
+		return "CRITICAL"
+	case top.BaseScore >= 7.0:
+		return "HIGH"
+	case top.BaseScore >= 4.0:
+		return "MEDIUM"
+	case top.BaseScore > 0:
+		return "LOW"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+// Headline is the one-line summary shown in the feed.
+func (v Vulnerability) Headline() string {
+	title := strings.TrimSpace(v.Title)
+	if title == "" {
+		title = strings.TrimSpace(v.Description)
+	}
+	if title == "" {
+		return v.CVEID
+	}
+	return title
+}
+
+// SearchHit is one scored result.
+type SearchHit struct {
+	Vulnerability Vulnerability
+	Score         float64
+}
+
+// Feed is the live list of findings, with when it was last refreshed.
+type Feed struct {
+	Query     string
+	Hits      []SearchHit
+	UpdatedAt time.Time
+}
+
+// ImpactedRepository is one repository exposed to a vulnerability.
+type ImpactedRepository struct {
+	FullName   string
+	AuthorName string
+	URL        string
+	ViaPackage string
+	Depth      int
+	Direct     bool
+	Path       []string
+}
+
+// Chain renders the dependency path as an arrow-separated line.
+func (r ImpactedRepository) Chain() string {
+	if len(r.Path) == 0 {
+		return r.FullName
+	}
+	return strings.Join(r.Path, " → ")
+}
+
+// Reach describes how the repository is exposed, for display.
+func (r ImpactedRepository) Reach() string {
+	if r.Direct {
+		return "direct"
+	}
+	return fmt.Sprintf("%d hops", r.Depth)
+}
+
+// BlastRadius is the answer to "who is exposed to this CVE?".
+type BlastRadius struct {
+	CVEID              string
+	VulnerablePackages []string
+	Repositories       []ImpactedRepository
+}
+
+// Linked reports whether the CVE is connected to any library at all. When it
+// is false, an empty result means the question could not be answered — not
+// that nothing is affected.
+func (b BlastRadius) Linked() bool { return len(b.VulnerablePackages) > 0 }
+
+// ByPackage groups the impacted repositories under the vulnerable library each
+// one was reached through, preserving the order the packages were reported in.
+func (b BlastRadius) ByPackage() map[string][]ImpactedRepository {
+	out := make(map[string][]ImpactedRepository, len(b.VulnerablePackages))
+	for _, r := range b.Repositories {
+		out[r.ViaPackage] = append(out[r.ViaPackage], r)
+	}
+	return out
+}

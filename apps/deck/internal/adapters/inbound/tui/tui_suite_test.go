@@ -1,4 +1,4 @@
-package tui
+package tui_test
 
 import (
 	"testing"
@@ -11,9 +11,3 @@ func TestTUI(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Deck TUI Suite")
 }
-
-var _ = Describe("tui entrypoint", func() {
-	It("loads the test harness", func() {
-		Expect(true).To(BeTrue())
-	})
-})
