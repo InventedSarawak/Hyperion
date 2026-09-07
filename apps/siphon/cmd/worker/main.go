@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,6 +28,10 @@ func main() {
 		"probe every ingestion source once, print a status report, and exit")
 	checkLookback := flag.Duration("check-lookback", 24*time.Hour,
 		"how far back the -check-sources probe reaches")
+	scanRepos := flag.Bool("scan-repos", false,
+		"scan the watched repositories' manifests once, report, and exit")
+	repos := flag.String("repos", "",
+		"comma-separated owner/name list overriding SIPHON_REPO_WATCHLIST for this run")
 	flag.Parse()
 
 	// Logs go to stderr; published events go to stdout (kept separate on purpose).
@@ -44,6 +49,14 @@ func main() {
 	// Diagnostic mode: probe each source, report, exit. Publishes nothing.
 	if *checkSources {
 		runSourceCheck(ctx, registry, *checkLookback)
+		return
+	}
+
+	// One-off supply-chain scan: read the watched manifests, report them to
+	// cortex, exit. Runs without any ingestion source being active, because
+	// reading manifests has nothing to do with polling advisory feeds.
+	if *scanRepos {
+		runRepositoryScan(ctx, logger, cfg, *repos)
 		return
 	}
 
@@ -166,4 +179,54 @@ func runSourceCheck(ctx context.Context, registry *sources.Registry, lookback ti
 			os.Exit(1)
 		}
 	}
+}
+
+// runRepositoryScan performs a single scan of the watched repositories and
+// exits non-zero if any of them failed, so it is usable as a CI or cron step.
+func runRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphonconfig.Config, override string) {
+	watchlist := cfg.RepoScan.Watchlist
+	if override != "" {
+		watchlist = splitList(override)
+	}
+	if len(watchlist) == 0 {
+		logger.Error("nothing to scan: set SIPHON_REPO_WATCHLIST or pass -repos owner/name,owner/name")
+		os.Exit(1)
+	}
+
+	client, err := intelligence.Dial(cfg.RepoScan.CortexAddr)
+	if err != nil {
+		logger.Error("cannot reach the intelligence service",
+			"addr", cfg.RepoScan.CortexAddr, "error", err)
+		os.Exit(1)
+	}
+	defer client.Close()
+
+	logger.Info("scanning repositories",
+		"repositories", watchlist,
+		"cortex", cfg.RepoScan.CortexAddr,
+		"authenticated", cfg.RepoScan.Token != "")
+
+	scan := workflows.NewScanRepositories(
+		githubrepo.New(cfg.RepoScan.BaseURL, cfg.RepoScan.Token),
+		client,
+		watchlist,
+	)
+
+	written, err := scan.Run(ctx, time.Time{})
+	if err != nil {
+		logger.Error("repository scan finished with errors", "written", written, "error", err)
+		os.Exit(1)
+	}
+	logger.Info("repository scan complete", "dependency_edges_written", written)
+}
+
+// splitList parses a comma-separated flag value, ignoring empty entries.
+func splitList(raw string) []string {
+	var out []string
+	for _, entry := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(entry); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }

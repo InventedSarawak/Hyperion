@@ -90,6 +90,19 @@ tasks:
     cmds:
       - go run ./cmd/server
 
+  scan:
+    desc: 'Scan watched repos into the dependency graph (needs cortex). Override: task scan -- -repos owner/name'
+    dir: apps/siphon
+    cmds:
+      - go run ./cmd/worker -scan-repos {{.CLI_ARGS}}
+
+  blast:
+    desc: 'Blast radius for a CVE: task blast -- CVE-2021-44228 (needs cortex + grpcurl)'
+    cmds:
+      - |
+        grpcurl -plaintext -d "{\"cve_id\":\"{{.CLI_ARGS}}\",\"max_depth\":5}" \
+          localhost:50051 hyperion.intelligence.v1.IntelligenceService/GetBlastRadius
+
   ingest:
     desc: Pipe one siphon poll straight into cortex (siphon | cortex)
     cmds:
