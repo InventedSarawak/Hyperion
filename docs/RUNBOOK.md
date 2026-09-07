@@ -71,6 +71,7 @@ Expected output:
   ready: neo4j (0s)
   ready: cortex gRPC :50051 (0s)
   ready: nexus HTTP :8080 (0s)
+  ready: ingest loop (pid 497024)
 
   COMPONENT        STATUS     DETAIL
   postgres         UP         accepting connections on :5432
@@ -78,12 +79,23 @@ Expected output:
   neo4j            UP         bolt on :7687, browser on :7474
   cortex           UP         pid 303430 on :50051
   nexus            UP         pid 303519 on :8080
+  ingest           UP         pid 497024, polling every 10m
   data             -          postgres rows=2671 elasticsearch docs=2964
   graph            -          neo4j nodes=788 relationships=1104
 ```
 
-`task up` does **not** start `siphon` or `deck`. siphon is a poller you run when you want
-data; deck is an interactive terminal app. Both are covered below.
+`task up` also starts a **continuous ingest loop** — `siphon | cortex` running detached, so
+the system keeps pulling fresh advisories on `SIPHON_POLL_INTERVAL` (default 10m) without
+you holding a terminal open. It is tracked as its own process group, so `task down` stops
+both halves.
+
+Skip it when you want a quiet stack:
+
+```bash
+HYPERION_INGEST=0 task up
+```
+
+`task up` does **not** start `deck` — it is an interactive terminal app, covered below.
 
 ### Inspecting a running system
 
@@ -103,6 +115,9 @@ Blast radius is a join between two independent halves. You need both.
 
 ### 3.1 Vulnerabilities (what is vulnerable)
 
+`task up` already runs this continuously. Use `task ingest` when you want a **foreground**
+run you can watch — for a one-off backfill, or to see errors as they happen:
+
 ```bash
 task ingest
 ```
@@ -113,6 +128,19 @@ Neo4j as `(:Library)-[:AFFECTED_BY]->(:Vulnerability)`.
 
 siphon polls on a timer and does not exit on its own, so **press Ctrl-C** once the counts
 stop moving.
+
+> **Want history, and packages?** The OSV watchlist is the best source of both: it is
+> queried _by package_ rather than by date, so it returns a package's whole advisory
+> history, and every record names its affected package. Verified: `npm:next,npm:lodash,
+PyPI:django` over a 7-year window returned **225 advisories, 100% package-bearing,
+> reaching back to 2017**.
+>
+> ```bash
+> cd apps/siphon && SIPHON_LOOKBACK=61320h \
+>   SIPHON_PACKAGE_WATCHLIST='npm:next,npm:lodash,PyPI:django' \
+>   go run ./cmd/worker 2>/dev/null | \
+>   (cd ../cortex && CORTEX_CONSUME_STDIN=true go run ./cmd/server)
+> ```
 
 > **Seed with a long lookback on first run.** The default `SIPHON_LOOKBACK=2h` yields
 > almost no package linkage, because only GitHub's _reviewed_ advisories carry package data
