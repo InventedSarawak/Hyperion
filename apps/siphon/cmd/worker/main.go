@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/inbound/scheduler"
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/intelligence"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/publisher"
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/repos/githubrepo"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/application/workflows"
 	siphonconfig "github.com/inventedsarawak/hyperion/apps/siphon/internal/platform/config"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/platform/sources"
@@ -59,6 +61,10 @@ func main() {
 	poll := workflows.NewPollSources(clients, pub)
 	sched := scheduler.New(poll, cfg.PollInterval, cfg.Lookback)
 
+	// The supply-chain scan runs alongside on its own, much slower schedule.
+	stopScan := startRepositoryScan(ctx, logger, cfg)
+	defer stopScan()
+
 	logger.Info("siphon starting",
 		"active_sources", registry.ActiveKinds(),
 		"interval", cfg.PollInterval.String(),
@@ -70,6 +76,56 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("siphon stopped")
+}
+
+// startRepositoryScan wires the manifest scanner and runs it in the
+// background, returning a function that releases its connection.
+//
+// It is skipped rather than fatal when unconfigured: reading advisories is
+// siphon's primary job, and it must keep working whether or not anyone has
+// named repositories to watch or stood cortex up.
+func startRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphonconfig.Config) func() {
+	noop := func() {}
+
+	if !cfg.RepoScan.Enabled {
+		logger.Info("repository scan disabled (set SIPHON_REPO_SCAN_ENABLED=true)")
+		return noop
+	}
+	if len(cfg.RepoScan.Watchlist) == 0 {
+		logger.Warn("repository scan enabled but SIPHON_REPO_WATCHLIST is empty; nothing to scan")
+		return noop
+	}
+
+	client, err := intelligence.Dial(cfg.RepoScan.CortexAddr)
+	if err != nil {
+		logger.Error("repository scan disabled: cannot reach intelligence service",
+			"addr", cfg.RepoScan.CortexAddr, "error", err)
+		return noop
+	}
+
+	scan := workflows.NewScanRepositories(
+		githubrepo.New(cfg.RepoScan.BaseURL, cfg.RepoScan.Token),
+		client,
+		cfg.RepoScan.Watchlist,
+	)
+
+	logger.Info("repository scan starting",
+		"repositories", cfg.RepoScan.Watchlist,
+		"interval", cfg.RepoScan.Interval.String(),
+		"cortex", cfg.RepoScan.CortexAddr,
+		"authenticated", cfg.RepoScan.Token != "",
+	)
+
+	go func() {
+		// Lookback is irrelevant to a manifest read: its current contents are
+		// the whole truth, so the watermark the scheduler tracks is unused.
+		if err := scheduler.New(scan, cfg.RepoScan.Interval, 0).Start(ctx); err != nil &&
+			!errors.Is(err, context.Canceled) {
+			logger.Error("repository scan stopped", "error", err)
+		}
+	}()
+
+	return func() { _ = client.Close() }
 }
 
 // reportSources logs the status of every documented ingestion source, so it is

@@ -1,0 +1,200 @@
+package githubrepo_test
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"time"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/repos/githubrepo"
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/sources/sourcehttp"
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/model"
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/valueobject"
+)
+
+const repoMeta = `{
+  "name":"gin","html_url":"https://github.com/gin-gonic/gin","default_branch":"master",
+  "owner":{"login":"gin-gonic","html_url":"https://github.com/gin-gonic"}
+}`
+
+const goMod = `module github.com/gin-gonic/gin
+
+go 1.23
+
+require golang.org/x/net v0.17.0
+
+require golang.org/x/sys v0.13.0 // indirect
+`
+
+// contentsResponse renders a file the way the contents API does: base64,
+// wrapped at 60 columns.
+func contentsResponse(body string) string {
+	encoded := base64.StdEncoding.EncodeToString([]byte(body))
+	var wrapped strings.Builder
+	for i := 0; i < len(encoded); i += 60 {
+		end := i + 60
+		if end > len(encoded) {
+			end = len(encoded)
+		}
+		wrapped.WriteString(encoded[i:end] + "\n")
+	}
+	payload, err := json.Marshal(map[string]any{
+		"content": wrapped.String(), "encoding": "base64", "size": len(body),
+	})
+	Expect(err).ToNot(HaveOccurred())
+	return string(payload)
+}
+
+// server routes the endpoints the adapter calls. Any path not in files 404s,
+// which is how a repository without that manifest behaves.
+func server(files map[string]string) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if body, ok := files[r.URL.Path]; ok {
+			_, _ = w.Write([]byte(body))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"Not Found"}`))
+	}))
+}
+
+func byName(deps []model.Dependency, name string) model.Dependency {
+	GinkgoHelper()
+	for _, d := range deps {
+		if d.Package.Name == name {
+			return d
+		}
+	}
+	Fail("no dependency named " + name)
+	return model.Dependency{}
+}
+
+var _ = Describe("GitHub repository adapter", func() {
+	ctx := context.Background()
+
+	It("reads a go.mod into a repository snapshot", func() {
+		srv := server(map[string]string{
+			"/repos/gin-gonic/gin":                 repoMeta,
+			"/repos/gin-gonic/gin/contents/go.mod": contentsResponse(goMod),
+		})
+		defer srv.Close()
+
+		got, err := githubrepo.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()), sourcehttp.WithRateLimit(time.Millisecond)).
+			Scan(ctx, "gin-gonic", "gin")
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got.Repository.FullName()).To(Equal("gin-gonic/gin"))
+		Expect(got.Repository.DefaultBranch).To(Equal("master"))
+		Expect(got.Repository.URL).To(Equal("https://github.com/gin-gonic/gin"))
+		Expect(got.Author.Login).To(Equal("gin-gonic"))
+		Expect(got.Publishes.Name).To(Equal("github.com/gin-gonic/gin"))
+		Expect(got.Publishes.Ecosystem).To(Equal(valueobject.EcosystemGo))
+		Expect(got.Dependencies).To(HaveLen(2))
+		Expect(byName(got.Dependencies, "golang.org/x/net").Direct).To(BeTrue())
+		Expect(byName(got.Dependencies, "golang.org/x/sys").Direct).To(BeFalse())
+		Expect(got.ObservedAt.IsZero()).To(BeFalse())
+	})
+
+	It("merges every manifest a repository declares", func() {
+		srv := server(map[string]string{
+			"/repos/acme/app":                       repoMeta,
+			"/repos/acme/app/contents/go.mod":       contentsResponse(goMod),
+			"/repos/acme/app/contents/package.json": contentsResponse(`{"name":"ui","dependencies":{"react":"18.2.0"}}`),
+		})
+		defer srv.Close()
+
+		got, err := githubrepo.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()), sourcehttp.WithRateLimit(time.Millisecond)).
+			Scan(ctx, "acme", "app")
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got.Dependencies).To(HaveLen(3))
+		Expect(byName(got.Dependencies, "react").Package.Ecosystem).To(Equal(valueobject.EcosystemNPM))
+		// go.mod is tried first, so its module line is the one kept.
+		Expect(got.Publishes.Name).To(Equal("github.com/gin-gonic/gin"))
+	})
+
+	It("treats a missing manifest as an absence, not a failure", func() {
+		srv := server(map[string]string{"/repos/acme/docs": repoMeta})
+		defer srv.Close()
+
+		got, err := githubrepo.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()), sourcehttp.WithRateLimit(time.Millisecond)).
+			Scan(ctx, "acme", "docs")
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got.Dependencies).To(BeEmpty())
+		Expect(got.Repository.FullName()).ToNot(BeEmpty(), "the repository is still worth recording")
+	})
+
+	It("reports a manifest that is present but unreadable", func() {
+		srv := server(map[string]string{
+			"/repos/acme/app":                       repoMeta,
+			"/repos/acme/app/contents/package.json": contentsResponse(`{"name":`),
+		})
+		defer srv.Close()
+
+		got, err := githubrepo.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()), sourcehttp.WithRateLimit(time.Millisecond)).
+			Scan(ctx, "acme", "app")
+
+		Expect(err).To(HaveOccurred(), "a broken manifest is a coverage gap, not an absence")
+		Expect(got.Repository.FullName()).ToNot(BeEmpty())
+	})
+
+	It("fails when the repository itself cannot be read", func() {
+		srv := server(nil)
+		defer srv.Close()
+
+		_, err := githubrepo.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()), sourcehttp.WithRateLimit(time.Millisecond)).
+			Scan(ctx, "acme", "missing")
+
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("falls back to the requested identity when the API omits it", func() {
+		srv := server(map[string]string{"/repos/acme/app": `{"default_branch":"main","owner":{}}`})
+		defer srv.Close()
+
+		got, err := githubrepo.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()), sourcehttp.WithRateLimit(time.Millisecond)).
+			Scan(ctx, "acme", "app")
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got.Repository.FullName()).To(Equal("acme/app"))
+	})
+
+	It("skips a file too large for the API to inline", func() {
+		srv := server(map[string]string{
+			"/repos/acme/app":                 repoMeta,
+			"/repos/acme/app/contents/go.mod": `{"content":"","encoding":"none","size":2000000}`,
+		})
+		defer srv.Close()
+
+		_, err := githubrepo.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()), sourcehttp.WithRateLimit(time.Millisecond)).
+			Scan(ctx, "acme", "app")
+
+		Expect(err).To(MatchError(ContainSubstring("no inline content")))
+	})
+
+	It("sends the bearer token when one is configured", func() {
+		var gotAuth string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotAuth = r.Header.Get("Authorization")
+			if r.URL.Path == "/repos/acme/app" {
+				_, _ = w.Write([]byte(repoMeta))
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		_, err := githubrepo.New(srv.URL, "ghp_secret", sourcehttp.WithHTTPClient(srv.Client()), sourcehttp.WithRateLimit(time.Millisecond)).
+			Scan(ctx, "acme", "app")
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(gotAuth).To(Equal("Bearer ghp_secret"))
+	})
+})

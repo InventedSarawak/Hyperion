@@ -31,7 +31,22 @@ type Config struct {
 	Shodan        ShodanConfig
 	GSD           GSDConfig
 
+	RepoScan RepoScanConfig
+
 	loader *config.Loader
+}
+
+// RepoScanConfig drives the supply-chain half of ingestion: reading watched
+// repositories' manifests and reporting them to cortex. It is off by default,
+// because an empty watchlist has nothing to scan and an unauthenticated GitHub
+// budget (60 requests/hour) is spent within a few repositories.
+type RepoScanConfig struct {
+	Enabled    bool
+	Watchlist  []string // "owner/name" entries
+	Interval   time.Duration
+	BaseURL    string
+	Token      string
+	CortexAddr string
 }
 
 // NVDConfig — source 1. Key optional: lifts 5 -> 50 req / 30s.
@@ -115,6 +130,7 @@ const (
 	DefaultShodanBaseURL     = "https://cvedb.shodan.io"
 	DefaultOSVBaseURL        = "https://api.osv.dev/v1"
 	DefaultFullDisclosureRSS = "https://seclists.org/rss/fulldisclosure.rss"
+	DefaultCortexGRPCAddr    = "localhost:50051"
 )
 
 // Load reads configuration from the environment, applying defaults.
@@ -173,6 +189,18 @@ func Load() Config {
 		GSD: GSDConfig{
 			Enabled: l.Bool("GSD_ENABLED", true),
 			BaseURL: l.String("GSD_BASE_URL", DefaultOSVBaseURL),
+		},
+
+		RepoScan: RepoScanConfig{
+			Enabled:   l.Bool("REPO_SCAN_ENABLED", false),
+			Watchlist: l.List("REPO_WATCHLIST", nil),
+			// Manifests change on the order of days, not minutes, and every
+			// scan costs GitHub quota — so this is deliberately far slower
+			// than the advisory poll.
+			Interval:   l.Duration("REPO_SCAN_INTERVAL", 6*time.Hour),
+			BaseURL:    l.String("GITHUB_BASE_URL", DefaultGitHubBaseURL),
+			Token:      l.Secret("GITHUB_TOKEN"),
+			CortexAddr: l.String("CORTEX_GRPC_ADDR", DefaultCortexGRPCAddr),
 		},
 	}
 }
