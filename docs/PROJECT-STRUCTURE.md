@@ -1,10 +1,28 @@
 # Hyperion Project Structure
 
+> Some directories below are placeholders for planned work. See
+> [TECHNICAL-DEBT.md](./TECHNICAL-DEBT.md) for what is genuinely implemented versus
+> scaffolded, and the shortcuts taken to get here.
+
+## Service Codenames
+
+Services use codenames in `apps/`. Map to their role:
+
+| Codename    | Role                          | Language | Descriptive name (old docs) |
+| :---------- | :---------------------------- | :------- | :-------------------------- |
+| **nexus**   | API Gateway (GraphQL/gRPC)    | Go       | api-gateway                 |
+| **siphon**  | Ingestion Worker              | Go       | ingestion-worker            |
+| **cortex**  | Intelligence (search/graph)   | Go       | intelligence-service        |
+| **ghost**   | CTF Copilot (AI/RAG)          | Go       | ctf-copilot                 |
+| **relic**   | Lake Archiver (Parquet/MinIO) | Go       | lake-archiver               |
+| **deck**    | Terminal UI (Bubble Tea)      | Go       | tui-dashboard               |
+| **credits** | Billing/Subscriptions (Lago)  | Go       | —                           |
+| **console** | Web Dashboard (Next.js)       | TS       | web-dashboard               |
+
 ## Project Root
 
 ```hyperion/
-hyperion/
-github.com/vedant/hyperion/
+hyperion/                       # module prefix: github.com/inventedsarawak/hyperion
 ├── .github/workflows/          # CI/CD
 ├── docs/                       # Project Documentation
 ├── apps/
@@ -24,23 +42,28 @@ github.com/vedant/hyperion/
 │   ├── deck/                   # 📟 Go: Terminal UI (Bubble Tea)
 │   │   └── cmd/tui/main.go
 │   ├── credits/                # 💳️ Go: Credits & Subscription (Lago)
-│   │   └── cmd/internal/main.go
+│   │   └── cmd/server/main.go
 │   └── console/                # 🌍 TS: Web Dashboard (Next.js SaaS)
-│       ├── src/app/            # App Router (Pages)
+│       ├── app/                # App Router (Pages)
 │       ├── package.json        # NPM Config
 │       └── next.config.js
 ├── packages/
-│   ├── contracts/              # 📜 Protobufs (Shared Truth)
-│   │   ├── ingestion/v1/
-│   │   ├── intelligence/v1/
-│   │   └── buf.yaml
+│   ├── contracts/              # 📜 Protobufs (Shared Truth — single source of truth)
+│   │   ├── proto/hyperion/     # events, ingestion, intelligence, copilot, billing, common
+│   │   ├── go.mod              # own module, imported by all services via go.work
+│   │   └── buf.yaml            # buf config (codegen)
 │   ├── common/                 # 📦 Go: Shared Utils (Kafka, Errors)
 │   ├── telemetry/              # 📊 Go: OTEL, Logger configurations
-│   ├── sdk/                    # 📦 TS: Generated Axios Client
-│   └── ui/                     # 🎨 TS: Shared React Components
+│   ├── sdk/                    # 📦 TS: Generated Axios Client (from OpenAPI)
+│   ├── ui/                     # 🎨 TS: Shared React Components
+│   ├── eslint-config/          # 🧹 Shared ESLint config
+│   └── typescript-config/      # 🧩 Shared tsconfig bases
 ├── deploy/                     # ☁️ Infrastructure
-│   ├── docker-compose.yml
-│   └── k8s/
+│   ├── docker-compose.yml      # Postgres + Elasticsearch (local dev ONLY)
+│   ├── k8s/                    # ⚠️ EMPTY — no manifests yet (v4)
+│   └── terraform/              # ⚠️ EMPTY — no .tf files yet (v4)
+├── api/                        # ⚠️ DEPRECATED empty dir (openapi/, protobuf/) — to be
+│                               #    removed; contracts live in packages/contracts
 ├── scripts/                      # 🛠️ Scripts
 ├── go.work                     # 🔗 Go Workspace Config
 ├── turbo.json                  # 🚀 Build Orchestration

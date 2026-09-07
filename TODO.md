@@ -2,40 +2,79 @@
 
 ## TODO v1: The Foundation (MVP)
 
+> **Plan (decided 2026-08-22):** first vertical slice is **siphon → cortex → nexus**
+> (NVD ingest → `SignalEvent` → cortex stores/indexes → `query { search }` via nexus).
+> **Contracts-first:** define protobuf in `packages/contracts` and generate Go before wiring
+> services. Keep **per-service `go.mod`**. `ghost` (exploit gen) is **parked** — not built yet.
+> See `CURRENT_PROGRESS.md` for the live snapshot.
+
 ### Project Setup (Monorepo)
 
 - [x] Initialize Git repository
-- [x] Initialize Go Workspace (`go work init`)
-- [ ] Setup `Taskfile.yml` for automation (build, run, test)
-- [ ] Setup `turbo.json` for build caching
-- [ ] Create directory structure (`apps/`, `packages/`, `deploy/`)
-- [ ] Configure `deploy/docker-compose.yml` (Postgres, Elasticsearch)
+- [x] Initialize Go Workspace (`go work init`) — 7 service modules + 3 Go packages wired in `go.work`
+- [x] Setup `Taskfile.yml` for automation (build, run, test) — `task build:go` fixed (space-separated app list; `go build ./...` compile-check, no binaries until a real `func main` exists)
+- [x] Setup `turbo.json` for build caching
+- [x] Create directory structure (`apps/`, `packages/`, `deploy/`)
+- [x] Scaffold Ginkgo test harnesses per service (smoke-level; `task test:go` passes)
+- [x] Remove deprecated empty `api/` dir (contracts live in `packages/contracts`)
+- [x] Configure `deploy/docker-compose.yml` — Postgres + Elasticsearch on default ports (5432/9200); `task up`/`task down`
+- [x] Add Elasticsearch to `deploy/docker-compose.yml` (8.15.3, security off for local dev)
+- [x] Add `.env.sample` documenting env vars + formats for all 10 ingestion sources
+- [x] Centralized namespaced config (`packages/common/config`): SERVICE.VAR -> SERVICE_VAR,
+      typed getters, masked secrets, `.env` autoloading — used by siphon/cortex/nexus
 
-### Domain Contracts (The "Law")
+### Domain Contracts (The "Law") — do this FIRST
 
-- [ ] Create `packages/contracts`
-- [ ] Define `ingestion/v1/signal.proto` (The data structure)
-- [ ] Define `intelligence/v1/search.proto` (The API structure)
-- [ ] Setup `buf.yaml` and generate Go structs
+- [x] Create `packages/contracts` module
+- [x] Setup `buf.yaml` + `buf.gen.yaml` (managed mode, local plugins) and wire `task codegen`
+- [x] Define `proto/hyperion/common/v1/vulnerability.proto` (shared normalized types)
+- [x] Define `proto/hyperion/events/v1/signal_events.proto` (`SignalDiscovered`)
+- [x] Define `proto/hyperion/intelligence/v1/intelligence_service.proto` (the `Search` RPC)
+- [x] Generate Go into `packages/contracts/gen` and confirm services can import via `go.work` (verified from siphon)
 
-### App: Ingestion Worker (`apps/ingestion-worker`)
+### App: Ingestion Worker (`apps/siphon`)
 
-- [ ] **Infrastructure:** Implement NVD API Client (HTTP adapter)
-- [ ] **Domain:** Define `Vulnerability` entity
-- [ ] **Application:** Create Cron Job (ticker) to fetch CVEs every 10m
-- [ ] **Infrastructure:** Implement `PostgresRepository` to save raw metadata
+- [x] **Domain:** `SourceSignal` model, `SourceKind` VO, `SignalDiscovered` event (+ dedupe identity)
+- [x] **Ports:** `SourceClient`, `SignalPublisher` (outbound, defined in domain)
+- [x] **Application:** `PollSource` use case (fetch → validate → publish), fully unit-tested with fakes
+- [x] **Adapter (outbound):** NVD API 2.0 client (HTTP) → domain, httptest-tested
+- [x] **Adapter (outbound):** publisher maps domain event → `events.v1.SignalDiscovered` proto → stdout (Kafka later)
+- [x] **Adapter (inbound):** scheduler (ticker) drives `PollSource` on an interval
+- [x] **Platform:** config + `cmd/worker/main.go` composition root — siphon runs end-to-end vs live NVD
+- [x] **Rate limiting:** NVD paced to its documented limits (6s no key / 0.6s with key), pagination via startIndex/totalResults, 120-day window clamping, retry+backoff on 403/429/5xx
+- [x] **Multi-source:** `PollSources` fans out over every active source; one failure doesn't stop the rest
+- [x] **Source registry:** all 10 documented sources resolved at startup; inactive ones reported with a reason
+- [x] **All 10 source adapters implemented:** NVD, GitHub Advisory, CISA KEV, Exploit-DB, MITRE,
+      Vendor (Red Hat), OSINT RSS, Package feeds (OSV watchlist), Shodan CVEDB, GSD/OSV —
+      each with fixture-backed tests and per-source rate limiting
+- [x] **Shared adapter plumbing:** `sourcehttp` (pacing + bounded retry/backoff) and `cveid`
+      (CVE/URL extraction) so transport concerns are written once
+- [ ] Later: swap stdout publisher → Kafka (v3); add dedupe/checkpoint stores (Redis, v3)
+- [ ] Note: siphon does NOT persist — it publishes; cortex owns storage (event-driven design)
 
-### App: Intelligence Service (`apps/intelligence-service`)
+### App: Intelligence Service (`apps/cortex`)
 
-- [ ] **Infrastructure:** Implement Elasticsearch Client
-- [ ] **Application:** Create `Indexer` service (Postgres -> Elastic sync)
-- [ ] **Application:** Implement `Search` use-case (Full-text query)
-- [ ] **Infrastructure:** Expose gRPC/GraphQL Server
+- [x] **Domain:** `Vulnerability` entity (+ `Merge` reconciliation), `VulnerabilityRepo` port
+- [x] **Application:** `IngestSignal` use case (load → merge → upsert), unit-tested with fake repo
+- [x] **Adapter (inbound):** consumer reads protojson `SignalDiscovered` (stdin) → cortex domain
+- [x] **Adapter (outbound):** Postgres repo (pgx) + embedded migration; integration-tested vs real DB
+- [x] **End-to-end:** `siphon | cortex` → Postgres verified (48 live NVD CVEs stored)
+- [x] **Infrastructure:** Implement Elasticsearch Client (`SearchIndex` port + ES adapter + no-op fallback)
+- [x] **Application:** Dual-write on ingest (Postgres = truth, ES = search); ES failure is non-fatal
+- [x] **Application:** Implement `Search` use-case (full-text, paging, token validation)
+- [x] **Infrastructure:** Expose gRPC `IntelligenceService.Search` server (+ reflection for grpcurl)
 
 ### Verification
 
-- [ ] Write Unit Tests with `Ginkgo` for the NVD parser
-- [ ] Manual Test: Run `task dev` and query GraphQL Playground for "log4j"
+- [x] Write Unit Tests with `Ginkgo` for the NVD parser (+ workflow, publisher, scheduler)
+- [x] Manual Test: GraphQL query returns real ingested NVD data (verified end-to-end)
+
+### App: API Gateway (`apps/nexus`)
+
+- [x] **Domain/Ports:** `IntelligenceClient` port + view models
+- [x] **Application:** `SearchVulnerabilities` use case
+- [x] **Adapter (outbound):** gRPC client to cortex
+- [x] **Adapter (inbound):** GraphQL schema + handler + browser playground (`/playground`)
 
 ---
 
@@ -44,7 +83,7 @@
 ### Infrastructure Upgrade
 
 - [ ] Add **Neo4j** to `docker-compose.yml`
-- [ ] Add **gRPC** reflection to all services
+- [x] Add **gRPC** reflection (done on cortex; add to future services as they gain gRPC)
 
 ### App: Intelligence Service (Upgrade)
 
@@ -54,7 +93,7 @@
   - Logic: `MERGE (r:Repo)-[:DEPENDS_ON]->(l:Lib)`
 - [ ] **Query:** Add `FindBlastRadius` (Recursive graph traversal)
 
-### App: TUI Dashboard (`apps/tui-dashboard`)
+### App: TUI Dashboard (`apps/deck`)
 
 - [ ] Initialize Bubble Tea project
 - [ ] **Infrastructure:** Create gRPC Client adapter
@@ -69,13 +108,28 @@
 
 ---
 
+## Cross-cutting: Technical Debt
+
+Registered in `docs/TECHNICAL-DEBT.md`. Highest-value items, roughly in order:
+
+- [ ] **Per-source lookback/interval** — one global `SIPHON_LOOKBACK` makes three
+      low-cadence sources return 0 at the 2h default (small change, high clarity)
+- [ ] **Persist the ingestion watermark** — currently in-memory, so a restart refetches
+      the whole window and a long outage loses signals
+- [ ] Health endpoints on `cortex` and `siphon` (only `nexus` has one)
+- [ ] Versioned migrations (`goose`/`golang-migrate`) instead of run-everything-idempotently
+- [ ] Graceful shutdown for in-flight ingest (Postgres can end up ahead of Elasticsearch)
+- [ ] Elasticsearch alias + reindex strategy for mapping changes
+
+---
+
 ## TODO v3: The Nervous System (Streaming)
 
 ### Infrastructure Upgrade
 
 - [ ] Add **Apache Kafka** & Zookeeper to `docker-compose.yml`
 - [ ] Add **Redis** (for caching/deduplication)
-- [ ] Create `packages/common-go/kafka` (Producer/Consumer wrappers)
+- [ ] Create `packages/common/kafka` (Producer/Consumer wrappers)
 
 ### Refactor: Event-Driven Architecture
 
@@ -106,7 +160,7 @@
 ### Data Lake Strategy
 
 - [ ] Add **MinIO** to `docker-compose.yml`
-- [ ] **New App:** `apps/lake-archiver`
+- [ ] **App:** `apps/relic` (Lake Archiver)
   - [ ] Consume `raw-signals` topic
   - [ ] Buffer events and write `Parquet` files to MinIO
 - [ ] **Analytics:** Integrate **DuckDB** to query Parquet files
@@ -117,12 +171,21 @@
 - [ ] **App: API Gateway:**
   - [ ] Implement `RateLimitMiddleware` using Redis
   - [ ] Add `BillingHook` to report usage to Lago
-- [ ] **Web Dashboard:** Create `apps/web-dashboard` (Next.js)
+- [ ] **Web Dashboard:** Build out `apps/console` (Next.js)
   - [ ] User Login (Keycloak)
   - [ ] Subscription Management UI
 
 ### DevOps (GitOps)
 
+> Infra debt registered in `docs/TECHNICAL-DEBT.md`. `deploy/k8s/` and
+> `deploy/terraform/` are currently **empty directories**.
+
+- [ ] **Dockerfiles:** multi-stage build per Go service (repays AGENTS.md Rule 7 —
+      services currently run natively via `scripts/system.sh`)
+- [ ] Add the Go services to `docker-compose.yml` with `restart: unless-stopped`
+- [ ] Add resource limits to all compose services
+- [ ] **CI:** `.github/workflows/` is empty — add build + test + lint + typecheck
+- [ ] Decide whether `deploy/terraform/` is real (fill it) or aspirational (delete it)
 - [ ] Create `deploy/k8s/helm-chart`
 - [ ] Setup local **K3s** cluster
 - [ ] Install **ArgoCD** in K3s
@@ -138,7 +201,7 @@
 - [ ] Add **Qdrant** (Vector DB) to `docker-compose.yml`
 - [ ] Pull `deepseek-coder` or `llama3` model
 
-### App: CTF Copilot (`apps/ctf-copilot`)
+### App: CTF Copilot (`apps/ghost`)
 
 - [ ] **Domain:** Define `Exploit` and `Target` entities
 - [ ] **Infrastructure:**
@@ -176,7 +239,7 @@
 
 ### Application Instrumentation
 
-- [ ] **Packages:** Create `packages/telemetry-go` for shared OTel setup
+- [ ] **Packages:** Build out `packages/telemetry` for shared OTel setup
 - [ ] **Gateway & Services:** Implement OTel Go SDK libraries for distributed tracing
   - [ ] Propagate trace context across gRPC bounds
   - [ ] Propagate trace context across Kafka bounds (Producer/Consumer headers)

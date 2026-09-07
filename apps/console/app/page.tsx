@@ -45,16 +45,11 @@ export default function Home() {
                         <Image src="/vercel.svg" alt="Vercel logomark" width={20} height={20} />
                         Deploy now
                     </a>
-                    <a
-                        href="https://turborepo.dev/docs?utm_source"
-                        target="_blank"
-                        rel="noopener noreferrer">
+                    <a href="https://turborepo.dev/docs?utm_source" target="_blank" rel="noopener noreferrer">
                         Read our docs
                     </a>
                 </div>
-                <Button appName="web">
-                    Open alert
-                </Button>
+                <Button appName="web">Open alert</Button>
             </main>
             <footer>
                 <a

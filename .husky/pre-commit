@@ -1,0 +1,29 @@
+set -e
+
+echo "▶ formatting — prettier"
+pnpm run format:check
+
+echo "▶ formatting — gofmt"
+go_files=$(find apps packages -name '*.go' -not -path '*/gen/*' 2>/dev/null)
+if [ -n "$go_files" ]; then
+  unformatted=$(gofmt -l $go_files)
+  if [ -n "$unformatted" ]; then
+    echo "✖ gofmt: the following files need formatting (run: gofmt -w <file>):"
+    echo "$unformatted"
+    exit 1
+  fi
+fi
+
+echo "▶ lint"
+pnpm run lint
+
+echo "▶ types"
+pnpm run check-types
+
+echo "▶ go build"
+task build:go
+
+echo "▶ go tests"
+task test:go
+
+echo "✔ pre-commit checks passed"

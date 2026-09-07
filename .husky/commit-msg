@@ -1,0 +1,14 @@
+msg_file="$1"
+
+# Subject = first line that is not a comment and not blank.
+subject=$(grep -vE '^[[:space:]]*#' "$msg_file" | grep -vE '^[[:space:]]*$' | head -n1)
+
+# Allowed: lowercase letters, digits, whitespace, and simple specials , . _ : ( ) / -
+if ! printf '%s' "$subject" | grep -qE '^[a-z0-9 ,._:()/-]+$'; then
+  echo "✖ invalid commit message subject:"
+  echo "    $subject"
+  echo ""
+  echo "  use lowercase only, with characters: a-z 0-9 space , . _ : ( ) / -"
+  echo "  e.g.  add protobuf contracts and buf codegen"
+  exit 1
+fi
