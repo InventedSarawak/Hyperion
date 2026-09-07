@@ -10,6 +10,7 @@ import (
 	v1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/common/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -186,11 +187,339 @@ func (x *SearchResponse) GetNextPageToken() string {
 	return ""
 }
 
+type IngestDependenciesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Repository    *v1.Repository         `protobuf:"bytes,1,opt,name=repository,proto3" json:"repository,omitempty"`
+	Dependencies  []*v1.Dependency       `protobuf:"bytes,2,rep,name=dependencies,proto3" json:"dependencies,omitempty"`
+	Author        *v1.Author             `protobuf:"bytes,3,opt,name=author,proto3" json:"author,omitempty"` // the repository's owner, when known
+	ObservedAt    *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IngestDependenciesRequest) Reset() {
+	*x = IngestDependenciesRequest{}
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IngestDependenciesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IngestDependenciesRequest) ProtoMessage() {}
+
+func (x *IngestDependenciesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IngestDependenciesRequest.ProtoReflect.Descriptor instead.
+func (*IngestDependenciesRequest) Descriptor() ([]byte, []int) {
+	return file_hyperion_intelligence_v1_intelligence_service_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *IngestDependenciesRequest) GetRepository() *v1.Repository {
+	if x != nil {
+		return x.Repository
+	}
+	return nil
+}
+
+func (x *IngestDependenciesRequest) GetDependencies() []*v1.Dependency {
+	if x != nil {
+		return x.Dependencies
+	}
+	return nil
+}
+
+func (x *IngestDependenciesRequest) GetAuthor() *v1.Author {
+	if x != nil {
+		return x.Author
+	}
+	return nil
+}
+
+func (x *IngestDependenciesRequest) GetObservedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ObservedAt
+	}
+	return nil
+}
+
+type IngestDependenciesResponse struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	DependenciesWritten int32                  `protobuf:"varint,1,opt,name=dependencies_written,json=dependenciesWritten,proto3" json:"dependencies_written,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *IngestDependenciesResponse) Reset() {
+	*x = IngestDependenciesResponse{}
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IngestDependenciesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IngestDependenciesResponse) ProtoMessage() {}
+
+func (x *IngestDependenciesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IngestDependenciesResponse.ProtoReflect.Descriptor instead.
+func (*IngestDependenciesResponse) Descriptor() ([]byte, []int) {
+	return file_hyperion_intelligence_v1_intelligence_service_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *IngestDependenciesResponse) GetDependenciesWritten() int32 {
+	if x != nil {
+		return x.DependenciesWritten
+	}
+	return 0
+}
+
+type GetBlastRadiusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CveId         string                 `protobuf:"bytes,1,opt,name=cve_id,json=cveId,proto3" json:"cve_id,omitempty"`
+	MaxDepth      int32                  `protobuf:"varint,2,opt,name=max_depth,json=maxDepth,proto3" json:"max_depth,omitempty"` // DEPENDS_ON hops to traverse; 0 = server default
+	Limit         int32                  `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`                       // cap on returned repositories; 0 = server default
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetBlastRadiusRequest) Reset() {
+	*x = GetBlastRadiusRequest{}
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetBlastRadiusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetBlastRadiusRequest) ProtoMessage() {}
+
+func (x *GetBlastRadiusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetBlastRadiusRequest.ProtoReflect.Descriptor instead.
+func (*GetBlastRadiusRequest) Descriptor() ([]byte, []int) {
+	return file_hyperion_intelligence_v1_intelligence_service_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *GetBlastRadiusRequest) GetCveId() string {
+	if x != nil {
+		return x.CveId
+	}
+	return ""
+}
+
+func (x *GetBlastRadiusRequest) GetMaxDepth() int32 {
+	if x != nil {
+		return x.MaxDepth
+	}
+	return 0
+}
+
+func (x *GetBlastRadiusRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+// ImpactedRepository is one repository the traversal reached, together with
+// the path that exposes it.
+type ImpactedRepository struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Repository    *v1.Repository         `protobuf:"bytes,1,opt,name=repository,proto3" json:"repository,omitempty"`
+	ViaPackage    *v1.PackageRef         `protobuf:"bytes,2,opt,name=via_package,json=viaPackage,proto3" json:"via_package,omitempty"` // the vulnerable library reached
+	Author        *v1.Author             `protobuf:"bytes,3,opt,name=author,proto3" json:"author,omitempty"`
+	Depth         int32                  `protobuf:"varint,4,opt,name=depth,proto3" json:"depth,omitempty"`   // hops from the repository to the vulnerable library
+	Direct        bool                   `protobuf:"varint,5,opt,name=direct,proto3" json:"direct,omitempty"` // true when the repository requires it in its own manifest
+	Path          []string               `protobuf:"bytes,6,rep,name=path,proto3" json:"path,omitempty"`      // the chain, nearest first, for display
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ImpactedRepository) Reset() {
+	*x = ImpactedRepository{}
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ImpactedRepository) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ImpactedRepository) ProtoMessage() {}
+
+func (x *ImpactedRepository) ProtoReflect() protoreflect.Message {
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ImpactedRepository.ProtoReflect.Descriptor instead.
+func (*ImpactedRepository) Descriptor() ([]byte, []int) {
+	return file_hyperion_intelligence_v1_intelligence_service_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ImpactedRepository) GetRepository() *v1.Repository {
+	if x != nil {
+		return x.Repository
+	}
+	return nil
+}
+
+func (x *ImpactedRepository) GetViaPackage() *v1.PackageRef {
+	if x != nil {
+		return x.ViaPackage
+	}
+	return nil
+}
+
+func (x *ImpactedRepository) GetAuthor() *v1.Author {
+	if x != nil {
+		return x.Author
+	}
+	return nil
+}
+
+func (x *ImpactedRepository) GetDepth() int32 {
+	if x != nil {
+		return x.Depth
+	}
+	return 0
+}
+
+func (x *ImpactedRepository) GetDirect() bool {
+	if x != nil {
+		return x.Direct
+	}
+	return false
+}
+
+func (x *ImpactedRepository) GetPath() []string {
+	if x != nil {
+		return x.Path
+	}
+	return nil
+}
+
+type GetBlastRadiusResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	CveId string                 `protobuf:"bytes,1,opt,name=cve_id,json=cveId,proto3" json:"cve_id,omitempty"`
+	// Libraries the advisory names as vulnerable, whether or not anything
+	// depends on them. Empty means the CVE has no package linkage yet.
+	VulnerablePackages []*v1.PackageRef      `protobuf:"bytes,2,rep,name=vulnerable_packages,json=vulnerablePackages,proto3" json:"vulnerable_packages,omitempty"`
+	Repositories       []*ImpactedRepository `protobuf:"bytes,3,rep,name=repositories,proto3" json:"repositories,omitempty"`
+	TotalRepositories  int32                 `protobuf:"varint,4,opt,name=total_repositories,json=totalRepositories,proto3" json:"total_repositories,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *GetBlastRadiusResponse) Reset() {
+	*x = GetBlastRadiusResponse{}
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetBlastRadiusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetBlastRadiusResponse) ProtoMessage() {}
+
+func (x *GetBlastRadiusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetBlastRadiusResponse.ProtoReflect.Descriptor instead.
+func (*GetBlastRadiusResponse) Descriptor() ([]byte, []int) {
+	return file_hyperion_intelligence_v1_intelligence_service_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *GetBlastRadiusResponse) GetCveId() string {
+	if x != nil {
+		return x.CveId
+	}
+	return ""
+}
+
+func (x *GetBlastRadiusResponse) GetVulnerablePackages() []*v1.PackageRef {
+	if x != nil {
+		return x.VulnerablePackages
+	}
+	return nil
+}
+
+func (x *GetBlastRadiusResponse) GetRepositories() []*ImpactedRepository {
+	if x != nil {
+		return x.Repositories
+	}
+	return nil
+}
+
+func (x *GetBlastRadiusResponse) GetTotalRepositories() int32 {
+	if x != nil {
+		return x.TotalRepositories
+	}
+	return 0
+}
+
 var File_hyperion_intelligence_v1_intelligence_service_proto protoreflect.FileDescriptor
 
 const file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc = "" +
 	"\n" +
-	"3hyperion/intelligence/v1/intelligence_service.proto\x12\x18hyperion.intelligence.v1\x1a&hyperion/common/v1/vulnerability.proto\"a\n" +
+	"3hyperion/intelligence/v1/intelligence_service.proto\x12\x18hyperion.intelligence.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a hyperion/common/v1/package.proto\x1a#hyperion/common/v1/repository.proto\x1a&hyperion/common/v1/vulnerability.proto\"a\n" +
 	"\rSearchRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12\x1b\n" +
 	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
@@ -201,9 +530,40 @@ const file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc = "" +
 	"\x05score\x18\x02 \x01(\x01R\x05score\"z\n" +
 	"\x0eSearchResponse\x12@\n" +
 	"\aresults\x18\x01 \x03(\v2&.hyperion.intelligence.v1.SearchResultR\aresults\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken2r\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\x90\x02\n" +
+	"\x19IngestDependenciesRequest\x12>\n" +
+	"\n" +
+	"repository\x18\x01 \x01(\v2\x1e.hyperion.common.v1.RepositoryR\n" +
+	"repository\x12B\n" +
+	"\fdependencies\x18\x02 \x03(\v2\x1e.hyperion.common.v1.DependencyR\fdependencies\x122\n" +
+	"\x06author\x18\x03 \x01(\v2\x1a.hyperion.common.v1.AuthorR\x06author\x12;\n" +
+	"\vobserved_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"observedAt\"O\n" +
+	"\x1aIngestDependenciesResponse\x121\n" +
+	"\x14dependencies_written\x18\x01 \x01(\x05R\x13dependenciesWritten\"a\n" +
+	"\x15GetBlastRadiusRequest\x12\x15\n" +
+	"\x06cve_id\x18\x01 \x01(\tR\x05cveId\x12\x1b\n" +
+	"\tmax_depth\x18\x02 \x01(\x05R\bmaxDepth\x12\x14\n" +
+	"\x05limit\x18\x03 \x01(\x05R\x05limit\"\x8b\x02\n" +
+	"\x12ImpactedRepository\x12>\n" +
+	"\n" +
+	"repository\x18\x01 \x01(\v2\x1e.hyperion.common.v1.RepositoryR\n" +
+	"repository\x12?\n" +
+	"\vvia_package\x18\x02 \x01(\v2\x1e.hyperion.common.v1.PackageRefR\n" +
+	"viaPackage\x122\n" +
+	"\x06author\x18\x03 \x01(\v2\x1a.hyperion.common.v1.AuthorR\x06author\x12\x14\n" +
+	"\x05depth\x18\x04 \x01(\x05R\x05depth\x12\x16\n" +
+	"\x06direct\x18\x05 \x01(\bR\x06direct\x12\x12\n" +
+	"\x04path\x18\x06 \x03(\tR\x04path\"\x81\x02\n" +
+	"\x16GetBlastRadiusResponse\x12\x15\n" +
+	"\x06cve_id\x18\x01 \x01(\tR\x05cveId\x12O\n" +
+	"\x13vulnerable_packages\x18\x02 \x03(\v2\x1e.hyperion.common.v1.PackageRefR\x12vulnerablePackages\x12P\n" +
+	"\frepositories\x18\x03 \x03(\v2,.hyperion.intelligence.v1.ImpactedRepositoryR\frepositories\x12-\n" +
+	"\x12total_repositories\x18\x04 \x01(\x05R\x11totalRepositories2\xe8\x02\n" +
 	"\x13IntelligenceService\x12[\n" +
-	"\x06Search\x12'.hyperion.intelligence.v1.SearchRequest\x1a(.hyperion.intelligence.v1.SearchResponseB\x9e\x02\n" +
+	"\x06Search\x12'.hyperion.intelligence.v1.SearchRequest\x1a(.hyperion.intelligence.v1.SearchResponse\x12\x7f\n" +
+	"\x12IngestDependencies\x123.hyperion.intelligence.v1.IngestDependenciesRequest\x1a4.hyperion.intelligence.v1.IngestDependenciesResponse\x12s\n" +
+	"\x0eGetBlastRadius\x12/.hyperion.intelligence.v1.GetBlastRadiusRequest\x1a0.hyperion.intelligence.v1.GetBlastRadiusResponseB\x9e\x02\n" +
 	"\x1ccom.hyperion.intelligence.v1B\x18IntelligenceServiceProtoP\x01Zbgithub.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/intelligence/v1;intelligencev1\xa2\x02\x03HIX\xaa\x02\x18Hyperion.Intelligence.V1\xca\x02\x18Hyperion\\Intelligence\\V1\xe2\x02$Hyperion\\Intelligence\\V1\\GPBMetadata\xea\x02\x1aHyperion::Intelligence::V1b\x06proto3"
 
 var (
@@ -218,23 +578,46 @@ func file_hyperion_intelligence_v1_intelligence_service_proto_rawDescGZIP() []by
 	return file_hyperion_intelligence_v1_intelligence_service_proto_rawDescData
 }
 
-var file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_hyperion_intelligence_v1_intelligence_service_proto_goTypes = []any{
-	(*SearchRequest)(nil),    // 0: hyperion.intelligence.v1.SearchRequest
-	(*SearchResult)(nil),     // 1: hyperion.intelligence.v1.SearchResult
-	(*SearchResponse)(nil),   // 2: hyperion.intelligence.v1.SearchResponse
-	(*v1.Vulnerability)(nil), // 3: hyperion.common.v1.Vulnerability
+	(*SearchRequest)(nil),              // 0: hyperion.intelligence.v1.SearchRequest
+	(*SearchResult)(nil),               // 1: hyperion.intelligence.v1.SearchResult
+	(*SearchResponse)(nil),             // 2: hyperion.intelligence.v1.SearchResponse
+	(*IngestDependenciesRequest)(nil),  // 3: hyperion.intelligence.v1.IngestDependenciesRequest
+	(*IngestDependenciesResponse)(nil), // 4: hyperion.intelligence.v1.IngestDependenciesResponse
+	(*GetBlastRadiusRequest)(nil),      // 5: hyperion.intelligence.v1.GetBlastRadiusRequest
+	(*ImpactedRepository)(nil),         // 6: hyperion.intelligence.v1.ImpactedRepository
+	(*GetBlastRadiusResponse)(nil),     // 7: hyperion.intelligence.v1.GetBlastRadiusResponse
+	(*v1.Vulnerability)(nil),           // 8: hyperion.common.v1.Vulnerability
+	(*v1.Repository)(nil),              // 9: hyperion.common.v1.Repository
+	(*v1.Dependency)(nil),              // 10: hyperion.common.v1.Dependency
+	(*v1.Author)(nil),                  // 11: hyperion.common.v1.Author
+	(*timestamppb.Timestamp)(nil),      // 12: google.protobuf.Timestamp
+	(*v1.PackageRef)(nil),              // 13: hyperion.common.v1.PackageRef
 }
 var file_hyperion_intelligence_v1_intelligence_service_proto_depIdxs = []int32{
-	3, // 0: hyperion.intelligence.v1.SearchResult.vulnerability:type_name -> hyperion.common.v1.Vulnerability
-	1, // 1: hyperion.intelligence.v1.SearchResponse.results:type_name -> hyperion.intelligence.v1.SearchResult
-	0, // 2: hyperion.intelligence.v1.IntelligenceService.Search:input_type -> hyperion.intelligence.v1.SearchRequest
-	2, // 3: hyperion.intelligence.v1.IntelligenceService.Search:output_type -> hyperion.intelligence.v1.SearchResponse
-	3, // [3:4] is the sub-list for method output_type
-	2, // [2:3] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	8,  // 0: hyperion.intelligence.v1.SearchResult.vulnerability:type_name -> hyperion.common.v1.Vulnerability
+	1,  // 1: hyperion.intelligence.v1.SearchResponse.results:type_name -> hyperion.intelligence.v1.SearchResult
+	9,  // 2: hyperion.intelligence.v1.IngestDependenciesRequest.repository:type_name -> hyperion.common.v1.Repository
+	10, // 3: hyperion.intelligence.v1.IngestDependenciesRequest.dependencies:type_name -> hyperion.common.v1.Dependency
+	11, // 4: hyperion.intelligence.v1.IngestDependenciesRequest.author:type_name -> hyperion.common.v1.Author
+	12, // 5: hyperion.intelligence.v1.IngestDependenciesRequest.observed_at:type_name -> google.protobuf.Timestamp
+	9,  // 6: hyperion.intelligence.v1.ImpactedRepository.repository:type_name -> hyperion.common.v1.Repository
+	13, // 7: hyperion.intelligence.v1.ImpactedRepository.via_package:type_name -> hyperion.common.v1.PackageRef
+	11, // 8: hyperion.intelligence.v1.ImpactedRepository.author:type_name -> hyperion.common.v1.Author
+	13, // 9: hyperion.intelligence.v1.GetBlastRadiusResponse.vulnerable_packages:type_name -> hyperion.common.v1.PackageRef
+	6,  // 10: hyperion.intelligence.v1.GetBlastRadiusResponse.repositories:type_name -> hyperion.intelligence.v1.ImpactedRepository
+	0,  // 11: hyperion.intelligence.v1.IntelligenceService.Search:input_type -> hyperion.intelligence.v1.SearchRequest
+	3,  // 12: hyperion.intelligence.v1.IntelligenceService.IngestDependencies:input_type -> hyperion.intelligence.v1.IngestDependenciesRequest
+	5,  // 13: hyperion.intelligence.v1.IntelligenceService.GetBlastRadius:input_type -> hyperion.intelligence.v1.GetBlastRadiusRequest
+	2,  // 14: hyperion.intelligence.v1.IntelligenceService.Search:output_type -> hyperion.intelligence.v1.SearchResponse
+	4,  // 15: hyperion.intelligence.v1.IntelligenceService.IngestDependencies:output_type -> hyperion.intelligence.v1.IngestDependenciesResponse
+	7,  // 16: hyperion.intelligence.v1.IntelligenceService.GetBlastRadius:output_type -> hyperion.intelligence.v1.GetBlastRadiusResponse
+	14, // [14:17] is the sub-list for method output_type
+	11, // [11:14] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_hyperion_intelligence_v1_intelligence_service_proto_init() }
@@ -248,7 +631,7 @@ func file_hyperion_intelligence_v1_intelligence_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc), len(file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

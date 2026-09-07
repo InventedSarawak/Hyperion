@@ -2,14 +2,23 @@ syntax = "proto3";
 
 package hyperion.intelligence.v1;
 
+import "google/protobuf/timestamp.proto";
+import "hyperion/common/v1/package.proto";
+import "hyperion/common/v1/repository.proto";
 import "hyperion/common/v1/vulnerability.proto";
 
 // IntelligenceService is cortex's internal gRPC API. nexus (the gateway)
 // calls it to serve external GraphQL queries; cortex implements it against
-// its search index.
+// its search index and dependency graph.
 service IntelligenceService {
   // Search runs a full-text query over indexed vulnerabilities.
   rpc Search(SearchRequest) returns (SearchResponse);
+  // IngestDependencies records one repository's manifest as graph edges.
+  // siphon calls this after reading a go.mod / package.json.
+  rpc IngestDependencies(IngestDependenciesRequest) returns (IngestDependenciesResponse);
+  // GetBlastRadius answers "who is exposed to this CVE?" by walking the
+  // dependency graph outwards from the libraries the advisory names.
+  rpc GetBlastRadius(GetBlastRadiusRequest) returns (GetBlastRadiusResponse);
 }
 
 message SearchRequest {
@@ -26,4 +35,41 @@ message SearchResult {
 message SearchResponse {
   repeated SearchResult results = 1;
   string next_page_token = 2;
+}
+
+message IngestDependenciesRequest {
+  hyperion.common.v1.Repository repository = 1;
+  repeated hyperion.common.v1.Dependency dependencies = 2;
+  hyperion.common.v1.Author author = 3; // the repository's owner, when known
+  google.protobuf.Timestamp observed_at = 4;
+}
+
+message IngestDependenciesResponse {
+  int32 dependencies_written = 1;
+}
+
+message GetBlastRadiusRequest {
+  string cve_id = 1;
+  int32 max_depth = 2; // DEPENDS_ON hops to traverse; 0 = server default
+  int32 limit = 3; // cap on returned repositories; 0 = server default
+}
+
+// ImpactedRepository is one repository the traversal reached, together with
+// the path that exposes it.
+message ImpactedRepository {
+  hyperion.common.v1.Repository repository = 1;
+  hyperion.common.v1.PackageRef via_package = 2; // the vulnerable library reached
+  hyperion.common.v1.Author author = 3;
+  int32 depth = 4; // hops from the repository to the vulnerable library
+  bool direct = 5; // true when the repository requires it in its own manifest
+  repeated string path = 6; // the chain, nearest first, for display
+}
+
+message GetBlastRadiusResponse {
+  string cve_id = 1;
+  // Libraries the advisory names as vulnerable, whether or not anything
+  // depends on them. Empty means the CVE has no package linkage yet.
+  repeated hyperion.common.v1.PackageRef vulnerable_packages = 2;
+  repeated ImpactedRepository repositories = 3;
+  int32 total_repositories = 4;
 }

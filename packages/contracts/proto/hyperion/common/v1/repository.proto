@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package hyperion.common.v1;
+
+import "hyperion/common/v1/package.proto";
+
+// Author is whoever owns a repository — a person or an organization. Modelled
+// separately from Repository so the graph can answer "who else does this
+// maintainer expose?" once one of their projects is hit.
+message Author {
+  string login = 1; // handle, e.g. "kubernetes"; unique within the forge
+  string name = 2; // display name, when the forge exposes one
+  string url = 3; // profile URL
+}
+
+// Repository is a source repository whose dependency manifests Hyperion has
+// read. owner + name is its identity; url is convenience for display.
+message Repository {
+  string owner = 1;
+  string name = 2;
+  string url = 3;
+  string default_branch = 4;
+}
+
+// Dependency is one edge out of a repository: the library it requires, and how
+// that requirement was declared.
+message Dependency {
+  PackageRef package = 1;
+  bool direct = 2; // false for transitive requirements (go.mod "// indirect")
+  string manifest_path = 3; // where it was declared, e.g. "go.mod"
+}

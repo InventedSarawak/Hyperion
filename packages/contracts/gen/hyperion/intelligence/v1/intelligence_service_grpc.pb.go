@@ -19,7 +19,9 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	IntelligenceService_Search_FullMethodName = "/hyperion.intelligence.v1.IntelligenceService/Search"
+	IntelligenceService_Search_FullMethodName             = "/hyperion.intelligence.v1.IntelligenceService/Search"
+	IntelligenceService_IngestDependencies_FullMethodName = "/hyperion.intelligence.v1.IntelligenceService/IngestDependencies"
+	IntelligenceService_GetBlastRadius_FullMethodName     = "/hyperion.intelligence.v1.IntelligenceService/GetBlastRadius"
 )
 
 // IntelligenceServiceClient is the client API for IntelligenceService service.
@@ -28,10 +30,16 @@ const (
 //
 // IntelligenceService is cortex's internal gRPC API. nexus (the gateway)
 // calls it to serve external GraphQL queries; cortex implements it against
-// its search index.
+// its search index and dependency graph.
 type IntelligenceServiceClient interface {
 	// Search runs a full-text query over indexed vulnerabilities.
 	Search(ctx context.Context, in *SearchRequest, opts ...grpc.CallOption) (*SearchResponse, error)
+	// IngestDependencies records one repository's manifest as graph edges.
+	// siphon calls this after reading a go.mod / package.json.
+	IngestDependencies(ctx context.Context, in *IngestDependenciesRequest, opts ...grpc.CallOption) (*IngestDependenciesResponse, error)
+	// GetBlastRadius answers "who is exposed to this CVE?" by walking the
+	// dependency graph outwards from the libraries the advisory names.
+	GetBlastRadius(ctx context.Context, in *GetBlastRadiusRequest, opts ...grpc.CallOption) (*GetBlastRadiusResponse, error)
 }
 
 type intelligenceServiceClient struct {
@@ -52,16 +60,42 @@ func (c *intelligenceServiceClient) Search(ctx context.Context, in *SearchReques
 	return out, nil
 }
 
+func (c *intelligenceServiceClient) IngestDependencies(ctx context.Context, in *IngestDependenciesRequest, opts ...grpc.CallOption) (*IngestDependenciesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IngestDependenciesResponse)
+	err := c.cc.Invoke(ctx, IntelligenceService_IngestDependencies_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *intelligenceServiceClient) GetBlastRadius(ctx context.Context, in *GetBlastRadiusRequest, opts ...grpc.CallOption) (*GetBlastRadiusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetBlastRadiusResponse)
+	err := c.cc.Invoke(ctx, IntelligenceService_GetBlastRadius_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // IntelligenceServiceServer is the server API for IntelligenceService service.
 // All implementations must embed UnimplementedIntelligenceServiceServer
 // for forward compatibility.
 //
 // IntelligenceService is cortex's internal gRPC API. nexus (the gateway)
 // calls it to serve external GraphQL queries; cortex implements it against
-// its search index.
+// its search index and dependency graph.
 type IntelligenceServiceServer interface {
 	// Search runs a full-text query over indexed vulnerabilities.
 	Search(context.Context, *SearchRequest) (*SearchResponse, error)
+	// IngestDependencies records one repository's manifest as graph edges.
+	// siphon calls this after reading a go.mod / package.json.
+	IngestDependencies(context.Context, *IngestDependenciesRequest) (*IngestDependenciesResponse, error)
+	// GetBlastRadius answers "who is exposed to this CVE?" by walking the
+	// dependency graph outwards from the libraries the advisory names.
+	GetBlastRadius(context.Context, *GetBlastRadiusRequest) (*GetBlastRadiusResponse, error)
 	mustEmbedUnimplementedIntelligenceServiceServer()
 }
 
@@ -74,6 +108,12 @@ type UnimplementedIntelligenceServiceServer struct{}
 
 func (UnimplementedIntelligenceServiceServer) Search(context.Context, *SearchRequest) (*SearchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Search not implemented")
+}
+func (UnimplementedIntelligenceServiceServer) IngestDependencies(context.Context, *IngestDependenciesRequest) (*IngestDependenciesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method IngestDependencies not implemented")
+}
+func (UnimplementedIntelligenceServiceServer) GetBlastRadius(context.Context, *GetBlastRadiusRequest) (*GetBlastRadiusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetBlastRadius not implemented")
 }
 func (UnimplementedIntelligenceServiceServer) mustEmbedUnimplementedIntelligenceServiceServer() {}
 func (UnimplementedIntelligenceServiceServer) testEmbeddedByValue()                             {}
@@ -114,6 +154,42 @@ func _IntelligenceService_Search_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _IntelligenceService_IngestDependencies_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IngestDependenciesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IntelligenceServiceServer).IngestDependencies(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IntelligenceService_IngestDependencies_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IntelligenceServiceServer).IngestDependencies(ctx, req.(*IngestDependenciesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _IntelligenceService_GetBlastRadius_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBlastRadiusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IntelligenceServiceServer).GetBlastRadius(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IntelligenceService_GetBlastRadius_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IntelligenceServiceServer).GetBlastRadius(ctx, req.(*GetBlastRadiusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // IntelligenceService_ServiceDesc is the grpc.ServiceDesc for IntelligenceService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -124,6 +200,14 @@ var IntelligenceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Search",
 			Handler:    _IntelligenceService_Search_Handler,
+		},
+		{
+			MethodName: "IngestDependencies",
+			Handler:    _IntelligenceService_IngestDependencies_Handler,
+		},
+		{
+			MethodName: "GetBlastRadius",
+			Handler:    _IntelligenceService_GetBlastRadius_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
