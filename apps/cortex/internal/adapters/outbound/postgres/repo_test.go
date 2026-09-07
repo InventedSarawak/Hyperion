@@ -13,6 +13,7 @@ import (
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/postgres"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/model"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/ports"
+	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/valueobject"
 )
 
 // This suite needs a real Postgres. It is skipped unless CORTEX_TEST_DATABASE_URL
@@ -106,3 +107,82 @@ func withSearchPath(dsn, schema string) string {
 	u.RawQuery = q.Encode()
 	return u.String()
 }
+
+var _ = Describe("Postgres affected packages (integration)", func() {
+	var (
+		ctx  = context.Background()
+		repo *postgres.Repo
+	)
+
+	BeforeEach(func() {
+		dsn := os.Getenv("CORTEX_TEST_DATABASE_URL")
+		if dsn == "" {
+			Skip("set CORTEX_TEST_DATABASE_URL to run Postgres integration tests")
+		}
+		schema := fmt.Sprintf("hyperion_pkg_test_%d", time.Now().UnixNano())
+
+		admin, err := postgres.Connect(ctx, dsn)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = admin.Exec(ctx, "CREATE SCHEMA "+schema)
+		Expect(err).ToNot(HaveOccurred())
+		admin.Close()
+
+		pool, err := postgres.Connect(ctx, withSearchPath(dsn, schema))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(postgres.Migrate(ctx, pool)).To(Succeed())
+
+		DeferCleanup(func() {
+			pool.Close()
+			cleanup, err := postgres.Connect(ctx, dsn)
+			if err == nil {
+				_, _ = cleanup.Exec(ctx, "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
+				cleanup.Close()
+			}
+		})
+		repo = postgres.NewRepo(pool)
+	})
+
+	It("round-trips the packages a CVE affects", func() {
+		Expect(repo.Upsert(ctx, model.Vulnerability{
+			CVEID: "CVE-2021-44228",
+			AffectedPackages: []valueobject.PackageRef{
+				valueobject.NewPackageRef("maven", "org.apache.logging.log4j:log4j-core", ">= 2.0.1, < 2.15.0"),
+				valueobject.NewPackageRef("npm", "lodash", "< 4.17.21"),
+			},
+		})).To(Succeed())
+
+		got, err := repo.GetByCVE(ctx, "CVE-2021-44228")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got.AffectedPackages).To(HaveLen(2))
+		Expect(got.AffectedPackages[0].Key()).To(Equal("maven:org.apache.logging.log4j:log4j-core"))
+		Expect(got.AffectedPackages[0].Version).To(Equal(">= 2.0.1, < 2.15.0"))
+		Expect(got.AffectedPackages[1].Ecosystem).To(Equal(valueobject.EcosystemNPM))
+	})
+
+	It("keeps the linkage when a later source reports the CVE without packages", func() {
+		// This is why the column exists: the merge can only preserve a
+		// package linkage it can read back out of storage.
+		Expect(repo.Upsert(ctx, model.Vulnerability{
+			CVEID:            "CVE-2021-23337",
+			AffectedPackages: []valueobject.PackageRef{valueobject.NewPackageRef("npm", "lodash", "< 4.17.21")},
+		})).To(Succeed())
+
+		stored, err := repo.GetByCVE(ctx, "CVE-2021-23337")
+		Expect(err).ToNot(HaveOccurred())
+
+		merged := stored.Merge(model.Vulnerability{CVEID: "CVE-2021-23337", Description: "from nvd"})
+		Expect(repo.Upsert(ctx, merged)).To(Succeed())
+
+		got, err := repo.GetByCVE(ctx, "CVE-2021-23337")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got.Description).To(Equal("from nvd"))
+		Expect(got.AffectedPackages).To(HaveLen(1))
+	})
+
+	It("stores an empty list rather than null for a CVE with no packages", func() {
+		Expect(repo.Upsert(ctx, model.Vulnerability{CVEID: "CVE-2000-0001"})).To(Succeed())
+		got, err := repo.GetByCVE(ctx, "CVE-2000-0001")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got.AffectedPackages).To(BeNil())
+	})
+})
