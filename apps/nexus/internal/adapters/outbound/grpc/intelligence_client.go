@@ -113,3 +113,72 @@ func fromTimestamp(ts *timestamppb.Timestamp) time.Time {
 	}
 	return ts.AsTime()
 }
+
+// BlastRadius calls cortex and maps the traversal into gateway view models.
+func (c *Client) BlastRadius(ctx context.Context, cveID string, maxDepth, limit int) (model.BlastRadius, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timout)
+	defer cancel()
+
+	resp, err := c.stub.GetBlastRadius(ctx, &intelv1.GetBlastRadiusRequest{
+		CveId:    cveID,
+		MaxDepth: int32(maxDepth),
+		Limit:    int32(limit),
+	})
+	if err != nil {
+		return model.BlastRadius{}, fmt.Errorf("grpc: blast radius: %w", err)
+	}
+
+	radius := model.BlastRadius{CVEID: resp.GetCveId()}
+	for _, p := range resp.GetVulnerablePackages() {
+		radius.VulnerablePackages = append(radius.VulnerablePackages, packageLabel(p))
+	}
+	for _, r := range resp.GetRepositories() {
+		repo := r.GetRepository()
+		radius.Repositories = append(radius.Repositories, model.ImpactedRepository{
+			Owner:      repo.GetOwner(),
+			Name:       repo.GetName(),
+			URL:        repo.GetUrl(),
+			AuthorName: r.GetAuthor().GetLogin(),
+			ViaPackage: packageLabel(r.GetViaPackage()),
+			Depth:      int(r.GetDepth()),
+			Direct:     r.GetDirect(),
+			Path:       r.GetPath(),
+		})
+	}
+	return radius, nil
+}
+
+// packageLabel renders a package reference the way the graph keys it,
+// e.g. "npm:fast-uri".
+func packageLabel(p *commonv1.PackageRef) string {
+	if p == nil {
+		return ""
+	}
+	if ecosystem := ecosystemLabel(p.GetEcosystem()); ecosystem != "" {
+		return ecosystem + ":" + p.GetName()
+	}
+	return p.GetName()
+}
+
+func ecosystemLabel(e commonv1.Ecosystem) string {
+	switch e {
+	case commonv1.Ecosystem_ECOSYSTEM_GO:
+		return "go"
+	case commonv1.Ecosystem_ECOSYSTEM_NPM:
+		return "npm"
+	case commonv1.Ecosystem_ECOSYSTEM_PYPI:
+		return "pypi"
+	case commonv1.Ecosystem_ECOSYSTEM_MAVEN:
+		return "maven"
+	case commonv1.Ecosystem_ECOSYSTEM_CARGO:
+		return "cargo"
+	case commonv1.Ecosystem_ECOSYSTEM_RUBYGEMS:
+		return "rubygems"
+	case commonv1.Ecosystem_ECOSYSTEM_NUGET:
+		return "nuget"
+	case commonv1.Ecosystem_ECOSYSTEM_PACKAGIST:
+		return "packagist"
+	default:
+		return ""
+	}
+}

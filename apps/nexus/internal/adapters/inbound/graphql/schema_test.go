@@ -3,11 +3,13 @@ package graphql_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"time"
 
+	"github.com/graphql-go/graphql"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -55,7 +57,7 @@ var _ = Describe("GraphQL adapter", func() {
 			NextPageToken: "25",
 		}}
 
-		schema, err := graphqladapter.NewSchema(stub)
+		schema, err := graphqladapter.NewSchema(stub, &stubBlast{})
 		Expect(err).ToNot(HaveOccurred())
 
 		out := post(graphqladapter.NewHandler(schema),
@@ -83,7 +85,7 @@ var _ = Describe("GraphQL adapter", func() {
 	})
 
 	It("reports a GraphQL error when the required term is missing", func() {
-		schema, err := graphqladapter.NewSchema(&stubSearcher{})
+		schema, err := graphqladapter.NewSchema(&stubSearcher{}, &stubBlast{})
 		Expect(err).ToNot(HaveOccurred())
 
 		out := post(graphqladapter.NewHandler(schema), `{ search { hits { score } } }`)
@@ -91,7 +93,7 @@ var _ = Describe("GraphQL adapter", func() {
 	})
 
 	It("rejects non-POST requests", func() {
-		schema, err := graphqladapter.NewSchema(&stubSearcher{})
+		schema, err := graphqladapter.NewSchema(&stubSearcher{}, &stubBlast{})
 		Expect(err).ToNot(HaveOccurred())
 
 		req := httptest.NewRequest(http.MethodGet, "/graphql", nil)
@@ -108,5 +110,97 @@ var _ = Describe("GraphQL adapter", func() {
 
 		Expect(rec.Code).To(Equal(http.StatusOK))
 		Expect(rec.Body.String()).To(ContainSubstring("Hyperion"))
+	})
+})
+
+// stubBlast stands in for the blast-radius use case.
+type stubBlast struct {
+	gotCVE   string
+	gotDepth int
+	gotLimit int
+	result   model.BlastRadius
+	err      error
+}
+
+func (s *stubBlast) Handle(_ context.Context, cveID string, maxDepth, limit int) (model.BlastRadius, error) {
+	s.gotCVE, s.gotDepth, s.gotLimit = cveID, maxDepth, limit
+	return s.result, s.err
+}
+
+var _ = Describe("GraphQL blastRadius query", func() {
+	radius := model.BlastRadius{
+		CVEID:              "CVE-2026-64646",
+		VulnerablePackages: []string{"npm:next"},
+		Repositories: []model.ImpactedRepository{{
+			Owner: "vercel", Name: "commerce", URL: "https://github.com/vercel/commerce",
+			AuthorName: "vercel", ViaPackage: "npm:next", Depth: 1, Direct: true,
+			Path: []string{"vercel/commerce", "npm:next"},
+		}},
+	}
+
+	run := func(stub *stubBlast, query string) *graphql.Result {
+		GinkgoHelper()
+		schema, err := graphqladapter.NewSchema(&stubSearcher{}, stub)
+		Expect(err).ToNot(HaveOccurred())
+		return graphql.Do(graphql.Params{Schema: schema, RequestString: query})
+	}
+
+	It("returns the exposed repositories with their dependency chain", func() {
+		stub := &stubBlast{result: radius}
+
+		result := run(stub, `{ blastRadius(cveId:"CVE-2026-64646", maxDepth:3, limit:50){
+			cveId linked totalRepositories vulnerablePackages
+			repositories { fullName owner name url authorName viaPackage depth direct path chain }
+		} }`)
+
+		Expect(result.Errors).To(BeEmpty())
+		Expect(stub.gotCVE).To(Equal("CVE-2026-64646"))
+		Expect(stub.gotDepth).To(Equal(3))
+		Expect(stub.gotLimit).To(Equal(50))
+
+		data, ok := result.Data.(map[string]any)
+		Expect(ok).To(BeTrue())
+		br, ok := data["blastRadius"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(br["cveId"]).To(Equal("CVE-2026-64646"))
+		Expect(br["linked"]).To(Equal(true))
+		Expect(br["totalRepositories"]).To(Equal(1))
+
+		repos, ok := br["repositories"].([]any)
+		Expect(ok).To(BeTrue())
+		Expect(repos).To(HaveLen(1))
+		repo, ok := repos[0].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(repo["fullName"]).To(Equal("vercel/commerce"))
+		Expect(repo["direct"]).To(Equal(true))
+		Expect(repo["chain"]).To(Equal("vercel/commerce → npm:next"))
+	})
+
+	It("distinguishes an unlinked CVE from one that affects nothing", func() {
+		// linked=false means we could not answer; it must not read as
+		// "nothing is affected".
+		stub := &stubBlast{result: model.BlastRadius{CVEID: "CVE-2021-44228"}}
+
+		result := run(stub, `{ blastRadius(cveId:"CVE-2021-44228"){ linked totalRepositories } }`)
+
+		Expect(result.Errors).To(BeEmpty())
+		data, _ := result.Data.(map[string]any)
+		br, _ := data["blastRadius"].(map[string]any)
+		Expect(br["linked"]).To(Equal(false))
+		Expect(br["totalRepositories"]).To(Equal(0))
+	})
+
+	It("surfaces a use-case failure as a GraphQL error", func() {
+		stub := &stubBlast{err: errors.New("graph unavailable")}
+
+		result := run(stub, `{ blastRadius(cveId:"CVE-1"){ cveId } }`)
+
+		Expect(result.Errors).ToNot(BeEmpty())
+		Expect(result.Errors[0].Message).To(ContainSubstring("graph unavailable"))
+	})
+
+	It("requires a cveId", func() {
+		result := run(&stubBlast{}, `{ blastRadius{ cveId } }`)
+		Expect(result.Errors).ToNot(BeEmpty())
 	})
 })

@@ -65,3 +65,9 @@ var _ = Describe("SearchVulnerabilities use case", func() {
 		Expect(stub.gotToken).To(Equal("50"))
 	})
 })
+
+// BlastRadius satisfies ports.IntelligenceClient; the blast-radius specs use
+// their own stub, so this one only needs to compile.
+func (s *stubIntelligence) BlastRadius(context.Context, string, int, int) (model.BlastRadius, error) {
+	return model.BlastRadius{}, nil
+}

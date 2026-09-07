@@ -12,4 +12,7 @@ import (
 // gRPC — swap the transport and only the adapter changes.
 type IntelligenceClient interface {
 	Search(ctx context.Context, query string, pageSize int, pageToken string) (model.SearchResult, error)
+	// BlastRadius returns the repositories a vulnerability reaches through
+	// the dependency graph.
+	BlastRadius(ctx context.Context, cveID string, maxDepth, limit int) (model.BlastRadius, error)
 }

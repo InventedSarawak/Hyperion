@@ -17,6 +17,11 @@ type Searcher interface {
 	Handle(ctx context.Context, term string, pageSize int, pageToken string) (model.SearchResult, error)
 }
 
+// BlastRadiusResolver answers which repositories a vulnerability reaches.
+type BlastRadiusResolver interface {
+	Handle(ctx context.Context, cveID string, maxDepth, limit int) (model.BlastRadius, error)
+}
+
 // cvssType mirrors model.CVSS.
 var cvssType = graphql.NewObject(graphql.ObjectConfig{
 	Name: "Cvss",
@@ -58,8 +63,59 @@ var searchResultType = graphql.NewObject(graphql.ObjectConfig{
 	},
 })
 
-// NewSchema builds the GraphQL schema, wiring the `search` query to the use case.
-func NewSchema(searcher Searcher) (graphql.Schema, error) {
+// impactedRepositoryType mirrors model.ImpactedRepository.
+var impactedRepositoryType = graphql.NewObject(graphql.ObjectConfig{
+	Name: "ImpactedRepository",
+	Fields: graphql.Fields{
+		"fullName": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "owner/name, e.g. \"vercel/commerce\"",
+		},
+		"owner":      &graphql.Field{Type: graphql.String},
+		"name":       &graphql.Field{Type: graphql.String},
+		"url":        &graphql.Field{Type: graphql.String},
+		"authorName": &graphql.Field{Type: graphql.String},
+		"viaPackage": &graphql.Field{
+			Type:        graphql.String,
+			Description: "the vulnerable library this repository reaches",
+		},
+		"depth": &graphql.Field{
+			Type:        graphql.Int,
+			Description: "dependency hops from the repository to the vulnerable library",
+		},
+		"direct": &graphql.Field{
+			Type:        graphql.Boolean,
+			Description: "true when the repository's own manifest names the library",
+		},
+		"path": &graphql.Field{Type: graphql.NewList(graphql.String)},
+		"chain": &graphql.Field{
+			Type:        graphql.String,
+			Description: "the dependency path rendered for display",
+		},
+	},
+})
+
+// blastRadiusType mirrors model.BlastRadius.
+var blastRadiusType = graphql.NewObject(graphql.ObjectConfig{
+	Name: "BlastRadius",
+	Fields: graphql.Fields{
+		"cveId": &graphql.Field{Type: graphql.NewNonNull(graphql.String)},
+		"vulnerablePackages": &graphql.Field{
+			Type:        graphql.NewList(graphql.String),
+			Description: "libraries the advisory names as vulnerable",
+		},
+		"repositories":      &graphql.Field{Type: graphql.NewList(impactedRepositoryType)},
+		"totalRepositories": &graphql.Field{Type: graphql.Int},
+		"linked": &graphql.Field{
+			Type: graphql.Boolean,
+			Description: "false when the CVE has no package linkage at all — an empty " +
+				"repository list then means 'unknown', not 'nothing is affected'",
+		},
+	},
+})
+
+// NewSchema builds the GraphQL schema, wiring each query to its use case.
+func NewSchema(searcher Searcher, blast BlastRadiusResolver) (graphql.Schema, error) {
 	query := graphql.NewObject(graphql.ObjectConfig{
 		Name: "Query",
 		Fields: graphql.Fields{
@@ -81,6 +137,26 @@ func NewSchema(searcher Searcher) (graphql.Schema, error) {
 						return nil, err
 					}
 					return toGraphQL(result), nil
+				},
+			},
+			"blastRadius": &graphql.Field{
+				Type:        blastRadiusType,
+				Description: "Which repositories a vulnerability reaches through the dependency graph.",
+				Args: graphql.FieldConfigArgument{
+					"cveId":    &graphql.ArgumentConfig{Type: graphql.NewNonNull(graphql.String)},
+					"maxDepth": &graphql.ArgumentConfig{Type: graphql.Int},
+					"limit":    &graphql.ArgumentConfig{Type: graphql.Int},
+				},
+				Resolve: func(p graphql.ResolveParams) (any, error) {
+					cveID, _ := p.Args["cveId"].(string)
+					maxDepth, _ := p.Args["maxDepth"].(int)
+					limit, _ := p.Args["limit"].(int)
+
+					radius, err := blast.Handle(p.Context, cveID, maxDepth, limit)
+					if err != nil {
+						return nil, err
+					}
+					return blastRadiusMap(radius), nil
 				},
 			},
 		},
@@ -130,4 +206,29 @@ func vulnerabilityMap(v model.Vulnerability) map[string]any {
 		out["modifiedAt"] = v.ModifiedAt.UTC().Format("2006-01-02T15:04:05Z")
 	}
 	return out
+}
+
+func blastRadiusMap(r model.BlastRadius) map[string]any {
+	repos := make([]map[string]any, 0, len(r.Repositories))
+	for _, repo := range r.Repositories {
+		repos = append(repos, map[string]any{
+			"fullName":   repo.FullName(),
+			"owner":      repo.Owner,
+			"name":       repo.Name,
+			"url":        repo.URL,
+			"authorName": repo.AuthorName,
+			"viaPackage": repo.ViaPackage,
+			"depth":      repo.Depth,
+			"direct":     repo.Direct,
+			"path":       repo.Path,
+			"chain":      repo.Chain(),
+		})
+	}
+	return map[string]any{
+		"cveId":              r.CVEID,
+		"vulnerablePackages": r.VulnerablePackages,
+		"repositories":       repos,
+		"totalRepositories":  len(r.Repositories),
+		"linked":             r.Linked(),
+	}
 }
