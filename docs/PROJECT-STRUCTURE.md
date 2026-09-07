@@ -2,7 +2,8 @@
 
 > Some directories below are placeholders for planned work. See
 > [TECHNICAL-DEBT.md](./TECHNICAL-DEBT.md) for what is genuinely implemented versus
-> scaffolded, and the shortcuts taken to get here.
+> scaffolded, and the shortcuts taken to get here. To actually run any of it, see
+> [RUNBOOK.md](./RUNBOOK.md).
 
 ## Service Codenames
 
