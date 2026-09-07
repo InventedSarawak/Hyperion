@@ -44,7 +44,7 @@ var _ = Describe("GitHub Advisory adapter", func() {
 		}))
 		defer srv.Close()
 
-		c := github.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()))
+		c := github.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()), sourcehttp.WithRateLimit(time.Millisecond))
 		Expect(c.Kind()).To(Equal(valueobject.SourceKindGitHubAdvisory))
 
 		got, err := c.Fetch(ctx, time.Time{})
@@ -66,7 +66,7 @@ var _ = Describe("GitHub Advisory adapter", func() {
 		}))
 		defer srv.Close()
 
-		got, err := github.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client())).Fetch(ctx, time.Time{})
+		got, err := github.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()), sourcehttp.WithRateLimit(time.Millisecond)).Fetch(ctx, time.Time{})
 		Expect(err).ToNot(HaveOccurred())
 
 		// Two entries for log4j-core collapse to one; "pip" normalizes to
@@ -84,7 +84,7 @@ var _ = Describe("GitHub Advisory adapter", func() {
 		}))
 		defer srv.Close()
 
-		got, err := github.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client())).Fetch(ctx, time.Time{})
+		got, err := github.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()), sourcehttp.WithRateLimit(time.Millisecond)).Fetch(ctx, time.Time{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got[1].AffectedPackages).To(BeNil())
 	})
@@ -95,7 +95,7 @@ var _ = Describe("GitHub Advisory adapter", func() {
 		}))
 		defer srv.Close()
 
-		got, err := github.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client())).Fetch(ctx, time.Time{})
+		got, err := github.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()), sourcehttp.WithRateLimit(time.Millisecond)).Fetch(ctx, time.Time{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got[1].CVEID).To(Equal("GHSA-only-no-cve"))
 	})
@@ -108,12 +108,65 @@ var _ = Describe("GitHub Advisory adapter", func() {
 		}))
 		defer srv.Close()
 
-		_, err := github.New(srv.URL, "tok123", sourcehttp.WithHTTPClient(srv.Client())).
+		_, err := github.New(srv.URL, "tok123", sourcehttp.WithHTTPClient(srv.Client()), sourcehttp.WithRateLimit(time.Millisecond)).
 			Fetch(ctx, time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC))
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(gotAuth).To(Equal("Bearer tok123"))
 		Expect(gotQuery).To(ContainSubstring("modified"))
 		Expect(gotQuery).To(ContainSubstring("per_page=100"))
+	})
+})
+
+var _ = Describe("GitHub Advisory reviewed pass", func() {
+	ctx := context.Background()
+
+	// The unfiltered feed is almost entirely "unreviewed" NVD imports with no
+	// package data; the reviewed feed is where the package linkage lives.
+	const unreviewed = `[{"ghsa_id":"GHSA-unreviewed","cve_id":"CVE-2026-0001",
+	  "summary":"Imported from NVD","severity":"high","vulnerabilities":[]}]`
+	const reviewed = `[{"ghsa_id":"GHSA-reviewed","cve_id":"CVE-2026-0002",
+	  "summary":"Curated","severity":"critical",
+	  "vulnerabilities":[{"package":{"ecosystem":"npm","name":"lodash"},
+	    "vulnerable_version_range":"< 4.17.21"}]}]`
+
+	It("asks for reviewed advisories explicitly, so package linkage is not crowded out", func() {
+		var types []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			advisoryType := r.URL.Query().Get("type")
+			types = append(types, advisoryType)
+			if advisoryType == "reviewed" {
+				_, _ = w.Write([]byte(reviewed))
+				return
+			}
+			_, _ = w.Write([]byte(unreviewed))
+		}))
+		defer srv.Close()
+
+		got, err := github.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()),
+			sourcehttp.WithRateLimit(time.Millisecond)).Fetch(ctx, time.Time{})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(types).To(ContainElement("reviewed"))
+		Expect(types).To(ContainElement(""), "the unfiltered feed is still read")
+
+		Expect(got).To(HaveLen(2))
+		Expect(got[0].AffectedPackages).To(BeEmpty())
+		Expect(got[1].CVEID).To(Equal("CVE-2026-0002"))
+		Expect(got[1].AffectedPackages).To(HaveLen(1))
+		Expect(got[1].AffectedPackages[0].Name).To(Equal("lodash"))
+	})
+
+	It("does not report an advisory twice when it appears in both passes", func() {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(reviewed))
+		}))
+		defer srv.Close()
+
+		got, err := github.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()),
+			sourcehttp.WithRateLimit(time.Millisecond)).Fetch(ctx, time.Time{})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got).To(HaveLen(1))
 	})
 })

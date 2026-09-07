@@ -64,11 +64,42 @@ func New(baseURL, token string, opts ...sourcehttp.Option) *Client {
 func (c *Client) Kind() valueobject.SourceKind { return valueobject.SourceKindGitHubAdvisory }
 
 // Fetch returns advisories updated at or after `since`, walking pages.
+//
+// It makes two passes. The unfiltered feed is dominated by "unreviewed"
+// advisories — automated NVD imports that carry no affected-package data at
+// all — so a recency-sorted window buries the handful of reviewed advisories
+// that do. Since those are the only ones that link a CVE to a library, and
+// blast radius is worthless without that link, the reviewed feed is asked for
+// explicitly rather than hoped for.
+//
+// Duplicates between the passes are dropped, so the extra request costs one
+// page of quota and no repeated work downstream.
 func (c *Client) Fetch(ctx context.Context, since time.Time) ([]model.SourceSignal, error) {
+	var (
+		signals []model.SourceSignal
+		seen    = make(map[string]struct{})
+	)
+
+	for _, advisoryType := range []string{"", typeReviewed} {
+		batch, err := c.fetchPass(ctx, since, advisoryType, seen)
+		signals = append(signals, batch...)
+		if err != nil {
+			return signals, err
+		}
+	}
+	return signals, nil
+}
+
+// typeReviewed selects the advisories GitHub curates by hand, which are the
+// ones carrying ecosystem package linkage.
+const typeReviewed = "reviewed"
+
+// fetchPass walks the pages of one feed, skipping advisories already seen.
+func (c *Client) fetchPass(ctx context.Context, since time.Time, advisoryType string, seen map[string]struct{}) ([]model.SourceSignal, error) {
 	var signals []model.SourceSignal
 
 	for page := 1; page <= c.maxPages; page++ {
-		endpoint, err := c.pageURL(since, page)
+		endpoint, err := c.pageURL(since, page, advisoryType)
 		if err != nil {
 			return signals, err
 		}
@@ -78,6 +109,12 @@ func (c *Client) Fetch(ctx context.Context, since time.Time) ([]model.SourceSign
 			return signals, fmt.Errorf("github advisory: %w", err)
 		}
 		for _, a := range batch {
+			if key := dedupeKey(a); key != "" {
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+			}
 			signals = append(signals, toSourceSignal(a))
 		}
 		if len(batch) < c.pageSize {
@@ -87,9 +124,19 @@ func (c *Client) Fetch(ctx context.Context, since time.Time) ([]model.SourceSign
 	return signals, nil
 }
 
+// dedupeKey identifies an advisory across the two passes. The GHSA id is the
+// stable one; the CVE id is a fallback for records that somehow lack it.
+func dedupeKey(a advisory) string {
+	if a.GHSAID != "" {
+		return a.GHSAID
+	}
+	return a.CVEID
+}
+
 // pageURL builds one request URL. GitHub's `modified` filter takes an
-// ISO-8601 range expression, e.g. ">=2024-01-02T03:04:05Z".
-func (c *Client) pageURL(since time.Time, page int) (string, error) {
+// ISO-8601 range expression, e.g. ">=2024-01-02T03:04:05Z". An empty
+// advisoryType asks for every type.
+func (c *Client) pageURL(since time.Time, page int, advisoryType string) (string, error) {
 	u, err := url.Parse(c.baseURL + "/advisories")
 	if err != nil {
 		return "", fmt.Errorf("github advisory: parse base url: %w", err)
@@ -100,6 +147,9 @@ func (c *Client) pageURL(since time.Time, page int) (string, error) {
 	q.Set("page", strconv.Itoa(page))
 	q.Set("sort", "updated")
 	q.Set("direction", "desc")
+	if advisoryType != "" {
+		q.Set("type", advisoryType)
+	}
 	if !since.IsZero() {
 		q.Set("modified", ">="+since.UTC().Format(time.RFC3339))
 	}
