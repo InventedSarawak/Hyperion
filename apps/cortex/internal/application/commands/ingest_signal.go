@@ -16,12 +16,14 @@ import (
 type IngestSignal struct {
 	repo  ports.VulnerabilityRepo
 	index ports.SearchIndex
+	graph ports.DependencyGraph
 	log   *slog.Logger
 }
 
-// NewIngestSignal wires the use case with its storage and search ports.
-func NewIngestSignal(repo ports.VulnerabilityRepo, index ports.SearchIndex) *IngestSignal {
-	return &IngestSignal{repo: repo, index: index, log: slog.Default()}
+// NewIngestSignal wires the use case with its storage, search and graph ports.
+// The graph may be nil or unavailable; storage is the only hard requirement.
+func NewIngestSignal(repo ports.VulnerabilityRepo, index ports.SearchIndex, graph ports.DependencyGraph) *IngestSignal {
+	return &IngestSignal{repo: repo, index: index, graph: graph, log: slog.Default()}
 }
 
 // Handle validates, merges with any existing record, persists, and indexes.
@@ -50,6 +52,21 @@ func (c *IngestSignal) Handle(ctx context.Context, incoming model.Vulnerability)
 		if err := c.index.Index(ctx, incoming); err != nil {
 			c.log.Warn("indexing failed; record is stored but not searchable",
 				"cve", incoming.CVEID, "error", err)
+		}
+	}
+
+	// Connect the finding to the libraries it affects, so a blast-radius
+	// traversal can reach it. Like indexing, this is best-effort: the record
+	// is already stored, and a graph outage must not fail the ingest.
+	if c.graph != nil && len(incoming.AffectedPackages) > 0 {
+		if err := c.graph.LinkVulnerability(ctx, incoming.CVEID, incoming.AffectedPackages); err != nil {
+			if errors.Is(err, ports.ErrGraphUnavailable) {
+				c.log.Debug("graph disabled; vulnerability not linked to its packages",
+					"cve", incoming.CVEID)
+			} else {
+				c.log.Warn("graph link failed; record is stored but has no blast radius",
+					"cve", incoming.CVEID, "error", err)
+			}
 		}
 	}
 	return nil

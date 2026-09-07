@@ -13,6 +13,7 @@ import (
 
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/inbound/consumer"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/model"
+	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/valueobject"
 )
 
 // captureIngester records what the consumer would ingest.
@@ -73,5 +74,46 @@ var _ = Describe("Consumer", func() {
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(n).To(Equal(2))
+	})
+})
+
+var _ = Describe("Consumer affected packages", func() {
+	It("maps affected packages off the wire into the domain", func() {
+		msg := &eventsv1.SignalDiscovered{
+			SignalId: "github_advisory:CVE-2021-44228",
+			Source:   eventsv1.SourceKind_SOURCE_KIND_GITHUB_ADVISORY,
+			Vulnerability: &commonv1.Vulnerability{
+				CveId: "CVE-2021-44228",
+				AffectedPackages: []*commonv1.PackageRef{
+					{
+						Ecosystem: commonv1.Ecosystem_ECOSYSTEM_MAVEN,
+						Name:      "org.apache.logging.log4j:log4j-core",
+						Version:   ">= 2.0.1, < 2.15.0",
+					},
+					{Ecosystem: commonv1.Ecosystem_ECOSYSTEM_UNSPECIFIED, Name: "unmodelled"},
+				},
+			},
+		}
+		line, err := protojson.Marshal(msg)
+		Expect(err).ToNot(HaveOccurred())
+
+		ingester := &captureIngester{}
+		n, err := consumer.NewConsumer(ingester).Run(context.Background(), strings.NewReader(string(line)))
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(n).To(Equal(1))
+		Expect(ingester.got[0].AffectedPackages).To(HaveLen(2))
+		Expect(ingester.got[0].AffectedPackages[0].Key()).To(Equal("maven:org.apache.logging.log4j:log4j-core"))
+		Expect(ingester.got[0].AffectedPackages[0].Version).To(Equal(">= 2.0.1, < 2.15.0"))
+		Expect(ingester.got[0].AffectedPackages[1].Ecosystem).To(Equal(valueobject.EcosystemUnknown))
+	})
+
+	It("leaves affected packages nil when the event carries none", func() {
+		ingester := &captureIngester{}
+		_, err := consumer.NewConsumer(ingester).Run(context.Background(),
+			strings.NewReader(eventLine("CVE-2021-44228", commonv1.Severity_SEVERITY_CRITICAL)))
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(ingester.got[0].AffectedPackages).To(BeNil())
 	})
 })

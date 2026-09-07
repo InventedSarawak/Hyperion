@@ -58,7 +58,7 @@ func main() {
 	graph, closeGraph := buildDependencyGraph(ctx, logger, cfg)
 	defer closeGraph()
 
-	ingest := commands.NewIngestSignal(repo, index)
+	ingest := commands.NewIngestSignal(repo, index, graph)
 	ingestDeps := commands.NewIngestDependency(graph)
 	search := queries.NewSearch(index)
 	blast := queries.NewCalculateBlastRadius(graph, cfg.BlastRadiusMaxDepth)

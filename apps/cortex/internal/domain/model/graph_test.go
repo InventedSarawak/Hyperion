@@ -173,3 +173,48 @@ var _ = Describe("BlastRadius", func() {
 		Expect(linkedButUnused.TotalRepositories()).To(Equal(0))
 	})
 })
+
+var _ = Describe("Vulnerability affected packages", func() {
+	maven := valueobject.NewPackageRef("maven", "org.apache.logging.log4j:log4j-core", ">= 2.0.1, < 2.15.0")
+	npm := valueobject.NewPackageRef("npm", "lodash", "< 4.17.21")
+
+	It("keeps a package linkage that a later source does not report", func() {
+		// GitHub names the package; NVD then re-reports the same CVE with no
+		// package at all. Losing the link here would silently disconnect the
+		// CVE from every repository it reaches.
+		fromGitHub := model.Vulnerability{CVEID: "CVE-2021-44228", AffectedPackages: []valueobject.PackageRef{maven}}
+		fromNVD := model.Vulnerability{CVEID: "CVE-2021-44228", Description: "updated"}
+
+		merged := fromGitHub.Merge(fromNVD)
+
+		Expect(merged.Description).To(Equal("updated"))
+		Expect(merged.AffectedPackages).To(HaveLen(1))
+		Expect(merged.AffectedPackages[0].Name).To(Equal(maven.Name))
+	})
+
+	It("unions packages reported by different sources", func() {
+		a := model.Vulnerability{CVEID: "CVE-1", AffectedPackages: []valueobject.PackageRef{maven}}
+		b := model.Vulnerability{CVEID: "CVE-1", AffectedPackages: []valueobject.PackageRef{npm}}
+
+		merged := a.Merge(b)
+
+		Expect(merged.AffectedPackages).To(HaveLen(2))
+	})
+
+	It("keys on the library, so one package with two ranges stays one entry", func() {
+		other := valueobject.NewPackageRef("maven", "org.apache.logging.log4j:log4j-core", ">= 2.13.0, < 2.16.0")
+		a := model.Vulnerability{CVEID: "CVE-1", AffectedPackages: []valueobject.PackageRef{maven}}
+		b := model.Vulnerability{CVEID: "CVE-1", AffectedPackages: []valueobject.PackageRef{other}}
+
+		merged := a.Merge(b)
+
+		Expect(merged.AffectedPackages).To(HaveLen(1))
+		Expect(merged.AffectedPackages[0].Version).To(Equal(maven.Version), "the first observation's range is kept")
+	})
+
+	It("drops references with no name and stays nil when there is nothing to keep", func() {
+		a := model.Vulnerability{CVEID: "CVE-1", AffectedPackages: []valueobject.PackageRef{{Ecosystem: valueobject.EcosystemNPM}}}
+		merged := a.Merge(model.Vulnerability{CVEID: "CVE-1"})
+		Expect(merged.AffectedPackages).To(BeNil())
+	})
+})

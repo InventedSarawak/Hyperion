@@ -5,6 +5,8 @@ package model
 import (
 	"errors"
 	"time"
+
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/valueobject"
 )
 
 // Severity is the domain's qualitative rating for a score.
@@ -38,6 +40,11 @@ type SourceSignal struct {
 	References  []string
 	PublishedAt time.Time
 	ModifiedAt  time.Time
+	// AffectedPackages are the libraries the source names as vulnerable.
+	// Only advisory-shaped feeds (GitHub Advisory, OSV) supply these; they
+	// are what lets cortex connect a CVE into the dependency graph, so a
+	// feed that omits them yields a finding with no blast radius.
+	AffectedPackages []valueobject.PackageRef
 }
 
 // ErrMissingCVEID is returned when a signal lacks its canonical identifier.

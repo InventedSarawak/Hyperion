@@ -124,6 +124,16 @@ type advisory struct {
 		VectorString string  `json:"vector_string"`
 	} `json:"cvss"`
 	References []string `json:"references"`
+	// Vulnerabilities lists the ecosystem packages this advisory affects.
+	// GitHub is the richest source of this linkage, which is what connects
+	// an advisory to the repositories that depend on the package.
+	Vulnerabilities []struct {
+		Package struct {
+			Ecosystem string `json:"ecosystem"`
+			Name      string `json:"name"`
+		} `json:"package"`
+		VulnerableVersionRange string `json:"vulnerable_version_range"`
+	} `json:"vulnerabilities"`
 }
 
 // --- mapping: GitHub wire -> domain ---
@@ -152,14 +162,40 @@ func toSourceSignal(a advisory) model.SourceSignal {
 	}
 
 	return model.SourceSignal{
-		CVEID:       id,
-		Title:       a.Summary,
-		Description: a.Description,
-		Scores:      scores,
-		References:  references,
-		PublishedAt: parseTime(a.PublishedAt),
-		ModifiedAt:  parseTime(a.UpdatedAt),
+		CVEID:            id,
+		Title:            a.Summary,
+		Description:      a.Description,
+		Scores:           scores,
+		References:       references,
+		PublishedAt:      parseTime(a.PublishedAt),
+		ModifiedAt:       parseTime(a.UpdatedAt),
+		AffectedPackages: toAffectedPackages(a),
 	}
+}
+
+// toAffectedPackages maps the advisory's affected packages onto domain
+// references, collapsing the repeats GitHub emits when one package is listed
+// once per vulnerable version range.
+func toAffectedPackages(a advisory) []valueobject.PackageRef {
+	seen := make(map[string]struct{}, len(a.Vulnerabilities))
+	out := make([]valueobject.PackageRef, 0, len(a.Vulnerabilities))
+
+	for _, v := range a.Vulnerabilities {
+		if v.Package.Name == "" {
+			continue
+		}
+		ref := valueobject.NewPackageRef(v.Package.Ecosystem, v.Package.Name, v.VulnerableVersionRange)
+		key := ref.Ecosystem.String() + ":" + ref.Name
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, ref)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // cvssVersion reads the version prefix out of a CVSS vector string.

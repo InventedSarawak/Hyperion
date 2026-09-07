@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/model"
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/valueobject"
 )
 
 // Vulnerability is an OSV record, trimmed to the fields we map.
@@ -30,6 +31,28 @@ type Vulnerability struct {
 	DatabaseSpecific struct {
 		Severity string `json:"severity"`
 	} `json:"database_specific"`
+	// Affected names the packages and version ranges the record applies to.
+	// This is what links the finding into the dependency graph.
+	Affected []Affected `json:"affected"`
+}
+
+// Affected is one package an OSV record applies to, with its version ranges.
+type Affected struct {
+	Package struct {
+		Ecosystem string `json:"ecosystem"`
+		Name      string `json:"name"`
+		Purl      string `json:"purl"`
+	} `json:"package"`
+	Ranges []AffectedRange `json:"ranges"`
+}
+
+// AffectedRange is one version range, expressed as ordered events.
+type AffectedRange struct {
+	Type   string `json:"type"`
+	Events []struct {
+		Introduced string `json:"introduced"`
+		Fixed      string `json:"fixed"`
+	} `json:"events"`
 }
 
 // ToSourceSignal maps an OSV record to a domain signal. It reports false when
@@ -64,14 +87,56 @@ func ToSourceSignal(v Vulnerability, since time.Time) (model.SourceSignal, bool)
 	}
 
 	return model.SourceSignal{
-		CVEID:       cve,
-		Title:       title,
-		Description: description,
-		Scores:      toScores(v),
-		References:  references,
-		PublishedAt: parseTime(v.Published),
-		ModifiedAt:  modified,
+		CVEID:            cve,
+		Title:            title,
+		Description:      description,
+		Scores:           toScores(v),
+		References:       references,
+		PublishedAt:      parseTime(v.Published),
+		ModifiedAt:       modified,
+		AffectedPackages: toAffectedPackages(v),
 	}, true
+}
+
+// toAffectedPackages maps OSV's affected[] onto domain package references.
+//
+// OSV ecosystem strings can carry a distribution suffix ("Debian:11",
+// "Alpine:v3.18"); only the registry before the colon is the ecosystem. The
+// affected range is recorded as the first "introduced" version, which is what
+// the feed states rather than a resolved version.
+func toAffectedPackages(v Vulnerability) []valueobject.PackageRef {
+	seen := make(map[string]struct{}, len(v.Affected))
+	out := make([]valueobject.PackageRef, 0, len(v.Affected))
+
+	for _, a := range v.Affected {
+		if a.Package.Name == "" {
+			continue
+		}
+		ecosystem, _, _ := strings.Cut(a.Package.Ecosystem, ":")
+		ref := valueobject.NewPackageRef(ecosystem, a.Package.Name, introducedVersion(a.Ranges))
+		if _, ok := seen[ref.Ecosystem.String()+":"+ref.Name]; ok {
+			continue
+		}
+		seen[ref.Ecosystem.String()+":"+ref.Name] = struct{}{}
+		out = append(out, ref)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// introducedVersion returns the first non-zero "introduced" bound, which is
+// the closest thing OSV offers to "the version this starts affecting".
+func introducedVersion(ranges []AffectedRange) string {
+	for _, r := range ranges {
+		for _, e := range r.Events {
+			if e.Introduced != "" && e.Introduced != "0" {
+				return e.Introduced
+			}
+		}
+	}
+	return ""
 }
 
 // cveAlias finds the CVE identifier among an OSV record's aliases (or its own

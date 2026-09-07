@@ -20,6 +20,7 @@ import (
 	eventsv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/events/v1"
 
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/model"
+	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/valueobject"
 )
 
 const maxLineBytes = 4 * 1024 * 1024 // events can be large (many references)
@@ -84,14 +85,53 @@ func (c *Consumer) Run(ctx context.Context, r io.Reader) (int, error) {
 func toDomain(msg *eventsv1.SignalDiscovered) model.Vulnerability {
 	v := msg.GetVulnerability()
 	return model.Vulnerability{
-		CVEID:       v.GetCveId(),
-		Title:       v.GetTitle(),
-		Description: v.GetDescription(),
-		Scores:      toScores(v.GetScores()),
-		References:  v.GetReferences(),
-		Sources:     sourcesFrom(msg.GetSource()),
-		PublishedAt: fromTimestamp(v.GetPublishedAt()),
-		ModifiedAt:  fromTimestamp(v.GetModifiedAt()),
+		CVEID:            v.GetCveId(),
+		Title:            v.GetTitle(),
+		Description:      v.GetDescription(),
+		Scores:           toScores(v.GetScores()),
+		References:       v.GetReferences(),
+		Sources:          sourcesFrom(msg.GetSource()),
+		PublishedAt:      fromTimestamp(v.GetPublishedAt()),
+		ModifiedAt:       fromTimestamp(v.GetModifiedAt()),
+		AffectedPackages: toPackageRefs(v.GetAffectedPackages()),
+	}
+}
+
+func toPackageRefs(refs []*commonv1.PackageRef) []valueobject.PackageRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]valueobject.PackageRef, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, valueobject.PackageRef{
+			Ecosystem: toEcosystem(r.GetEcosystem()),
+			Name:      r.GetName(),
+			Version:   r.GetVersion(),
+		})
+	}
+	return out
+}
+
+func toEcosystem(e commonv1.Ecosystem) valueobject.Ecosystem {
+	switch e {
+	case commonv1.Ecosystem_ECOSYSTEM_GO:
+		return valueobject.EcosystemGo
+	case commonv1.Ecosystem_ECOSYSTEM_NPM:
+		return valueobject.EcosystemNPM
+	case commonv1.Ecosystem_ECOSYSTEM_PYPI:
+		return valueobject.EcosystemPyPI
+	case commonv1.Ecosystem_ECOSYSTEM_MAVEN:
+		return valueobject.EcosystemMaven
+	case commonv1.Ecosystem_ECOSYSTEM_CARGO:
+		return valueobject.EcosystemCargo
+	case commonv1.Ecosystem_ECOSYSTEM_RUBYGEMS:
+		return valueobject.EcosystemRubyGems
+	case commonv1.Ecosystem_ECOSYSTEM_NUGET:
+		return valueobject.EcosystemNuGet
+	case commonv1.Ecosystem_ECOSYSTEM_PACKAGIST:
+		return valueobject.EcosystemPackagist
+	default:
+		return valueobject.EcosystemUnknown
 	}
 }
 

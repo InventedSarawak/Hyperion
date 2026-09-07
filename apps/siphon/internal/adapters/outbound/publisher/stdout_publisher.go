@@ -63,13 +63,55 @@ func toProto(evt events.SignalDiscovered) *eventsv1.SignalDiscovered {
 
 func toProtoVulnerability(s model.SourceSignal) *commonv1.Vulnerability {
 	return &commonv1.Vulnerability{
-		CveId:       s.CVEID,
-		Title:       s.Title,
-		Description: s.Description,
-		Scores:      toProtoScores(s.Scores),
-		References:  s.References,
-		PublishedAt: toTimestamp(s.PublishedAt),
-		ModifiedAt:  toTimestamp(s.ModifiedAt),
+		CveId:            s.CVEID,
+		Title:            s.Title,
+		Description:      s.Description,
+		Scores:           toProtoScores(s.Scores),
+		References:       s.References,
+		PublishedAt:      toTimestamp(s.PublishedAt),
+		ModifiedAt:       toTimestamp(s.ModifiedAt),
+		AffectedPackages: toProtoPackageRefs(s.AffectedPackages),
+	}
+}
+
+func toProtoPackageRefs(refs []valueobject.PackageRef) []*commonv1.PackageRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]*commonv1.PackageRef, 0, len(refs))
+	for _, r := range refs {
+		if r.Validate() != nil {
+			continue
+		}
+		out = append(out, &commonv1.PackageRef{
+			Ecosystem: toProtoEcosystem(r.Ecosystem),
+			Name:      r.Name,
+			Version:   r.Version,
+		})
+	}
+	return out
+}
+
+func toProtoEcosystem(e valueobject.Ecosystem) commonv1.Ecosystem {
+	switch e {
+	case valueobject.EcosystemGo:
+		return commonv1.Ecosystem_ECOSYSTEM_GO
+	case valueobject.EcosystemNPM:
+		return commonv1.Ecosystem_ECOSYSTEM_NPM
+	case valueobject.EcosystemPyPI:
+		return commonv1.Ecosystem_ECOSYSTEM_PYPI
+	case valueobject.EcosystemMaven:
+		return commonv1.Ecosystem_ECOSYSTEM_MAVEN
+	case valueobject.EcosystemCargo:
+		return commonv1.Ecosystem_ECOSYSTEM_CARGO
+	case valueobject.EcosystemRubyGems:
+		return commonv1.Ecosystem_ECOSYSTEM_RUBYGEMS
+	case valueobject.EcosystemNuGet:
+		return commonv1.Ecosystem_ECOSYSTEM_NUGET
+	case valueobject.EcosystemPackagist:
+		return commonv1.Ecosystem_ECOSYSTEM_PACKAGIST
+	default:
+		return commonv1.Ecosystem_ECOSYSTEM_UNSPECIFIED
 	}
 }
 
