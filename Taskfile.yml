@@ -93,10 +93,11 @@ tasks:
           (cd ../cortex && CORTEX_CONSUME_STDIN=true go run ./cmd/server)
 
   test:go:integration:
-    desc: Run Go tests including the Postgres/Elasticsearch integration suites
+    desc: Run Go tests including the Postgres/Elasticsearch/Neo4j integration suites
     env:
       CORTEX_TEST_DATABASE_URL: postgres://hyperion:hyperion@localhost:5432/hyperion?sslmode=disable
       CORTEX_TEST_ELASTICSEARCH_URL: http://localhost:9200
+      CORTEX_TEST_NEO4J_URI: bolt://localhost:7687
     cmds:
       - ./scripts/test-go-files.sh
 
