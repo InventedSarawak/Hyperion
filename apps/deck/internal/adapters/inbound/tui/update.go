@@ -17,13 +17,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
 
+	case spinnerMsg:
+		if !m.loading {
+			return m, nil // stop animating; a new request re-arms it
+		}
+		m.spinner++
+		return m, m.spin()
+
 	case tickMsg:
 		// Skip a beat rather than stacking requests on a slow backend.
 		if m.loading {
 			return m, m.tick()
 		}
 		m.loading = true
-		return m, tea.Batch(m.refresh(), m.tick())
+		return m, tea.Batch(m.refresh(), m.tick(), m.spin())
 
 	case feedMsg:
 		m.loading = false
@@ -61,7 +68,7 @@ func (m Model) updateEditing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		m.editing = false
 		m.loading = true
-		return m, m.refresh()
+		return m, tea.Batch(m.refresh(), m.spin())
 	case tea.KeyEsc:
 		m.editing = false
 		m.query = m.feed.Query // discard the edit
@@ -130,7 +137,7 @@ func (m Model) updateBrowsing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Clear the previous result so the view never shows one CVE's
 		// radius under another CVE's heading while the query is in flight.
 		m.radius = model.BlastRadius{CVEID: selected.CVEID}
-		return m, m.explore(selected.CVEID)
+		return m, tea.Batch(m.explore(selected.CVEID), m.spin())
 
 	case "/":
 		m.editing = true
@@ -140,10 +147,10 @@ func (m Model) updateBrowsing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.loading = true
 		if m.tab == TabGraph {
 			if selected, ok := m.Selected(); ok {
-				return m, m.explore(selected.CVEID)
+				return m, tea.Batch(m.explore(selected.CVEID), m.spin())
 			}
 		}
-		return m, m.refresh()
+		return m, tea.Batch(m.refresh(), m.spin())
 	}
 	return m, nil
 }

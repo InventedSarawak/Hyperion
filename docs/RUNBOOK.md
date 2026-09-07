@@ -204,15 +204,45 @@ Each repository costs about three GitHub requests. Unauthenticated, you get 60 p
 
 ## 4. The CLI (deck)
 
-The terminal UI. It talks to cortex directly over gRPC — not through the nexus gateway —
-because it is an operator's console on the internal network.
+The terminal UI.
 
 ```bash
 task run:deck
 ```
 
-Requires cortex to be up (`task up` does that). Configure it in `.env` with
-`DECK_CORTEX_GRPC_ADDR`, `DECK_FEED_QUERY`, `DECK_REFRESH_INTERVAL`.
+By default it talks to **nexus over GraphQL**, so it is subject to the same edge policy as
+every other client — authentication, rate limiting and per-tenant scoping, once those land
+in v4. Set `DECK_TRANSPORT=grpc` to bypass the gateway and query cortex directly; that is
+for debugging a cortex the gateway cannot reach, not for everyday use.
+
+Requires nexus and cortex to be up (`task up` does that). Configure it in `.env` with
+`DECK_TRANSPORT`, `DECK_GATEWAY_URL`, `DECK_FEED_QUERY`, `DECK_REFRESH_INTERVAL`.
+
+The layout is a banner on first load, a tab bar with a working indicator, a bordered
+results panel, and a search prompt pinned to the bottom:
+
+```
+██╗  ██╗██╗   ██╗██████╗ ███████╗██████╗ ██╗ ██████╗ ███╗   ██╗
+██║  ██║╚██╗ ██╔╝██╔══██╗██╔════╝██╔══██╗██║██╔═══██╗████╗  ██║
+███████║ ╚████╔╝ ██████╔╝█████╗  ██████╔╝██║██║   ██║██╔██╗ ██║
+██╔══██║  ╚██╔╝  ██╔═══╝ ██╔══╝  ██╔══██╗██║██║   ██║██║╚██╗██║
+██║  ██║   ██║   ██║     ███████╗██║  ██║██║╚██████╔╝██║ ╚████║
+╚═╝  ╚═╝   ╚═╝   ╚═╝     ╚══════╝╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝
+
+HYPERION  ▌ 1 Live Feed   2 Graph Explorer                    updated 04:37:09
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ Findings  query "next" — 25 findings                                         │
+│ ▸ CVE-2026-64646      HIGH      Next.js: Unbounded Server Action payload …   │
+│   CVE-2025-57822      MEDIUM    Next.js Improper Middleware Redirect … SSRF  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ search: next                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ↑/↓ move · enter blast radius · tab switch · / search · r refresh · q quit
+```
+
+The banner appears only before the first results, and is replaced by a compact wordmark in
+a narrow terminal — a wrapped banner looks broken.
 
 It opens on the **Live Feed**: a list of findings refreshed on a timer (v2 polls; gRPC
 streaming is v3). Select a finding and press `enter` to see its blast radius drawn as a

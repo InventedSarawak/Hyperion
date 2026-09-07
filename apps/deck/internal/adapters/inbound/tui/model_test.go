@@ -5,6 +5,7 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -69,6 +70,42 @@ func apply(m tui.Model, msg tea.Msg) (tui.Model, tea.Cmd) {
 	return typed, cmd
 }
 
+// runCmd executes a command and returns its message, giving up on commands
+// that do not answer quickly. The model batches its data fetches together with
+// long timers (the 30s poll), and a test must not sit out a real timer to see
+// the fetch's result.
+func runCmd(cmd tea.Cmd) tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+	select {
+	case msg := <-done:
+		return msg
+	case <-time.After(250 * time.Millisecond):
+		return nil
+	}
+}
+
+// deliver runs a command and applies every message it yields, flattening the
+// batches the model returns.
+func deliver(m tui.Model, cmd tea.Cmd) tui.Model {
+	GinkgoHelper()
+	msg := runCmd(cmd)
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, inner := range batch {
+			m = deliver(m, inner)
+		}
+		return m
+	}
+	if msg == nil {
+		return m
+	}
+	m, _ = apply(m, msg)
+	return m
+}
+
 // feedWith builds a feed of the given CVE ids.
 func feedWith(ids ...string) model.Feed {
 	feed := model.Feed{}
@@ -104,8 +141,7 @@ var _ = Describe("TUI model", func() {
 		GinkgoHelper()
 		got, cmd := apply(m, key("r"))
 		Expect(cmd).ToNot(BeNil())
-		got, _ = apply(got, cmd())
-		return got
+		return deliver(got, cmd)
 	}
 
 	It("renders the feed once the first refresh returns", func() {
@@ -143,7 +179,7 @@ var _ = Describe("TUI model", func() {
 				{FullName: "acme/api", ViaPackage: "maven:log4j-core", Depth: 1, Direct: true},
 			},
 		}
-		got, _ = apply(got, cmd())
+		got = deliver(got, cmd)
 
 		Expect(explorer.gotCVE).To(Equal("CVE-2021-44228"))
 		out := got.View()
@@ -156,7 +192,7 @@ var _ = Describe("TUI model", func() {
 		got := loaded()
 		got, cmd := apply(got, tea.KeyMsg{Type: tea.KeyEnter})
 		explorer.radius = model.BlastRadius{CVEID: "CVE-2021-44228", VulnerablePackages: []string{"maven:a"}}
-		got, _ = apply(got, cmd())
+		got = deliver(got, cmd)
 		Expect(got.View()).To(ContainSubstring("maven:a"))
 
 		// Select the next finding and open it: the old result must be gone
@@ -185,9 +221,9 @@ var _ = Describe("TUI model", func() {
 		got, _ = apply(got, tea.KeyMsg{Type: tea.KeyBackspace})
 		got, _ = apply(got, key("log4j"))
 
-		_, cmd := apply(got, tea.KeyMsg{Type: tea.KeyEnter})
+		got, cmd := apply(got, tea.KeyMsg{Type: tea.KeyEnter})
 		Expect(cmd).ToNot(BeNil())
-		cmd()
+		deliver(got, cmd)
 		Expect(search.gotQuery).To(Equal("log4j"))
 	})
 
@@ -242,7 +278,7 @@ var _ = Describe("TUI model", func() {
 
 		search.feed = feedWith("CVE-2021-44228")
 		got, cmd := apply(got, key("r"))
-		got, _ = apply(got, cmd())
+		got = deliver(got, cmd)
 
 		selected, ok := got.Selected()
 		Expect(ok).To(BeTrue())
@@ -282,7 +318,7 @@ var _ = Describe("Feed row rendering", func() {
 		m := tui.New(search, explorer, tui.Options{Query: "cve", PageSize: 25})
 
 		got, cmd := apply(m, key("r"))
-		got, _ = apply(got, cmd())
+		got = deliver(got, cmd)
 		if width > 0 {
 			got, _ = apply(got, tea.WindowSizeMsg{Width: width, Height: 40})
 		}
@@ -376,5 +412,82 @@ var _ = Describe("Feed row rendering", func() {
 		}}}, width)
 
 		Expect(runewidth.StringWidth(rows[0])).To(BeNumerically("<=", width))
+	})
+})
+
+var _ = Describe("Layout", func() {
+	newModel := func(feed model.Feed) tui.Model {
+		return tui.New(&stubSearch{feed: feed}, &stubExplorer{},
+			tui.Options{Query: "cve", PageSize: 25, Endpoint: "nexus http://localhost:8080/graphql"})
+	}
+
+	// boxEdges returns the widths of every box top/bottom border on screen.
+	boxEdges := func(view string) []int {
+		var widths []int
+		for _, line := range strings.Split(stripANSI(view), "\n") {
+			line = strings.TrimRight(line, " ")
+			if strings.HasPrefix(line, "╭") || strings.HasPrefix(line, "╰") {
+				widths = append(widths, runewidth.StringWidth(line))
+			}
+		}
+		return widths
+	}
+
+	It("draws every box at the same width as the terminal", func() {
+		// A prompt narrower than the panel above it reads as a rendering bug
+		// even though nothing is broken.
+		const width = 110
+		m := newModel(feedWith("CVE-2021-44228"))
+		got, cmd := apply(m, key("r"))
+		got = deliver(got, cmd)
+		got, _ = apply(got, tea.WindowSizeMsg{Width: width, Height: 40})
+
+		edges := boxEdges(got.View())
+		Expect(edges).ToNot(BeEmpty())
+		for _, w := range edges {
+			Expect(w).To(Equal(width))
+		}
+	})
+
+	It("shows the banner before any data and drops it once results arrive", func() {
+		m := newModel(feedWith("CVE-2021-44228"))
+		sized, _ := apply(m, tea.WindowSizeMsg{Width: 110, Height: 40})
+		Expect(stripANSI(sized.View())).To(ContainSubstring("██╗  ██╗"), "banner expected on the splash")
+
+		got, cmd := apply(sized, key("r"))
+		got = deliver(got, cmd)
+		Expect(stripANSI(got.View())).ToNot(ContainSubstring("██╗  ██╗"),
+			"the banner is an introduction, not furniture on every refresh")
+	})
+
+	It("falls back to a wordmark in a terminal too narrow for the logo", func() {
+		m := newModel(model.Feed{})
+		got, _ := apply(m, tea.WindowSizeMsg{Width: 40, Height: 40})
+
+		view := stripANSI(got.View())
+		Expect(view).To(ContainSubstring("HYPERION"))
+		Expect(view).ToNot(ContainSubstring("██╗  ██╗"), "a wrapped banner looks broken")
+	})
+
+	It("hides the banner in a short terminal, where rows matter more", func() {
+		m := newModel(model.Feed{})
+		got, _ := apply(m, tea.WindowSizeMsg{Width: 110, Height: 20})
+		Expect(stripANSI(got.View())).ToNot(ContainSubstring("██╗  ██╗"))
+	})
+
+	It("animates a spinner while a request is in flight, and stops after", func() {
+		m := newModel(feedWith("CVE-1"))
+		Expect(stripANSI(m.View())).To(ContainSubstring("working…"))
+
+		spun, cmd := apply(m, tui.SpinnerTick())
+		Expect(cmd).ToNot(BeNil(), "the spinner re-arms while loading")
+		Expect(stripANSI(spun.View())).To(ContainSubstring("working…"))
+
+		got, refresh := apply(m, key("r"))
+		got = deliver(got, refresh)
+		Expect(stripANSI(got.View())).ToNot(ContainSubstring("working…"))
+
+		_, idle := apply(got, tui.SpinnerTick())
+		Expect(idle).To(BeNil(), "an idle deck must not keep waking the terminal")
 	})
 })

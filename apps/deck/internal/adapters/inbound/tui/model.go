@@ -63,6 +63,7 @@ type Model struct {
 	editing bool
 
 	loading     bool
+	spinner     int
 	err         error
 	lastRefresh time.Time
 	width       int
@@ -105,6 +106,18 @@ type radiusMsg struct {
 // streaming transport yet; v3's Kafka pipeline is what makes it push.
 type tickMsg time.Time
 
+// spinnerMsg advances the working indicator. It is a separate, much faster
+// timer than tickMsg, and it only re-arms while something is in flight — an
+// idle deck should not wake the terminal ten times a second.
+type spinnerMsg time.Time
+
+// spinnerInterval is fast enough to read as motion, slow enough to be cheap.
+const spinnerInterval = 100 * time.Millisecond
+
+func (m Model) spin() tea.Cmd {
+	return tea.Tick(spinnerInterval, func(t time.Time) tea.Msg { return spinnerMsg(t) })
+}
+
 // --- commands ---
 
 func (m Model) refresh() tea.Cmd {
@@ -127,8 +140,8 @@ func (m Model) tick() tea.Cmd {
 	return tea.Tick(m.opts.RefreshInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
-// Init starts the first refresh and the polling timer.
-func (m Model) Init() tea.Cmd { return tea.Batch(m.refresh(), m.tick()) }
+// Init starts the first refresh, the polling timer, and the spinner.
+func (m Model) Init() tea.Cmd { return tea.Batch(m.refresh(), m.tick(), m.spin()) }
 
 // Selected returns the vulnerability under the cursor, if any.
 func (m Model) Selected() (model.Vulnerability, bool) {
