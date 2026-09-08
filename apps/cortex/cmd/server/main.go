@@ -16,15 +16,18 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
+	alertingv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/alerting/v1"
 	intelv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/intelligence/v1"
 
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/inbound/consumer"
 	grpcadapter "github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/inbound/grpc"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/elasticsearch"
 	graphadapter "github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/neo4j"
+	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/noopdedupe"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/noopgraph"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/noopindex"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/postgres"
+	redisadapter "github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/redis"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/application/commands"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/application/queries"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/ports"
@@ -58,7 +61,29 @@ func main() {
 	graph, closeGraph := buildDependencyGraph(ctx, logger, cfg)
 	defer closeGraph()
 
-	ingest := commands.NewIngestSignal(repo, index, graph)
+	// Alerting: the percolator matches, Postgres remembers, Redis suppresses.
+	matcher := buildAlertMatcher(ctx, logger, cfg)
+	subsRepo := postgres.NewSubscriptionRepo(pool)
+	alertRepo := postgres.NewAlertRepo(pool)
+	dedupe, closeDedupe := buildDedupeStore(ctx, logger, cfg)
+	defer closeDedupe()
+
+	match := commands.NewMatchSignal(matcher, subsRepo, alertRepo, dedupe, cfg.AlertDedupeWindow)
+	manageSubs := commands.NewManageSubscriptions(subsRepo, matcher)
+	listAlerting := queries.NewListAlerting(subsRepo, alertRepo)
+
+	// The percolator holds no truth of its own, so an index that was lost or
+	// rebuilt is repaired from Postgres at boot rather than silently staying
+	// empty — an empty index means every subscription stops firing.
+	if matcher != nil {
+		if n, err := manageSubs.Reindex(ctx); err != nil {
+			logger.Warn("could not rebuild the subscription index; some rules may not fire", "error", err)
+		} else if n > 0 {
+			logger.Info("subscription index rebuilt", "subscriptions", n)
+		}
+	}
+
+	ingest := commands.NewIngestSignal(repo, index, graph, match)
 	ingestDeps := commands.NewIngestDependency(graph)
 	search := queries.NewSearch(index)
 	blast := queries.NewCalculateBlastRadius(graph, cfg.BlastRadiusMaxDepth)
@@ -72,7 +97,7 @@ func main() {
 		logger.Error("nothing to do: enable CORTEX_SERVE_GRPC or CORTEX_CONSUME_STDIN")
 		os.Exit(1)
 	}
-	serveGRPC(ctx, logger, cfg, search, ingestDeps, blast)
+	serveGRPC(ctx, logger, cfg, search, ingestDeps, blast, manageSubs, listAlerting, repo)
 }
 
 // buildDependencyGraph returns the Neo4j adapter when the server answers,
@@ -137,6 +162,9 @@ func serveGRPC(
 	search *queries.Search,
 	ingestDeps *commands.IngestDependency,
 	blast *queries.CalculateBlastRadius,
+	manageSubs *commands.ManageSubscriptions,
+	listAlerting *queries.ListAlerting,
+	vulns *postgres.Repo,
 ) {
 	listener, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
@@ -146,6 +174,8 @@ func serveGRPC(
 
 	server := grpc.NewServer()
 	intelv1.RegisterIntelligenceServiceServer(server, grpcadapter.NewServer(search, ingestDeps, blast))
+	alertingv1.RegisterAlertingServiceServer(server,
+		grpcadapter.NewAlertingServer(manageSubs, listAlerting, vulns))
 	reflection.Register(server) // enables grpcurl / grpc_cli exploration
 
 	go func() {
@@ -160,4 +190,32 @@ func serveGRPC(
 		os.Exit(1)
 	}
 	logger.Info("cortex stopped")
+}
+
+// buildAlertMatcher returns the percolator when Elasticsearch answers.
+// Alerting simply does not run without it: there is no meaningful degraded
+// mode for "match this against every rule".
+func buildAlertMatcher(ctx context.Context, logger *slog.Logger, cfg config.Config) ports.AlertMatcher {
+	percolator := elasticsearch.NewPercolator(nil, cfg.ElasticsearchURL, cfg.SubscriptionIndex)
+	if err := percolator.Ready(ctx); err != nil {
+		logger.Warn("elasticsearch unavailable; alerting disabled, ingestion continues",
+			"url", cfg.ElasticsearchURL, "error", err)
+		return nil
+	}
+	logger.Info("alerting ready", "index", cfg.SubscriptionIndex)
+	return percolator
+}
+
+// buildDedupeStore returns Redis when it answers, otherwise a store that
+// suppresses nothing. Failing open is deliberate: a duplicate alert is an
+// annoyance, a suppressed one is a missed vulnerability.
+func buildDedupeStore(ctx context.Context, logger *slog.Logger, cfg config.Config) (ports.DedupeStore, func()) {
+	store, err := redisadapter.Connect(ctx, cfg.RedisAddr)
+	if err != nil {
+		logger.Warn("redis unavailable; alerts will not be de-duplicated",
+			"addr", cfg.RedisAddr, "error", err)
+		return noopdedupe.New(), func() {}
+	}
+	logger.Info("redis ready", "addr", cfg.RedisAddr)
+	return store, func() { _ = store.Close() }
 }

@@ -56,7 +56,7 @@ var _ = Describe("IngestSignal use case", func() {
 
 	It("stores a new vulnerability", func() {
 		repo := newMemRepo()
-		err := commands.NewIngestSignal(repo, &memIndex{}, nil).Handle(ctx, model.Vulnerability{
+		err := commands.NewIngestSignal(repo, &memIndex{}, nil, nil).Handle(ctx, model.Vulnerability{
 			CVEID:   "CVE-2021-44228",
 			Sources: []string{"nvd"},
 		})
@@ -68,13 +68,13 @@ var _ = Describe("IngestSignal use case", func() {
 	})
 
 	It("rejects a vulnerability with no CVE id", func() {
-		err := commands.NewIngestSignal(newMemRepo(), &memIndex{}, nil).Handle(ctx, model.Vulnerability{})
+		err := commands.NewIngestSignal(newMemRepo(), &memIndex{}, nil, nil).Handle(ctx, model.Vulnerability{})
 		Expect(err).To(MatchError(model.ErrMissingCVEID))
 	})
 
 	It("merges a re-observed CVE instead of duplicating (sources unioned)", func() {
 		repo := newMemRepo()
-		ingest := commands.NewIngestSignal(repo, &memIndex{}, nil)
+		ingest := commands.NewIngestSignal(repo, &memIndex{}, nil, nil)
 
 		Expect(ingest.Handle(ctx, model.Vulnerability{CVEID: "CVE-1", Description: "first", Sources: []string{"nvd"}})).To(Succeed())
 		Expect(ingest.Handle(ctx, model.Vulnerability{CVEID: "CVE-1", Description: "updated", Sources: []string{"cisa_kev"}})).To(Succeed())
@@ -91,7 +91,7 @@ var _ = Describe("IngestSignal use case", func() {
 		repo := newMemRepo()
 		index := &memIndex{}
 
-		err := commands.NewIngestSignal(repo, index, nil).Handle(ctx, model.Vulnerability{
+		err := commands.NewIngestSignal(repo, index, nil, nil).Handle(ctx, model.Vulnerability{
 			CVEID:   "CVE-2021-44228",
 			Sources: []string{"nvd"},
 		})
@@ -109,7 +109,7 @@ var _ = Describe("IngestSignal graph linking", func() {
 	It("links the CVE to the packages the advisory named", func() {
 		graph := newMemGraph()
 
-		err := commands.NewIngestSignal(newMemRepo(), &memIndex{}, graph).Handle(ctx, model.Vulnerability{
+		err := commands.NewIngestSignal(newMemRepo(), &memIndex{}, graph, nil).Handle(ctx, model.Vulnerability{
 			CVEID:            "CVE-2021-23337",
 			Sources:          []string{"github_advisory"},
 			AffectedPackages: []valueobject.PackageRef{lodash},
@@ -123,7 +123,7 @@ var _ = Describe("IngestSignal graph linking", func() {
 	It("does not touch the graph for a finding with no affected packages", func() {
 		graph := newMemGraph()
 
-		err := commands.NewIngestSignal(newMemRepo(), &memIndex{}, graph).Handle(ctx, model.Vulnerability{
+		err := commands.NewIngestSignal(newMemRepo(), &memIndex{}, graph, nil).Handle(ctx, model.Vulnerability{
 			CVEID: "CVE-2021-44228", Sources: []string{"nvd"},
 		})
 
@@ -138,7 +138,7 @@ var _ = Describe("IngestSignal graph linking", func() {
 		graph.writeErr = ports.ErrGraphUnavailable
 		repo := newMemRepo()
 
-		err := commands.NewIngestSignal(repo, &memIndex{}, graph).Handle(ctx, model.Vulnerability{
+		err := commands.NewIngestSignal(repo, &memIndex{}, graph, nil).Handle(ctx, model.Vulnerability{
 			CVEID:            "CVE-2021-23337",
 			Sources:          []string{"github_advisory"},
 			AffectedPackages: []valueobject.PackageRef{lodash},
@@ -154,11 +154,67 @@ var _ = Describe("IngestSignal graph linking", func() {
 		graph.writeErr = errors.New("bolt: connection reset")
 		repo := newMemRepo()
 
-		err := commands.NewIngestSignal(repo, &memIndex{}, graph).Handle(ctx, model.Vulnerability{
+		err := commands.NewIngestSignal(repo, &memIndex{}, graph, nil).Handle(ctx, model.Vulnerability{
 			CVEID:            "CVE-2021-23337",
 			Sources:          []string{"github_advisory"},
 			AffectedPackages: []valueobject.PackageRef{lodash},
 		})
+
+		Expect(err).ToNot(HaveOccurred())
+		count, _ := repo.Count(ctx)
+		Expect(count).To(Equal(1))
+	})
+})
+
+// countingAlerter records what ingest handed to alert matching.
+type countingAlerter struct {
+	seen []string
+	err  error
+}
+
+func (a *countingAlerter) Handle(_ context.Context, v model.Vulnerability) ([]model.Alert, error) {
+	a.seen = append(a.seen, v.CVEID)
+	return nil, a.err
+}
+
+var _ = Describe("IngestSignal alerting", func() {
+	ctx := context.Background()
+
+	It("hands every stored record to alert matching", func() {
+		alerter := &countingAlerter{}
+		err := commands.NewIngestSignal(newMemRepo(), &memIndex{}, nil, alerter).
+			Handle(ctx, model.Vulnerability{CVEID: "CVE-2021-44228", Sources: []string{"nvd"}})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(alerter.seen).To(ConsistOf("CVE-2021-44228"))
+	})
+
+	It("matches against the merged record, not just the incoming fragment", func() {
+		// A source that names a package must be able to trigger a rule even
+		// when the current observation came from a source that did not.
+		repo := newMemRepo()
+		alerter := &countingAlerter{}
+		ingest := commands.NewIngestSignal(repo, &memIndex{}, nil, alerter)
+
+		Expect(ingest.Handle(ctx, model.Vulnerability{
+			CVEID:            "CVE-1",
+			Sources:          []string{"github_advisory"},
+			AffectedPackages: []valueobject.PackageRef{valueobject.NewPackageRef("npm", "lodash", "")},
+		})).To(Succeed())
+		Expect(ingest.Handle(ctx, model.Vulnerability{CVEID: "CVE-1", Sources: []string{"nvd"}})).To(Succeed())
+
+		stored, err := repo.GetByCVE(ctx, "CVE-1")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(stored.AffectedPackages).To(HaveLen(1))
+		Expect(alerter.seen).To(HaveLen(2))
+	})
+
+	It("stores the record even when alert matching fails", func() {
+		repo := newMemRepo()
+		alerter := &countingAlerter{err: errors.New("elasticsearch down")}
+
+		err := commands.NewIngestSignal(repo, &memIndex{}, nil, alerter).
+			Handle(ctx, model.Vulnerability{CVEID: "CVE-1", Sources: []string{"nvd"}})
 
 		Expect(err).ToNot(HaveOccurred())
 		count, _ := repo.Count(ctx)

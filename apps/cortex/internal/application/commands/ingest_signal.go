@@ -14,16 +14,28 @@ import (
 // IngestSignal stores an incoming vulnerability, reconciling it with any
 // existing record via the domain's Merge rule, then makes it searchable.
 type IngestSignal struct {
-	repo  ports.VulnerabilityRepo
-	index ports.SearchIndex
-	graph ports.DependencyGraph
-	log   *slog.Logger
+	repo    ports.VulnerabilityRepo
+	index   ports.SearchIndex
+	graph   ports.DependencyGraph
+	alerter Alerter
+	log     *slog.Logger
 }
 
-// NewIngestSignal wires the use case with its storage, search and graph ports.
-// The graph may be nil or unavailable; storage is the only hard requirement.
-func NewIngestSignal(repo ports.VulnerabilityRepo, index ports.SearchIndex, graph ports.DependencyGraph) *IngestSignal {
-	return &IngestSignal{repo: repo, index: index, graph: graph, log: slog.Default()}
+// Alerter raises alerts for the subscriptions a vulnerability matches
+// (consumer-side interface; implemented by MatchSignal).
+type Alerter interface {
+	Handle(ctx context.Context, v model.Vulnerability) ([]model.Alert, error)
+}
+
+// NewIngestSignal wires the use case with its storage, search, graph and
+// alerting ports. Only storage is a hard requirement; the rest enrich.
+func NewIngestSignal(
+	repo ports.VulnerabilityRepo,
+	index ports.SearchIndex,
+	graph ports.DependencyGraph,
+	alerter Alerter,
+) *IngestSignal {
+	return &IngestSignal{repo: repo, index: index, graph: graph, alerter: alerter, log: slog.Default()}
 }
 
 // Handle validates, merges with any existing record, persists, and indexes.
@@ -67,6 +79,17 @@ func (c *IngestSignal) Handle(ctx context.Context, incoming model.Vulnerability)
 				c.log.Warn("graph link failed; record is stored but has no blast radius",
 					"cve", incoming.CVEID, "error", err)
 			}
+		}
+	}
+
+	// Reverse search: tell whoever asked to hear about this. Best-effort like
+	// the rest — the record is already stored, and a matcher outage must not
+	// cost us the finding itself. A failure here is logged loudly because a
+	// silent alerting outage is indistinguishable from "nothing happened".
+	if c.alerter != nil {
+		if _, err := c.alerter.Handle(ctx, incoming); err != nil {
+			c.log.Error("alert matching failed; record is stored but nobody was told",
+				"cve", incoming.CVEID, "error", err)
 		}
 	}
 	return nil

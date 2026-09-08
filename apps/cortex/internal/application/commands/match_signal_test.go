@@ -49,7 +49,18 @@ func (f *fakeSubs) Get(_ context.Context, id string) (model.Subscription, error)
 	return s, nil
 }
 
-func (f *fakeSubs) List(context.Context, string) ([]model.Subscription, error) { return nil, nil }
+func (f *fakeSubs) List(_ context.Context, tenant string) ([]model.Subscription, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := make([]model.Subscription, 0, len(f.byID))
+	for _, s := range f.byID {
+		if tenant == "" || s.Tenant == tenant {
+			out = append(out, s)
+		}
+	}
+	return out, nil
+}
 func (f *fakeSubs) Delete(_ context.Context, id string) error {
 	delete(f.byID, id)
 	return nil

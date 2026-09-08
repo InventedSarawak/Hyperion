@@ -2,7 +2,11 @@
 // namespaced config system. Every key is cortex.<NAME> -> CORTEX_<NAME>.
 package config
 
-import "github.com/inventedsarawak/hyperion/packages/common/config"
+import (
+	"time"
+
+	"github.com/inventedsarawak/hyperion/packages/common/config"
+)
 
 // Service is the config namespace for this microservice.
 const Service = "cortex"
@@ -17,6 +21,8 @@ const (
 	DefaultNeo4jUsername    = "neo4j"
 	DefaultNeo4jPassword    = "hyperion"
 	DefaultNeo4jDatabase    = "neo4j"
+	DefaultRedisAddr        = "localhost:6379"
+	DefaultSubscriptionIdx  = "hyperion-subscriptions"
 )
 
 // Config holds cortex's runtime settings.
@@ -33,6 +39,10 @@ type Config struct {
 	Neo4jPassword       string
 	Neo4jDatabase       string
 	BlastRadiusMaxDepth int
+
+	RedisAddr         string
+	SubscriptionIndex string
+	AlertDedupeWindow time.Duration
 
 	loader *config.Loader
 }
@@ -65,6 +75,13 @@ func Load() Config {
 		// library's own dependency — deep enough to be useful, shallow
 		// enough to stay fast on a dense graph.
 		BlastRadiusMaxDepth: l.Int("BLAST_RADIUS_MAX_DEPTH", 3),
+
+		RedisAddr:         l.String("REDIS_ADDR", DefaultRedisAddr),
+		SubscriptionIndex: l.String("SUBSCRIPTION_INDEX", DefaultSubscriptionIdx),
+		// Advisories are re-observed on every poll and corrected for weeks;
+		// an hour is long enough to stop the repeats without hiding a genuinely
+		// new finding.
+		AlertDedupeWindow: l.Duration("ALERT_DEDUPE_WINDOW", time.Hour),
 	}
 }
 

@@ -103,6 +103,20 @@ tasks:
         grpcurl -plaintext -d "{\"cve_id\":\"{{.CLI_ARGS}}\",\"max_depth\":5}" \
           localhost:50051 hyperion.intelligence.v1.IntelligenceService/GetBlastRadius
 
+  subscribe:
+    desc: 'Create an alert rule: task subscribe -- ''{"name":"Log4j","rule":{"term":"log4j"}}'''''
+    cmds:
+      - |
+        grpcurl -plaintext -d '{{.CLI_ARGS}}' \
+          localhost:50051 hyperion.alerting.v1.AlertingService/CreateSubscription
+
+  alerts:
+    desc: Show the alerts raised so far (needs cortex + grpcurl)
+    cmds:
+      - |
+        grpcurl -plaintext -d '{"limit":20}' \
+          localhost:50051 hyperion.alerting.v1.AlertingService/ListAlerts
+
   ingest:
     desc: Pipe one siphon poll straight into cortex (siphon | cortex)
     cmds:
@@ -112,11 +126,12 @@ tasks:
           (cd ../cortex && CORTEX_CONSUME_STDIN=true go run ./cmd/server)
 
   test:go:integration:
-    desc: Run Go tests including the Postgres/Elasticsearch/Neo4j integration suites
+    desc: Run Go tests including the Postgres/Elasticsearch/Neo4j/Redis integration suites
     env:
       CORTEX_TEST_DATABASE_URL: postgres://hyperion:hyperion@localhost:5432/hyperion?sslmode=disable
       CORTEX_TEST_ELASTICSEARCH_URL: http://localhost:9200
       CORTEX_TEST_NEO4J_URI: bolt://localhost:7687
+      CORTEX_TEST_REDIS_ADDR: localhost:6379
     cmds:
       - ./scripts/test-go-files.sh
 
