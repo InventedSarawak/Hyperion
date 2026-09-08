@@ -117,12 +117,13 @@ stop_ingest() {
 }
 
 up() {
-  log "starting infrastructure (postgres, elasticsearch, neo4j)..."
+  log "starting infrastructure (postgres, elasticsearch, neo4j, redis)..."
   $COMPOSE up -d
 
   wait_for "postgres" 60 docker exec hyperion-postgres pg_isready -U hyperion -d hyperion
   wait_for "elasticsearch" 120 curl -fsS http://localhost:9200/_cluster/health
   wait_for "neo4j" 120 docker exec hyperion-neo4j cypher-shell -u neo4j -p hyperion "RETURN 1"
+  wait_for "redis" 60 docker exec hyperion-redis redis-cli ping
 
   mkdir -p "$RUN_DIR/bin"
 
@@ -236,6 +237,12 @@ status() {
       printf '  %-16s %-10s %s\n' "$name" "DOWN" "-"
     fi
   done
+
+  if docker exec hyperion-redis redis-cli ping >/dev/null 2>&1; then
+    printf '  %-16s %-10s %s\n' "redis" "UP" "responding on :6379"
+  else
+    printf '  %-16s %-10s %s\n' "redis" "DOWN" "not responding on :6379"
+  fi
 
   if pid_of ingest >/dev/null; then
     printf '  %-16s %-10s %s\n' "ingest" "UP" "pid $(pid_of ingest), polling every ${SIPHON_POLL_INTERVAL:-10m}"
