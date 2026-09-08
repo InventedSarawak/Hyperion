@@ -161,13 +161,24 @@ Registered in `docs/TECHNICAL-DEBT.md`. Highest-value items, roughly in order:
   - [ ] Create `KafkaConsumer` adapter (Group: `intel-indexer`)
   - [ ] Process events: `Kafka -> Elastic/Neo4j`
 
-### Feature: Real-Time Alerts
+### Feature: Real-Time Alerts — DONE (2026-09-09)
 
-- [ ] **Domain:** Define `Subscription` entity (User rules)
-- [ ] **Infrastructure:** Implement **Elasticsearch Percolator** (Reverse Search)
-- [ ] **Application:** `MatchSignal` use-case
-  - [ ] On new CVE -> Query Percolator -> Find affected Users
-- [ ] **Infrastructure:** Redis Deduplication (Don't alert twice in 1 hour)
+> Built ahead of the Kafka refactor: alerting is the product step, and it works
+> on the current transport. Only the consumer adapter changes when Kafka lands.
+
+- [x] **Domain:** `Subscription` entity, `AlertRule` value object (with `Matches`
+      as the authoritative specification), `Alert` entity with a deterministic id
+- [x] **Infrastructure:** **Elasticsearch Percolator** (reverse search) — rules are
+      stored as queries and a vulnerability is percolated against them; the query is
+      built from the structured rule, never accepted as raw DSL
+- [x] **Application:** `MatchSignal` use case
+  - [x] On new CVE -> percolate -> load rule -> re-verify in the domain -> alert
+- [x] **Infrastructure:** Redis deduplication (`SET NX EX`, one atomic round trip)
+- [x] **Infrastructure:** Redis in `docker-compose.yml`
+- [x] **API:** `hyperion.alerting.v1.AlertingService` — create/list/delete
+      subscriptions, list alerts with their vulnerability resolved on read
+- [x] Boot-time reindex, so a lost or rebuilt percolator index is repaired from
+      Postgres rather than silently leaving every rule dead
 
 ### Performance Testing
 

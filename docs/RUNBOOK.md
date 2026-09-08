@@ -39,6 +39,7 @@ and the repository scanner use it.
 | `9200`  | Elasticsearch                   |
 | `7687`  | Neo4j (bolt — the driver)       |
 | `7474`  | Neo4j (browser UI)              |
+| `6379`  | Redis (alert deduplication)     |
 | `50051` | cortex (gRPC)                   |
 | `8080`  | nexus (GraphQL + `/playground`) |
 
@@ -199,6 +200,46 @@ SIPHON_REPO_ORG_LIMIT=20
 ```
 
 Each repository costs about three GitHub requests. Unauthenticated, you get 60 per hour.
+
+---
+
+## 3.3 Alerts (who wants to hear about it)
+
+Reverse search: instead of everyone polling for what they care about, a rule is stored
+once and every incoming vulnerability is matched against every rule.
+
+```bash
+# watch a library
+task subscribe -- '{"tenant":"acme","name":"Next.js watch",
+  "rule":{"packages":[{"ecosystem":"ECOSYSTEM_NPM","name":"next"}]}}'
+
+# watch by text and severity
+task subscribe -- '{"tenant":"acme","name":"Critical log4j",
+  "rule":{"term":"log4j","minSeverity":"SEVERITY_CRITICAL"}}'
+
+task alerts        # what has matched so far
+```
+
+A rule's conditions are **AND-ed**, so each one narrows the match. A rule with no
+conditions is rejected rather than treated as "everything" — matching every advisory ever
+ingested is the alert fatigue this platform exists to prevent, and it is far too easy to
+create by accident.
+
+Alerts are raised on ingest, so they appear as data flows in. Two things stop them
+repeating:
+
+- **Redis suppression** — the same rule stays quiet about the same CVE for
+  `CORTEX_ALERT_DEDUPE_WINDOW` (default 1h). Advisories are re-observed on every poll and
+  corrected for weeks.
+- **Deterministic alert ids** (`subscription:cve`) — even with suppression flushed, a
+  re-observation refreshes the existing alert instead of stacking a new one.
+
+If Redis is unreachable, alerting **fails open**: alerts still fire, just without
+suppression. A duplicate alert is an annoyance; a suppressed one is a missed vulnerability.
+
+Verified: a `npm:next` subscription against a 7-year OSV backfill raised **57 alerts**,
+re-ingesting the same advisories raised **0**, and flushing Redis then re-ingesting left
+the row count unchanged at 57.
 
 ---
 

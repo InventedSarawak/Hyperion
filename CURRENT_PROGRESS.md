@@ -91,6 +91,63 @@ starter page (v4).
 
 ---
 
+## Real-time alerts — 2026-09-09
+
+The v3 feature that changes the product's character: from _"I query it"_ to _"it tells
+me"_. Built ahead of the Kafka refactor, on the current transport — when Kafka lands only
+the consumer adapter changes.
+
+### How it works
+
+**Reverse search.** A normal index stores documents and you search them with a query; the
+Elasticsearch **percolator** stores _queries_ and you search it with a document, getting
+back the queries that document satisfies. One pass over an incoming vulnerability finds
+every interested subscriber, instead of replaying every rule as a separate search.
+
+```
+advisory ──▶ cortex ingest ──▶ percolate ──▶ candidate rules
+                                   │
+                     re-verify in the domain (the rule, not the index, is the authority)
+                                   │
+                     Redis SET NX EX (quiet for 1h)  ──▶  alert
+```
+
+### Design decisions worth recording
+
+- **An empty rule is rejected, not treated as "everything".** Matching every advisory is
+  the alert fatigue this platform exists to prevent, and trivially easy to create by accident.
+- **The percolator is an index, not the definition of a match.** Every hit is re-checked
+  against `AlertRule.Matches` in the domain, so a stale or over-broad index cannot invent
+  an alert. A subscriber who stops trusting alerts is worse off than one who gets none.
+- **Create rolls back if indexing fails.** A stored-but-unindexed subscription looks
+  healthy in a listing and silently never fires — more dangerous than a visible failure.
+- **Dedupe fails open.** Redis down means alerts fire without suppression; a duplicate is
+  an annoyance, a suppressed alert is a missed vulnerability.
+- **Alerts store the CVE id, not a copy of the advisory.** Records are corrected
+  constantly; a frozen copy would drift from what it points at.
+- **Unranked severity never clears a threshold.** "We don't know how bad this is" must not
+  be promoted to "bad enough to wake you".
+- **Boot-time reindex.** Postgres is the source of truth, so a lost percolator index is
+  rebuilt rather than silently leaving every rule dead.
+
+### Verified end-to-end (2026-09-09, live)
+
+- Subscription created over gRPC for `npm:next`; a 7-year OSV backfill raised **57 alerts**
+  with reasons (`affects npm:next`) and each alert's advisory resolved on read.
+- Re-ingesting the same 56 advisories raised **0** — Redis suppression working.
+- Flushing Redis and re-ingesting left the alert count **unchanged at 57** — deterministic
+  ids prevent duplicates independently of suppression.
+- **41 packages green**, including new Redis and percolator integration suites (18
+  percolator specs against real Elasticsearch).
+
+### What is still v3
+
+Kafka and the Redis checkpoint. The transport is still a Unix pipe, and the ingestion
+watermark is still in memory — a crash longer than the lookback window still loses
+signals. Alerting sits on top of whatever the transport is, so that work is unaffected.
+
+---
+
 ## Post-v2 hardening — 2026-09-08
 
 Fixes and improvements taken before starting v3, all verified against the live stack.
@@ -268,6 +325,9 @@ not started.**
 
 ## Changelog
 
+- **2026-09-09** — Real-time alerts: `Subscription`/`AlertRule`/`Alert` domain,
+  Elasticsearch percolator for reverse search, Redis deduplication, `AlertingService` gRPC
+  API, and alert raising wired into ingest. Redis added to compose.
 - **2026-09-08** — Post-v2 hardening: fixed TUI frame corruption from control characters in
   advisory titles, a latent `pid_of` bug in `system.sh`, and Shodan's empty-window 404s.
   Added continuous ingest (`task up`), GitHub org repository discovery, a `blastRadius`
