@@ -28,10 +28,10 @@ func (m Model) View() string {
 
 	var b strings.Builder
 
-	// The splash only shows until the first result arrives: it is an
-	// introduction, not furniture to scroll past on every refresh.
+	// The banner is pinned: it stays for the whole session. It is the list
+	// below it that scrolls, sized so the frame never outgrows the terminal.
 	if m.showBanner() {
-		b.WriteString(banner(m.width) + "\n\n")
+		b.WriteString(banner() + "\n\n")
 	}
 
 	b.WriteString(m.header())
@@ -48,15 +48,6 @@ func (m Model) View() string {
 	b.WriteString("\n")
 	b.WriteString(m.footer())
 	return b.String()
-}
-
-// showBanner reports whether the splash logo is still worth the vertical
-// space: before any data has arrived, and only in a tall enough terminal.
-func (m Model) showBanner() bool {
-	if m.height > 0 && m.height < 24 {
-		return false
-	}
-	return len(m.feed.Hits) == 0 && m.err == nil
 }
 
 func (m Model) header() string {
@@ -79,7 +70,30 @@ func (m Model) header() string {
 	}
 
 	left := styleBrand.Render("HYPERION") + "  " + strings.Join(tabs, "")
-	return m.spread(left, status)
+	if m.width <= 0 || lipgloss.Width(left)+2+lipgloss.Width(status) <= m.width {
+		return m.spread(left, status)
+	}
+	// Too narrow for everything: the status goes first, then the tabs
+	// shorten. A header that wraps pushes the whole frame down a line.
+	if lipgloss.Width(left) <= m.width {
+		return left
+	}
+	compact := styleBrand.Render("HYPERION") + " " + m.compactTabs()
+	if lipgloss.Width(compact) <= m.width {
+		return compact
+	}
+	return styleBrand.Render(truncate("HYPERION", m.width))
+}
+
+// compactTabs is the tab bar for a narrow terminal.
+func (m Model) compactTabs() string {
+	feed, graph := styleTabOff.Render("1 Feed"), styleTabOff.Render("2 Graph")
+	if m.tab == TabGraph {
+		graph = styleTabOn.Render("▌2 Graph")
+	} else {
+		feed = styleTabOn.Render("▌1 Feed")
+	}
+	return feed + " " + graph
 }
 
 // spread pushes right to the right-hand edge when the width is known.
@@ -96,10 +110,17 @@ func (m Model) feedView() string {
 		return panel("Error", styleError.Render(err.Error()), m.width)
 	}
 
-	title := fmt.Sprintf("Findings  %s",
-		styleCounter.Render(fmt.Sprintf("query %q — %d findings", m.query, len(m.feed.Hits))))
+	total := len(m.feed.Hits)
+	start, end := window(m.offset, m.bodyRows(), total)
 
-	if len(m.feed.Hits) == 0 {
+	counter := fmt.Sprintf("query %q — %d findings", m.query, total)
+	if end-start < total {
+		// Only say where we are when there is somewhere else to be.
+		counter += fmt.Sprintf("  ·  %d–%d", start+1, end)
+	}
+	title := m.fit("Findings  " + counter)
+
+	if total == 0 {
 		body := styleDim.Render("no findings — press / to change the query")
 		if m.loading {
 			body = styleDim.Render(spinnerFrame(m.spinner) + " loading…")
@@ -107,9 +128,9 @@ func (m Model) feedView() string {
 		return panel(title, body, m.width)
 	}
 
-	rows := make([]string, 0, len(m.feed.Hits))
-	for i, hit := range m.feed.Hits {
-		rows = append(rows, m.feedRow(hit.Vulnerability, i == m.cursor))
+	rows := make([]string, 0, end-start)
+	for i := start; i < end; i++ {
+		rows = append(rows, m.feedRow(m.feed.Hits[i].Vulnerability, i == m.cursor))
 	}
 	return panel(title, strings.Join(rows, "\n"), m.width)
 }
@@ -119,6 +140,17 @@ func (m Model) feedView() string {
 // row that measured correctly in one path wrapped in the other.
 func (m Model) feedRow(v model.Vulnerability, selected bool) string {
 	severity := v.SeverityLabel()
+
+	// Narrower than the fixed columns: a plain row, truncated. Legibility
+	// beats colour, and a row that wraps costs two lines of the budget.
+	if m.innerWidth() < fixedColumns {
+		row := truncate(v.CVEID+" "+severity, m.innerWidth()-colMarker)
+		if selected {
+			return styleSelect.Render("▸ " + row)
+		}
+		return "  " + row
+	}
+
 	id := pad(truncate(v.CVEID, colID), colID)
 	sev := pad(severity, colSeverity)
 	headline := truncate(v.Headline(), m.headlineWidth())
@@ -148,8 +180,23 @@ func (m Model) graphView() string {
 		summary = "this CVE is not linked to any package yet"
 	}
 
-	body := styleDim.Render(summary) + "\n\n" + styleTree.Render(RenderTree(m.radius))
-	return panel("Blast Radius  "+styleCounter.Render(m.radius.CVEID), body, m.width)
+	lines := m.treeLines()
+	start, end := window(m.graphOffset, m.treeRows(), len(lines))
+
+	visible := make([]string, 0, end-start)
+	for _, line := range lines[start:end] {
+		// A chain like "repo → lib → lib → lib" can outrun the panel, and a
+		// wrapped line is a line the height budget never counted.
+		visible = append(visible, truncate(line, m.innerWidth()))
+	}
+
+	title := "Blast Radius  " + m.radius.CVEID
+	if end-start < len(lines) {
+		title += fmt.Sprintf("  ·  lines %d–%d of %d", start+1, end, len(lines))
+	}
+
+	body := styleDim.Render(m.fitPlain(summary)) + "\n\n" + styleTree.Render(strings.Join(visible, "\n"))
+	return panel(m.fit(title), body, m.width)
 }
 
 // promptBox is the search input, styled after a shell prompt: always visible,
@@ -164,41 +211,57 @@ func (m Model) promptBox() string {
 		box = box.Width(m.width - 2)
 	}
 
+	// "search: " and the caret take 9 cells; a query longer than the rest
+	// would wrap the box onto a fourth line the budget never counted.
+	query := truncateLeft(m.query, m.innerWidth()-9)
 	if m.editing {
 		box = box.BorderForeground(colAccent)
-		return box.Render(stylePrompt.Render("search: ") + m.query + styleSelect.Render("▏"))
+		return box.Render(stylePrompt.Render("search: ") + query + styleSelect.Render("▏"))
 	}
-	return box.Render(styleFaint.Render("search: ") + styleDim.Render(m.query))
+	return box.Render(styleFaint.Render("search: ") + styleDim.Render(query))
 }
 
 func (m Model) footer() string {
 	if m.editing {
 		return styleFaint.Render("  enter search · esc cancel")
 	}
-	return styleFaint.Render(
-		"  ↑/↓ move · enter blast radius · tab switch · / search · r refresh · q quit")
+	hints := "  ↑/↓ move · enter blast radius · tab switch · / search · r refresh · q quit"
+	if m.tab == TabGraph {
+		hints = "  ↑/↓ scroll · pgup/pgdn page · tab switch · r refresh · q quit"
+	}
+	return styleFaint.Render(m.fitPlain(hints))
 }
 
-// headlineWidth keeps a long summary from wrapping the row. It falls back to a
-// sane width before the terminal has reported its size.
+// fixedColumns is the marker, id and severity columns with their gaps.
+const fixedColumns = colMarker + colID + 1 + colSeverity + 1
+
+// headlineWidth is what is left of the panel after the fixed columns. Before
+// the terminal has reported its size it falls back to a sane default; after,
+// it is exact — even when that leaves nothing — because a headline that does
+// not fit wraps the row onto a second line.
 func (m Model) headlineWidth() int {
-	// Panel border and padding cost 4 cells on top of the columns.
-	chrome := colMarker + colID + 1 + colSeverity + 1 + 4
-	if m.width <= chrome+10 {
+	if m.width <= 0 {
 		return 60
 	}
-	return m.width - chrome
+	return m.innerWidth() - fixedColumns
 }
 
 // truncate shortens s to at most width terminal cells, marking the cut with an
 // ellipsis. Width is measured in cells rather than runes because they are not
 // the same thing: a CJK character occupies two columns, so counting runes would
-// let a row overflow the terminal and wrap.
+// let a row overflow the terminal and wrap. A width of zero or less yields
+// nothing — returning s unchanged there would be the overflow this prevents.
 func truncate(s string, width int) string {
-	if width <= 1 || runewidth.StringWidth(s) <= width {
+	switch {
+	case runewidth.StringWidth(s) <= width:
 		return s
+	case width <= 0:
+		return ""
+	case width == 1:
+		return "…"
+	default:
+		return runewidth.Truncate(s, width, "…")
 	}
-	return runewidth.Truncate(s, width, "…")
 }
 
 // pad right-pads s to exactly width cells, so columns line up whatever the
@@ -208,4 +271,32 @@ func pad(s string, width int) string {
 		return s + strings.Repeat(" ", gap)
 	}
 	return s
+}
+
+// fit truncates a panel title to the panel's inner width; panel() styles it.
+func (m Model) fit(title string) string {
+	return truncate(title, m.innerWidth())
+}
+
+// fitPlain truncates a line to the terminal width without styling it.
+func (m Model) fitPlain(line string) string {
+	if m.width <= 0 {
+		return line
+	}
+	return truncate(line, m.width)
+}
+
+// truncateLeft keeps the end of s, which for a query being typed is the part
+// the user is looking at.
+func truncateLeft(s string, width int) string {
+	if width <= 1 || runewidth.StringWidth(s) <= width {
+		return s
+	}
+	runes := []rune(s)
+	for i := range runes {
+		if tail := string(runes[i:]); runewidth.StringWidth(tail) <= width-1 {
+			return "…" + tail
+		}
+	}
+	return "…"
 }

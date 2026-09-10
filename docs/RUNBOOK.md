@@ -282,8 +282,14 @@ HYPERION  ▌ 1 Live Feed   2 Graph Explorer                    updated 04:37:09
   ↑/↓ move · enter blast radius · tab switch · / search · r refresh · q quit
 ```
 
-The banner appears only before the first results, and is replaced by a compact wordmark in
-a narrow terminal — a wrapped banner looks broken.
+The banner stays pinned at the top for the whole session; the list beneath it scrolls to
+keep the cursor in view, and shows which part you are looking at (`25 findings · 2–25`).
+In a terminal too small to hold the banner and a usable list (under 68 columns or 24 rows)
+the banner steps aside — the tab bar still carries the name.
+
+Everything is sized to the terminal on purpose: Bubble Tea keeps only the _last_
+terminal-height lines of a frame that is too tall, so an overflowing list would silently
+delete the top of the screen rather than scroll.
 
 It opens on the **Live Feed**: a list of findings refreshed on a timer (v2 polls; gRPC
 streaming is v3). Select a finding and press `enter` to see its blast radius drawn as a
@@ -294,8 +300,10 @@ tree in the **Graph Explorer**.
 | Key                  | Action                                                      |
 | :------------------- | :---------------------------------------------------------- |
 | `↑` / `↓`, `k` / `j` | move the cursor                                             |
-| `g` / `G`            | jump to the first / last finding                            |
+| `g` / `G`            | jump to the first / last finding (also `home` / `end`)      |
+| `pgup` / `pgdn`      | page up / down (also `ctrl+u` / `ctrl+d`)                   |
 | `enter`              | open the blast radius for the selected finding              |
+|                      | in the Graph Explorer, the movement keys scroll the tree    |
 | `tab`                | switch between the two views                                |
 | `1` / `2`            | jump straight to Live Feed / Graph Explorer                 |
 | `/`                  | edit the search query — `enter` to run it, `esc` to discard |

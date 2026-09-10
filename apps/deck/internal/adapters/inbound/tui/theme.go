@@ -47,9 +47,10 @@ func severityStyle(label string) lipgloss.Style {
 	}
 }
 
-// banner is the splash logo. It is 64 columns wide, so it is only drawn when
-// the terminal can hold it without wrapping — a wrapped banner looks broken,
-// and looking broken is worse than not having a banner.
+// banner is the logo pinned to the top of the screen. It is 64 columns wide,
+// so showBanner only draws it when the terminal can hold it without wrapping —
+// a wrapped banner looks broken, and looking broken is worse than none. The tab
+// bar always carries the name, so a narrow terminal still says HYPERION.
 const bannerWidth = 64
 
 var bannerLines = []string{
@@ -61,11 +62,8 @@ var bannerLines = []string{
 	`╚═╝  ╚═╝   ╚═╝   ╚═╝     ╚══════╝╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝`,
 }
 
-// banner renders the logo, or a compact wordmark in a narrow terminal.
-func banner(width int) string {
-	if width > 0 && width < bannerWidth+4 {
-		return styleBrand.Render("◆ HYPERION")
-	}
+// banner renders the logo.
+func banner() string {
 	return styleBrand.Render(strings.Join(bannerLines, "\n"))
 }
 

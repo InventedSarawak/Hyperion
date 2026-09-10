@@ -3,6 +3,7 @@ package tui_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -449,15 +450,15 @@ var _ = Describe("Layout", func() {
 		}
 	})
 
-	It("shows the banner before any data and drops it once results arrive", func() {
+	It("keeps the banner pinned at the top once results arrive", func() {
 		m := newModel(feedWith("CVE-2021-44228"))
 		sized, _ := apply(m, tea.WindowSizeMsg{Width: 110, Height: 40})
-		Expect(stripANSI(sized.View())).To(ContainSubstring("██╗  ██╗"), "banner expected on the splash")
+		Expect(stripANSI(sized.View())).To(ContainSubstring("██╗  ██╗"))
 
 		got, cmd := apply(sized, key("r"))
 		got = deliver(got, cmd)
-		Expect(stripANSI(got.View())).ToNot(ContainSubstring("██╗  ██╗"),
-			"the banner is an introduction, not furniture on every refresh")
+		lines := strings.Split(stripANSI(got.View()), "\n")
+		Expect(lines[0]).To(ContainSubstring("██╗  ██╗"), "the banner is the first line, for the whole session")
 	})
 
 	It("falls back to a wordmark in a terminal too narrow for the logo", func() {
@@ -489,5 +490,149 @@ var _ = Describe("Layout", func() {
 
 		_, idle := apply(got, tui.SpinnerTick())
 		Expect(idle).To(BeNil(), "an idle deck must not keep waking the terminal")
+	})
+})
+
+// manyHits builds a feed longer than any terminal is tall.
+func manyHits(n int) model.Feed {
+	ids := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		ids = append(ids, fmt.Sprintf("CVE-2026-%05d", i))
+	}
+	return feedWith(ids...)
+}
+
+// loadedAt returns a model that has fetched feed and knows its terminal size.
+func loadedAt(feed model.Feed, width, height int) tui.Model {
+	GinkgoHelper()
+	m := tui.New(&stubSearch{feed: feed}, &stubExplorer{},
+		tui.Options{Query: "cve", PageSize: 25, Endpoint: "nexus"})
+	m, _ = apply(m, tea.WindowSizeMsg{Width: width, Height: height})
+	got, cmd := apply(m, key("r"))
+	return deliver(got, cmd)
+}
+
+func viewLines(m tui.Model) []string {
+	return strings.Split(stripANSI(m.View()), "\n")
+}
+
+var _ = Describe("Fitting the terminal", func() {
+	// Bubble Tea keeps only the last terminal-height lines of an oversized
+	// frame, so overflow does not scroll — it deletes the top of the screen.
+	// That is what made the banner vanish.
+
+	It("never draws a frame taller than the terminal, whatever the size", func() {
+		for _, size := range [][2]int{{110, 40}, {110, 24}, {80, 30}, {200, 60}, {70, 26}, {60, 20}, {40, 12}} {
+			m := loadedAt(manyHits(80), size[0], size[1])
+			graph, _ := apply(m, key("2"))
+
+			for _, view := range []tui.Model{m, graph} {
+				lines := viewLines(view)
+				Expect(len(lines)).To(BeNumerically("<=", size[1]),
+					"%dx%d: a frame taller than the screen loses its top lines", size[0], size[1])
+				// A line wider than the terminal wraps in the terminal, which
+				// is an extra line even though it holds no newline.
+				for _, line := range lines {
+					Expect(runewidth.StringWidth(line)).To(BeNumerically("<=", size[0]),
+						"%dx%d: %q wraps", size[0], size[1], line)
+				}
+			}
+		}
+	})
+
+	It("keeps the banner and tab bar on screen with a long list", func() {
+		lines := viewLines(loadedAt(manyHits(80), 110, 40))
+
+		Expect(lines[0]).To(ContainSubstring("██╗  ██╗"))
+		Expect(strings.Join(lines[:10], "\n")).To(ContainSubstring("Live Feed"))
+	})
+
+	It("scrolls the list so the cursor is always visible", func() {
+		m := loadedAt(manyHits(80), 110, 40)
+
+		bottom, _ := apply(m, key("G"))
+		selected, ok := bottom.Selected()
+		Expect(ok).To(BeTrue())
+		Expect(selected.CVEID).To(Equal("CVE-2026-00079"))
+		Expect(stripANSI(bottom.View())).To(ContainSubstring("▸ CVE-2026-00079"))
+		Expect(stripANSI(bottom.View())).ToNot(ContainSubstring("CVE-2026-00000 "),
+			"the top of the list has scrolled away")
+
+		top, _ := apply(bottom, key("g"))
+		Expect(stripANSI(top.View())).To(ContainSubstring("▸ CVE-2026-00000"))
+	})
+
+	It("says which part of a long list is on screen", func() {
+		view := stripANSI(loadedAt(manyHits(80), 110, 40).View())
+		Expect(view).To(ContainSubstring("80 findings  ·  1–"))
+	})
+
+	It("does not show a range when everything fits", func() {
+		view := stripANSI(loadedAt(manyHits(3), 110, 40).View())
+		Expect(view).ToNot(ContainSubstring("  ·  1–"))
+	})
+
+	It("pages with pgdown and pgup", func() {
+		m := loadedAt(manyHits(80), 110, 40)
+		down, _ := apply(m, tea.KeyMsg{Type: tea.KeyPgDown})
+		selected, _ := down.Selected()
+		Expect(selected.CVEID).ToNot(Equal("CVE-2026-00000"))
+
+		up, _ := apply(down, tea.KeyMsg{Type: tea.KeyPgUp})
+		selected, _ = up.Selected()
+		Expect(selected.CVEID).To(Equal("CVE-2026-00000"))
+	})
+
+	It("keeps the cursor on screen after a resize to a smaller terminal", func() {
+		m := loadedAt(manyHits(80), 110, 60)
+		deep, _ := apply(m, key("G"))
+
+		small, _ := apply(deep, tea.WindowSizeMsg{Width: 110, Height: 26})
+		Expect(len(viewLines(small))).To(BeNumerically("<=", 26))
+		Expect(stripANSI(small.View())).To(ContainSubstring("▸ CVE-2026-00079"))
+	})
+
+	It("gives way to the list, not the other way round, in a short terminal", func() {
+		// The logo is decoration; the findings are the point.
+		view := stripANSI(loadedAt(manyHits(80), 110, 22).View())
+		Expect(view).ToNot(ContainSubstring("██╗  ██╗"))
+		Expect(view).To(ContainSubstring("HYPERION"), "the tab bar still carries the name")
+	})
+
+	It("scrolls a blast radius taller than the screen", func() {
+		repos := make([]model.ImpactedRepository, 0, 60)
+		for i := 0; i < 60; i++ {
+			repos = append(repos, model.ImpactedRepository{
+				FullName: fmt.Sprintf("acme/service-%02d", i), ViaPackage: "npm:next", Depth: 1, Direct: true,
+			})
+		}
+		explorer := &stubExplorer{radius: model.BlastRadius{
+			CVEID: "CVE-2026-00000", VulnerablePackages: []string{"npm:next"}, Repositories: repos,
+		}}
+		m := tui.New(&stubSearch{feed: manyHits(5)}, explorer, tui.Options{Query: "cve", PageSize: 25})
+		m, _ = apply(m, tea.WindowSizeMsg{Width: 110, Height: 40})
+		m, cmd := apply(m, key("r"))
+		m = deliver(m, cmd)
+		m, cmd = apply(m, tea.KeyMsg{Type: tea.KeyEnter})
+		m = deliver(m, cmd)
+
+		Expect(len(viewLines(m))).To(BeNumerically("<=", 40))
+		Expect(stripANSI(m.View())).To(ContainSubstring("lines 1–"))
+		Expect(stripANSI(m.View())).ToNot(ContainSubstring("acme/service-59"))
+
+		end, _ := apply(m, key("G"))
+		Expect(stripANSI(end.View())).To(ContainSubstring("acme/service-59"))
+		Expect(len(viewLines(end))).To(BeNumerically("<=", 40))
+	})
+
+	It("truncates a long query in the prompt instead of wrapping the box", func() {
+		m := loadedAt(manyHits(3), 80, 30)
+		m, _ = apply(m, key("/"))
+		m, _ = apply(m, key(strings.Repeat("x", 300)))
+
+		Expect(len(viewLines(m))).To(BeNumerically("<=", 30))
+		for _, line := range viewLines(m) {
+			Expect(runewidth.StringWidth(line)).To(BeNumerically("<=", 80))
+		}
 	})
 })

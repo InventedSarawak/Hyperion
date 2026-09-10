@@ -8,10 +8,10 @@ import (
 	"github.com/inventedsarawak/hyperion/apps/deck/internal/domain/model"
 )
 
-// Update handles one message. Keys are dispatched by mode first: while the
-// query is being edited every printable key belongs to the query, not to the
-// application's shortcuts.
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+// update handles one message; Update (layout.go) wraps it to keep scrolling in
+// range. Keys are dispatched by mode first: while the query is being edited
+// every printable key belongs to the query, not to the application's shortcuts.
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -108,21 +108,26 @@ func (m Model) updateBrowsing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.tab = TabGraph
 		return m, nil
 
+	// Movement moves the cursor in the feed and scrolls the tree in the graph
+	// explorer. Nothing here bounds-checks: clampScroll does, after every
+	// message, so the limits live in one place.
 	case "j", "down":
-		if m.tab == TabFeed && m.cursor < len(m.feed.Hits)-1 {
-			m.cursor++
-		}
+		m = m.scroll(1)
 		return m, nil
 	case "k", "up":
-		if m.tab == TabFeed && m.cursor > 0 {
-			m.cursor--
-		}
+		m = m.scroll(-1)
 		return m, nil
-	case "g":
-		m.cursor = 0
+	case "pgdown", "ctrl+d":
+		m = m.scroll(max(1, m.bodyRows()-1))
 		return m, nil
-	case "G":
-		m.cursor = max(0, len(m.feed.Hits)-1)
+	case "pgup", "ctrl+u":
+		m = m.scroll(-max(1, m.bodyRows()-1))
+		return m, nil
+	case "g", "home":
+		m = m.scroll(-unbounded)
+		return m, nil
+	case "G", "end":
+		m = m.scroll(unbounded)
 		return m, nil
 
 	case "enter":
@@ -137,6 +142,7 @@ func (m Model) updateBrowsing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Clear the previous result so the view never shows one CVE's
 		// radius under another CVE's heading while the query is in flight.
 		m.radius = model.BlastRadius{CVEID: selected.CVEID}
+		m.graphOffset = 0
 		return m, tea.Batch(m.explore(selected.CVEID), m.spin())
 
 	case "/":
@@ -153,4 +159,26 @@ func (m Model) updateBrowsing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.refresh(), m.spin())
 	}
 	return m, nil
+}
+
+// scroll moves by delta in whichever list the active tab shows.
+func (m Model) scroll(delta int) Model {
+	if m.tab == TabGraph {
+		m.graphOffset = saturatingAdd(m.graphOffset, delta)
+		return m
+	}
+	m.cursor = saturatingAdd(m.cursor, delta)
+	return m
+}
+
+// saturatingAdd adds without overflowing when delta is ±unbounded.
+func saturatingAdd(v, delta int) int {
+	switch {
+	case delta >= unbounded:
+		return unbounded
+	case delta <= -unbounded:
+		return 0
+	default:
+		return v + delta
+	}
 }

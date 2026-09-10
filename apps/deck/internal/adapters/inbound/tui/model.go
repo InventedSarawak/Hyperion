@@ -59,6 +59,11 @@ type Model struct {
 	cursor int
 	radius model.BlastRadius
 
+	// offset is the first feed row on screen; graphOffset the first tree
+	// line. Both are kept in range by clampScroll after every message.
+	offset      int
+	graphOffset int
+
 	query   string
 	editing bool
 
