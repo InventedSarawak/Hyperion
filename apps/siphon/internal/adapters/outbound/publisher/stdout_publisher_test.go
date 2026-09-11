@@ -48,6 +48,21 @@ var _ = Describe("Stdout Publisher", func() {
 		Expect(got.GetVulnerability().GetScores()[0].GetBaseScore()).To(Equal(10.0))
 		Expect(got.GetVulnerability().GetPublishedAt().AsTime().Year()).To(Equal(2021))
 	})
+
+	It("carries every id the finding is known by, and its kind", func() {
+		var buf bytes.Buffer
+		evt := events.NewSignalDiscovered(
+			valueobject.SourceKindGitHubAdvisory,
+			model.SourceSignal{CVEID: "GHSA-fw8c-xr5c-95f9", Aliases: []string{"MAL-2026-2307"}, Kind: model.KindMalware},
+			time.Now(), "",
+		)
+		Expect(publisher.NewStdout(&buf).Publish(context.Background(), evt)).To(Succeed())
+
+		var got eventsv1.SignalDiscovered
+		Expect(protojson.Unmarshal(buf.Bytes(), &got)).To(Succeed())
+		Expect(got.GetVulnerability().GetAliases()).To(Equal([]string{"MAL-2026-2307"}))
+		Expect(got.GetVulnerability().GetKind()).To(Equal(commonv1.FindingKind_FINDING_KIND_MALWARE))
+	})
 })
 
 var _ = Describe("source kind coverage", func() {

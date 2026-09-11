@@ -63,10 +63,9 @@ type AffectedRange struct {
 }
 
 // ToSourceSignal maps an OSV record to a domain signal. It reports false when
-// the record was withdrawn, has no identity other feeds share (see Identity),
-// or predates `since`.
+// the record was withdrawn, carries no id at all, or predates `since`.
 func ToSourceSignal(v Vulnerability, since time.Time) (model.SourceSignal, bool) {
-	id := Identity(v)
+	id, aliases := Identity(v)
 	if id == "" || v.Withdrawn != "" {
 		return model.SourceSignal{}, false
 	}
@@ -88,10 +87,17 @@ func ToSourceSignal(v Vulnerability, since time.Time) (model.SourceSignal, bool)
 		}
 	}
 
+	kind := model.KindVulnerability
+	if isMalware(v) {
+		kind = model.KindMalware
+	}
+
 	// No summary means no title. Substituting the record id would pass a
 	// placeholder off as a title, which is exactly what hid NVD descriptions.
 	return model.SourceSignal{
 		CVEID:            id,
+		Aliases:          aliases,
+		Kind:             kind,
 		Title:            strings.TrimSpace(v.Summary),
 		Description:      description,
 		Scores:           scoresFor(v),
@@ -185,44 +191,73 @@ func span(introduced, upper string) string {
 	return ">= " + introduced + ", " + upper
 }
 
-// Identity picks the id a record is stored under: its CVE when it has one,
-// otherwise its GitHub advisory (GHSA) id, otherwise nothing.
+// Identity splits a record's ids into the one it leads with and the rest.
 //
-// The CVE comes first because it is what every other feed reports under, so
-// that is what lets records reconcile. But plenty of real findings never get
-// a CVE — the axios compromise (MAL-2026-2307, GHSA-fw8c-xr5c-95f9) was
-// malware published to npm, not a bug in axios — and keying only on CVEs made
-// them invisible. The GHSA id is the fallback because GitHub reports the same
-// advisory under it, so the two feeds still merge.
+// OSV knows each finding by several names — its own id (GHSA-, PYSEC-, GO-,
+// MAL-, …) plus the aliases other databases gave it — and every one of them is
+// how some other feed, or some user, refers to it. All are kept: dropping the
+// GHSA would stop GitHub's copy merging with this one, and dropping the MAL
+// would make malware unfindable by the id its reports cite.
 //
-// A record with neither is skipped. That is mostly OSV's malicious-package
-// dataset (MAL-*): hundreds of thousands of typosquats nobody installs, which
-// would bury every search. The malware GitHub has reviewed carries a GHSA id
-// and comes through.
-func Identity(v Vulnerability) string {
-	if isCVE(v.ID) {
-		return strings.ToUpper(v.ID)
+// The lead id follows the priority cortex stores findings under: a CVE, then
+// a GHSA, then a MAL, then the record's own id. cortex re-derives it from the
+// full set, so the choice here only keeps siphon's logs readable.
+func Identity(v Vulnerability) (id string, aliases []string) {
+	seen := make(map[string]struct{}, 1+len(v.Aliases))
+	ids := make([]string, 0, 1+len(v.Aliases))
+	for _, raw := range append([]string{v.ID}, v.Aliases...) {
+		raw = strings.TrimSpace(raw)
+		if isCVE(raw) {
+			raw = strings.ToUpper(raw)
+		}
+		if raw == "" {
+			continue
+		}
+		if _, dup := seen[raw]; dup {
+			continue
+		}
+		seen[raw] = struct{}{}
+		ids = append(ids, raw)
 	}
-	for _, alias := range v.Aliases {
-		if isCVE(alias) {
-			return strings.ToUpper(alias)
+	if len(ids) == 0 {
+		return "", nil
+	}
+
+	lead := 0
+	for i, candidate := range ids {
+		if idRank(candidate) < idRank(ids[lead]) {
+			lead = i
 		}
 	}
-	if isGHSA(v.ID) {
-		return v.ID
-	}
-	for _, alias := range v.Aliases {
-		if isGHSA(alias) {
-			return alias
+	for i, other := range ids {
+		if i != lead {
+			aliases = append(aliases, other)
 		}
 	}
-	return ""
+	return ids[lead], aliases
+}
+
+// idRank orders id schemes by how widely they are shared.
+func idRank(id string) int {
+	switch {
+	case isCVE(id):
+		return 0
+	case isGHSA(id):
+		return 1
+	case isMAL(id):
+		return 2
+	default:
+		return 3
+	}
 }
 
 func isCVE(id string) bool { return strings.HasPrefix(strings.ToUpper(id), "CVE-") }
 
 // isGHSA is case-sensitive on purpose: GHSA ids are, and cortex keeps them so.
 func isGHSA(id string) bool { return strings.HasPrefix(id, "GHSA-") }
+
+// isMAL matches OSV's malicious-packages ids, which are issued for nothing else.
+func isMAL(id string) bool { return strings.HasPrefix(strings.ToUpper(id), "MAL-") }
 
 // scoresFor is the record's scores, with one domain rule on top: a malicious
 // package is critical. OSV's malware records (MAL-*) carry no severity at all,
@@ -239,11 +274,11 @@ func scoresFor(v Vulnerability) []model.CVSS {
 
 // isMalware reports whether the record is from OSV's malicious-package data.
 func isMalware(v Vulnerability) bool {
-	if strings.HasPrefix(v.ID, "MAL-") {
+	if isMAL(v.ID) {
 		return true
 	}
 	for _, alias := range v.Aliases {
-		if strings.HasPrefix(alias, "MAL-") {
+		if isMAL(alias) {
 			return true
 		}
 	}

@@ -123,7 +123,7 @@ var _ = Describe("OSV affected packages", func() {
 		Expect(signal.CVEID).To(Equal("GHSA-only-1234"))
 	})
 
-	It("keys GitHub-reviewed malware on its GHSA alias", func() {
+	It("leads GitHub-reviewed malware with its GHSA alias and keeps the MAL id", func() {
 		v := decode(`{"id":"MAL-2026-2307","aliases":["GHSA-fw8c-xr5c-95f9"],
 		  "summary":"Malicious code in axios (npm)","modified":"2026-04-01T00:00:00Z",
 		  "affected":[{"package":{"ecosystem":"npm","name":"axios"}}]}`)
@@ -131,6 +131,8 @@ var _ = Describe("OSV affected packages", func() {
 		signal, ok := osv.ToSourceSignal(v, time.Time{})
 		Expect(ok).To(BeTrue())
 		Expect(signal.CVEID).To(Equal("GHSA-fw8c-xr5c-95f9"))
+		Expect(signal.Aliases).To(Equal([]string{"MAL-2026-2307"}))
+		Expect(signal.Kind).To(Equal(model.KindMalware))
 		Expect(signal.Title).To(Equal("Malicious code in axios (npm)"))
 	})
 
@@ -158,13 +160,42 @@ var _ = Describe("OSV affected packages", func() {
 		signal, ok := osv.ToSourceSignal(v, time.Time{})
 		Expect(ok).To(BeTrue())
 		Expect(signal.CVEID).To(Equal("CVE-2025-55182"))
+		Expect(signal.Aliases).To(Equal([]string{"GHSA-fv66-9v8q-g76r"}))
+		Expect(signal.Kind).To(Equal(model.KindVulnerability))
 	})
 
-	It("skips unreviewed malware that has neither a CVE nor a GHSA id", func() {
+	It("keeps the record's own ecosystem id as an alias of its CVE", func() {
+		v := decode(`{"id":"PYSEC-2021-19","aliases":["cve-2021-3281","GHSA-xxxx-xxxx-xxxx"],"modified":"2024-01-01T00:00:00Z"}`)
+
+		signal, ok := osv.ToSourceSignal(v, time.Time{})
+		Expect(ok).To(BeTrue())
+		Expect(signal.CVEID).To(Equal("CVE-2021-3281"))
+		Expect(signal.Aliases).To(ConsistOf("PYSEC-2021-19", "GHSA-xxxx-xxxx-xxxx"))
+	})
+
+	It("keeps malware only OSV knows, under its MAL id and rated critical", func() {
 		v := decode(`{"id":"MAL-2026-9999","modified":"2026-01-01T00:00:00Z",
 		  "affected":[{"package":{"ecosystem":"npm","name":"typosquat"}}]}`)
 
-		_, ok := osv.ToSourceSignal(v, time.Time{})
+		signal, ok := osv.ToSourceSignal(v, time.Time{})
+		Expect(ok).To(BeTrue())
+		Expect(signal.CVEID).To(Equal("MAL-2026-9999"))
+		Expect(signal.Aliases).To(BeEmpty())
+		Expect(signal.Kind).To(Equal(model.KindMalware))
+		Expect(signal.Scores[0].Severity).To(Equal(model.SeverityCritical))
+	})
+
+	It("keeps an advisory with no CVE, GHSA or MAL under the id it has", func() {
+		v := decode(`{"id":"GO-2024-3333","modified":"2024-01-01T00:00:00Z"}`)
+
+		signal, ok := osv.ToSourceSignal(v, time.Time{})
+		Expect(ok).To(BeTrue())
+		Expect(signal.CVEID).To(Equal("GO-2024-3333"))
+		Expect(signal.Kind).To(Equal(model.KindVulnerability))
+	})
+
+	It("skips a record that carries no id at all", func() {
+		_, ok := osv.ToSourceSignal(decode(`{"summary":"anonymous","modified":"2024-01-01T00:00:00Z"}`), time.Time{})
 		Expect(ok).To(BeFalse())
 	})
 

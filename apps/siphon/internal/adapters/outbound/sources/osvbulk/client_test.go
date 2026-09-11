@@ -79,12 +79,15 @@ var _ = Describe("OSV bulk export backfill", func() {
 		for _, s := range got {
 			ids[s.CVEID] = s
 		}
-		// React2Shell under its CVE, the axios compromise under its GHSA id;
-		// the unreviewed typosquat, the pre-window record and the corrupt
-		// file are all left out.
-		Expect(ids).To(HaveLen(2))
+		// React2Shell under its CVE, the axios compromise under its GHSA id,
+		// the typosquat only OSV knows under its MAL id; the pre-window record
+		// and the corrupt file are left out.
+		Expect(ids).To(HaveLen(3))
 		Expect(ids).To(HaveKey("CVE-2025-55182"))
 		Expect(ids).To(HaveKey("GHSA-fw8c-xr5c-95f9"))
+		Expect(ids).To(HaveKey("MAL-2026-0001"))
+		Expect(ids["MAL-2026-0001"].Kind).To(Equal(model.KindMalware))
+		Expect(ids["GHSA-fw8c-xr5c-95f9"].Aliases).To(Equal([]string{"MAL-2026-2307"}))
 		Expect(ids["CVE-2025-55182"].AffectedPackages[0].Name).To(Equal("react-server-dom-webpack"))
 		Expect(ids["CVE-2025-55182"].AffectedPackages[0].Version).To(Equal(">= 19.0.0, < 19.0.1"))
 	})
@@ -101,7 +104,7 @@ var _ = Describe("OSV bulk export backfill", func() {
 
 		got, err := collect(osvbulk.New(srv.Client(), srv.URL, []string{"PyPI", "npm"}))
 		Expect(err).To(MatchError(ContainSubstring("PyPI")))
-		Expect(got).To(HaveLen(2), "npm is still read after PyPI fails")
+		Expect(got).To(HaveLen(3), "npm is still read after PyPI fails")
 	})
 
 	It("stops at once when the consumer fails", func() {

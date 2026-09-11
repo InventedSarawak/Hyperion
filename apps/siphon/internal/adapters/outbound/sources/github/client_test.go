@@ -52,6 +52,8 @@ var _ = Describe("GitHub Advisory adapter", func() {
 		Expect(got).To(HaveLen(2))
 
 		Expect(got[0].CVEID).To(Equal("CVE-2021-44228"))
+		Expect(got[0].Aliases).To(Equal([]string{"GHSA-jfh8-c2jp-5v3q"}), "the GHSA is kept, not dropped")
+		Expect(got[0].Kind).To(Equal(model.KindVulnerability))
 		Expect(got[0].Title).To(Equal("Log4Shell"))
 		Expect(got[0].Scores).To(HaveLen(1))
 		Expect(got[0].Scores[0].BaseScore).To(Equal(10.0))
@@ -98,6 +100,7 @@ var _ = Describe("GitHub Advisory adapter", func() {
 		got, err := github.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()), sourcehttp.WithRateLimit(time.Millisecond)).Fetch(ctx, time.Time{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got[1].CVEID).To(Equal("GHSA-only-no-cve"))
+		Expect(got[1].Aliases).To(BeEmpty())
 	})
 
 	It("sends the bearer token and the modified filter", func() {
@@ -179,6 +182,7 @@ var _ = Describe("GitHub Advisory reviewed pass", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got).To(HaveLen(1))
 		Expect(got[0].CVEID).To(Equal("GHSA-fw8c-xr5c-95f9"))
+		Expect(got[0].Kind).To(Equal(model.KindMalware))
 		Expect(got[0].Scores).To(HaveLen(1))
 		Expect(got[0].Scores[0].Severity).To(Equal(model.SeverityCritical))
 		Expect(got[0].AffectedPackages[0].Name).To(Equal("axios"))

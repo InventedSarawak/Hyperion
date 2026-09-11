@@ -10,6 +10,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/sources/packagefeed"
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/model"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/valueobject"
 )
 
@@ -25,7 +26,7 @@ const osvQueryJSON = `{"vulns":[
 var _ = Describe("Package feed adapter", func() {
 	ctx := context.Background()
 
-	It("resolves watched packages against OSV and keeps only records other feeds can reconcile", func() {
+	It("resolves watched packages against OSV, keeping malware only OSV knows", func() {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(osvQueryJSON))
 		}))
@@ -37,8 +38,10 @@ var _ = Describe("Package feed adapter", func() {
 		got, err := c.Fetch(ctx, time.Time{})
 		Expect(err).ToNot(HaveOccurred())
 
-		Expect(got).To(HaveLen(1)) // the record with no CVE or GHSA id is skipped
+		Expect(got).To(HaveLen(2))
 		Expect(got[0].CVEID).To(Equal("CVE-2026-3333"))
+		Expect(got[1].CVEID).To(Equal("MAL-bbbb"))
+		Expect(got[1].Kind).To(Equal(model.KindMalware))
 		// The advisory's own text, untouched.
 		Expect(got[0].Description).To(Equal("Details here."))
 	})
@@ -53,7 +56,7 @@ var _ = Describe("Package feed adapter", func() {
 			Fetch(ctx, time.Time{})
 
 		Expect(err).ToNot(HaveOccurred())
-		Expect(got).To(HaveLen(1))
+		Expect(got).To(HaveLen(2), "each record once, however many watched packages it names")
 	})
 
 	It("ignores malformed watchlist entries", func() {

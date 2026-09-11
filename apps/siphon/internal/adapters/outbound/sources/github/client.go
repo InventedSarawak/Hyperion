@@ -115,6 +115,9 @@ func (c *Client) fetchPass(ctx context.Context, since time.Time, advisoryType st
 			return signals, fmt.Errorf("github advisory: %w", err)
 		}
 		for _, a := range batch {
+			if a.Type == "" {
+				a.Type = advisoryType // the pass asked for this type by name
+			}
 			if key := dedupeKey(a); key != "" {
 				if _, ok := seen[key]; ok {
 					continue
@@ -169,6 +172,7 @@ func (c *Client) pageURL(since time.Time, page int, advisoryType string) (string
 type advisory struct {
 	GHSAID      string `json:"ghsa_id"`
 	CVEID       string `json:"cve_id"`
+	Type        string `json:"type"` // reviewed, unreviewed or malware
 	HTMLURL     string `json:"html_url"`
 	Summary     string `json:"summary"`
 	Description string `json:"description"`
@@ -195,11 +199,20 @@ type advisory struct {
 // --- mapping: GitHub wire -> domain ---
 
 func toSourceSignal(a advisory) model.SourceSignal {
-	// Prefer the CVE id so records reconcile with other sources; fall back to
-	// the GHSA id for advisories that have no CVE assigned.
-	id := a.CVEID
-	if id == "" {
+	// Lead with the CVE id so records reconcile with other sources, and keep
+	// the GHSA as an alias: it is how GitHub, OSV and the advisory's own page
+	// refer to it. Advisories with no CVE lead with the GHSA.
+	id, aliases := a.CVEID, []string(nil)
+	switch {
+	case id == "":
 		id = a.GHSAID
+	case a.GHSAID != "":
+		aliases = []string{a.GHSAID}
+	}
+
+	kind := model.KindVulnerability
+	if a.Type == typeMalware {
+		kind = model.KindMalware
 	}
 
 	references := a.References
@@ -225,6 +238,8 @@ func toSourceSignal(a advisory) model.SourceSignal {
 
 	return model.SourceSignal{
 		CVEID:            id,
+		Aliases:          aliases,
+		Kind:             kind,
 		Title:            a.Summary,
 		Description:      a.Description,
 		Scores:           scores,

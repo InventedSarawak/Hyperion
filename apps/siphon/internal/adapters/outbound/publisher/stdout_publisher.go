@@ -64,6 +64,8 @@ func toProto(evt events.SignalDiscovered) *eventsv1.SignalDiscovered {
 func toProtoVulnerability(s model.SourceSignal) *commonv1.Vulnerability {
 	return &commonv1.Vulnerability{
 		CveId:            s.CVEID,
+		Aliases:          s.Aliases,
+		Kind:             toProtoKind(s.Kind),
 		Title:            s.Title,
 		Description:      s.Description,
 		Scores:           toProtoScores(s.Scores),
@@ -71,6 +73,19 @@ func toProtoVulnerability(s model.SourceSignal) *commonv1.Vulnerability {
 		PublishedAt:      toTimestamp(s.PublishedAt),
 		ModifiedAt:       toTimestamp(s.ModifiedAt),
 		AffectedPackages: toProtoPackageRefs(s.AffectedPackages),
+	}
+}
+
+// toProtoKind maps the finding kind. An unset kind goes out unspecified,
+// which cortex reads as an ordinary vulnerability.
+func toProtoKind(k model.FindingKind) commonv1.FindingKind {
+	switch k {
+	case model.KindMalware:
+		return commonv1.FindingKind_FINDING_KIND_MALWARE
+	case model.KindVulnerability:
+		return commonv1.FindingKind_FINDING_KIND_VULNERABILITY
+	default:
+		return commonv1.FindingKind_FINDING_KIND_UNSPECIFIED
 	}
 }
 
