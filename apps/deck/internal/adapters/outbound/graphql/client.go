@@ -44,8 +44,11 @@ func New(endpoint string, httpClient *http.Client) *Client {
 // Close exists so the composition root can treat both transports alike.
 func (c *Client) Close() error { return nil }
 
-const searchQuery = `query Search($term: String!, $pageSize: Int) {
-  search(term: $term, pageSize: $pageSize) {
+const searchQuery = `query Search($term: String, $sort: SearchSort, $pageSize: Int, $pageToken: String) {
+  search(term: $term, sort: $sort, pageSize: $pageSize, pageToken: $pageToken) {
+    nextPageToken
+    totalResults
+    totalIsLowerBound
     hits {
       score
       vulnerability {
@@ -65,28 +68,47 @@ const blastRadiusQuery = `query BlastRadius($cveId: String!, $maxDepth: Int) {
   }
 }`
 
-// Search runs a full-text query through the gateway.
-func (c *Client) Search(ctx context.Context, query string, pageSize int) ([]model.SearchHit, error) {
+// Search returns one page of results through the gateway.
+func (c *Client) Search(ctx context.Context, query string, sort model.SearchSort, pageSize int, pageToken string) (model.SearchPage, error) {
 	var out struct {
 		Search struct {
-			Hits []struct {
+			NextPageToken     string  `json:"nextPageToken"`
+			TotalResults      float64 `json:"totalResults"` // GraphQL Int is 32-bit, so the gateway sends a Float
+			TotalIsLowerBound bool    `json:"totalIsLowerBound"`
+			Hits              []struct {
 				Score         float64       `json:"score"`
 				Vulnerability vulnerability `json:"vulnerability"`
 			} `json:"hits"`
 		} `json:"search"`
 	}
-	if err := c.do(ctx, searchQuery, map[string]any{"term": query, "pageSize": pageSize}, &out); err != nil {
-		return nil, err
+	variables := map[string]any{
+		"term":      query,
+		"sort":      gatewaySort(sort),
+		"pageSize":  pageSize,
+		"pageToken": pageToken,
+	}
+	if err := c.do(ctx, searchQuery, variables, &out); err != nil {
+		return model.SearchPage{}, err
 	}
 
-	hits := make([]model.SearchHit, 0, len(out.Search.Hits))
-	for _, h := range out.Search.Hits {
-		hits = append(hits, model.SearchHit{
-			Vulnerability: h.Vulnerability.toModel(),
-			Score:         h.Score,
-		})
+	page := model.SearchPage{
+		NextPageToken:     out.Search.NextPageToken,
+		Total:             int64(out.Search.TotalResults),
+		TotalIsLowerBound: out.Search.TotalIsLowerBound,
+		Hits:              make([]model.SearchHit, 0, len(out.Search.Hits)),
 	}
-	return hits, nil
+	for _, h := range out.Search.Hits {
+		page.Hits = append(page.Hits, model.SearchHit{Vulnerability: h.Vulnerability.toModel(), Score: h.Score})
+	}
+	return page, nil
+}
+
+// gatewaySort maps the sort onto the gateway's GraphQL enum.
+func gatewaySort(s model.SearchSort) string {
+	if s == model.SortNewest {
+		return "NEWEST"
+	}
+	return "RELEVANCE"
 }
 
 // BlastRadius asks the gateway which repositories a vulnerability reaches.

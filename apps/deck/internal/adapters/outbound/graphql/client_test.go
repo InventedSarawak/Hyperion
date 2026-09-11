@@ -10,6 +10,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	gatewayadapter "github.com/inventedsarawak/hyperion/apps/deck/internal/adapters/outbound/graphql"
+	"github.com/inventedsarawak/hyperion/apps/deck/internal/domain/model"
 )
 
 // gateway serves a canned GraphQL response and captures the request.
@@ -41,7 +42,8 @@ var _ = Describe("Gateway client", func() {
 			]}}}`, 0, &req)
 			defer srv.Close()
 
-			hits, err := gatewayadapter.New(srv.URL, srv.Client()).Search(ctx, "log4j", 25)
+			page, err := gatewayadapter.New(srv.URL, srv.Client()).Search(ctx, "log4j", model.SortRelevance, 25, "")
+			hits := page.Hits
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(hits).To(HaveLen(1))
@@ -64,7 +66,8 @@ var _ = Describe("Gateway client", func() {
 			srv := gateway(`{"data":{"search":{"hits":[]}}}`, 0, nil)
 			defer srv.Close()
 
-			hits, err := gatewayadapter.New(srv.URL, srv.Client()).Search(ctx, "nothing", 25)
+			page, err := gatewayadapter.New(srv.URL, srv.Client()).Search(ctx, "nothing", model.SortRelevance, 25, "")
+			hits := page.Hits
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(hits).To(BeEmpty())
@@ -110,7 +113,7 @@ var _ = Describe("Gateway client", func() {
 			srv := gateway(`{"errors":[{"message":"graph unavailable"}]}`, 0, nil)
 			defer srv.Close()
 
-			_, err := gatewayadapter.New(srv.URL, srv.Client()).Search(ctx, "log4j", 25)
+			_, err := gatewayadapter.New(srv.URL, srv.Client()).Search(ctx, "log4j", model.SortRelevance, 25, "")
 
 			Expect(err).To(MatchError(ContainSubstring("graph unavailable")))
 		})
@@ -119,7 +122,7 @@ var _ = Describe("Gateway client", func() {
 			srv := gateway(`gateway is down`, http.StatusBadGateway, nil)
 			defer srv.Close()
 
-			_, err := gatewayadapter.New(srv.URL, srv.Client()).Search(ctx, "log4j", 25)
+			_, err := gatewayadapter.New(srv.URL, srv.Client()).Search(ctx, "log4j", model.SortRelevance, 25, "")
 
 			Expect(err).To(MatchError(ContainSubstring("502")))
 			Expect(err).To(MatchError(ContainSubstring("gateway is down")))
@@ -129,7 +132,7 @@ var _ = Describe("Gateway client", func() {
 			srv := gateway(`{}`, 0, nil)
 			defer srv.Close()
 
-			_, err := gatewayadapter.New(srv.URL, srv.Client()).Search(ctx, "log4j", 25)
+			_, err := gatewayadapter.New(srv.URL, srv.Client()).Search(ctx, "log4j", model.SortRelevance, 25, "")
 
 			Expect(err).To(MatchError(ContainSubstring("no data")))
 		})
@@ -138,9 +141,43 @@ var _ = Describe("Gateway client", func() {
 			srv := gateway(`{}`, 0, nil)
 			srv.Close() // closed on purpose
 
-			_, err := gatewayadapter.New(srv.URL, srv.Client()).Search(ctx, "log4j", 25)
+			_, err := gatewayadapter.New(srv.URL, srv.Client()).Search(ctx, "log4j", model.SortRelevance, 25, "")
 
 			Expect(err).To(HaveOccurred())
 		})
+	})
+})
+
+var _ = Describe("Gateway client paging", func() {
+	ctx := context.Background()
+
+	It("sends the sort and page token, and reads back the next token and total", func() {
+		var req map[string]any
+		srv := gateway(`{"data":{"search":{"nextPageToken":"50","totalResults":6771,
+		  "totalIsLowerBound":false,"hits":[]}}}`, 0, &req)
+		defer srv.Close()
+
+		page, err := gatewayadapter.New(srv.URL, srv.Client()).Search(ctx, "", model.SortNewest, 25, "25")
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(page.NextPageToken).To(Equal("50"))
+		Expect(page.Total).To(Equal(int64(6771)))
+
+		vars, _ := req["variables"].(map[string]any)
+		Expect(vars["sort"]).To(Equal("NEWEST"))
+		Expect(vars["pageToken"]).To(Equal("25"))
+		Expect(vars["term"]).To(Equal(""))
+	})
+
+	It("asks for best match when sorting by relevance", func() {
+		var req map[string]any
+		srv := gateway(`{"data":{"search":{"hits":[]}}}`, 0, &req)
+		defer srv.Close()
+
+		_, err := gatewayadapter.New(srv.URL, srv.Client()).Search(ctx, "next", model.SortRelevance, 25, "")
+
+		Expect(err).ToNot(HaveOccurred())
+		vars, _ := req["variables"].(map[string]any)
+		Expect(vars["sort"]).To(Equal("RELEVANCE"))
 	})
 })

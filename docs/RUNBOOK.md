@@ -295,6 +295,21 @@ It opens on the **Live Feed**: a list of findings refreshed on a timer (v2 polls
 streaming is v3). Select a finding and press `enter` to see its blast radius drawn as a
 tree in the **Graph Explorer**.
 
+### Results and paging
+
+With no search term, the feed is the **latest findings, newest first**. Type `/` and a
+term for a **best-match** search; `s` flips that search to newest-first and back.
+
+Results load a page at a time. Scrolling onto the last loaded row fetches the next page
+automatically (or press `n`), and the title shows where you are:
+
+```
+latest findings — 75 of 6,771  ·  50–73  ·  ↓ more
+```
+
+Refreshes (every `DECK_REFRESH_INTERVAL`, or `r`) re-fetch everything already loaded and keep
+the selection on the same finding, even when newer ones push it down the list.
+
 ### Keys
 
 | Key                  | Action                                                      |
@@ -302,6 +317,8 @@ tree in the **Graph Explorer**.
 | `↑` / `↓`, `k` / `j` | move the cursor                                             |
 | `g` / `G`            | jump to the first / last finding (also `home` / `end`)      |
 | `pgup` / `pgdn`      | page up / down (also `ctrl+u` / `ctrl+d`)                   |
+| `n` (or `]`)         | load the next page of results                               |
+| `s`                  | switch a search between best match and newest               |
 | `enter`              | open the blast radius for the selected finding              |
 |                      | in the Graph Explorer, the movement keys scroll the tree    |
 | `tab`                | switch between the two views                                |

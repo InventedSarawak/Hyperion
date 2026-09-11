@@ -105,11 +105,79 @@ type SearchHit struct {
 	Score         float64
 }
 
-// Feed is the live list of findings, with when it was last refreshed.
+// SearchSort orders the feed.
+type SearchSort string
+
+const (
+	// SortNewest is the live feed: most recently published first.
+	SortNewest SearchSort = "newest"
+	// SortRelevance is best match first, for a search term.
+	SortRelevance SearchSort = "relevance"
+)
+
+// Label is how the sort is named on screen.
+func (s SearchSort) Label() string {
+	if s == SortRelevance {
+		return "best match"
+	}
+	return "newest"
+}
+
+// SearchPage is one page from the intelligence service.
+type SearchPage struct {
+	Hits              []SearchHit
+	NextPageToken     string
+	Total             int64
+	TotalIsLowerBound bool
+}
+
+// Feed is the list of findings on screen: every page loaded so far, and how
+// to fetch the next.
 type Feed struct {
-	Query     string
-	Hits      []SearchHit
-	UpdatedAt time.Time
+	Query             string
+	Sort              SearchSort
+	Hits              []SearchHit
+	NextPageToken     string
+	Total             int64
+	TotalIsLowerBound bool
+	UpdatedAt         time.Time
+}
+
+// HasMore reports whether another page can be loaded.
+func (f Feed) HasMore() bool { return f.NextPageToken != "" }
+
+// Append adds the following page, skipping results already in the feed.
+//
+// Paging a newest-first list by offset shifts when records arrive between two
+// requests: one new finding pushes the last item of page one onto the start of
+// page two. Deduplicating on the CVE id keeps that from showing up twice.
+func (f Feed) Append(page SearchPage) Feed {
+	seen := make(map[string]struct{}, len(f.Hits))
+	for _, h := range f.Hits {
+		seen[h.Vulnerability.CVEID] = struct{}{}
+	}
+	hits := append([]SearchHit{}, f.Hits...)
+	for _, h := range page.Hits {
+		if _, ok := seen[h.Vulnerability.CVEID]; ok {
+			continue
+		}
+		seen[h.Vulnerability.CVEID] = struct{}{}
+		hits = append(hits, h)
+	}
+	f.Hits = hits
+	f.NextPageToken = page.NextPageToken
+	f.Total, f.TotalIsLowerBound = page.Total, page.TotalIsLowerBound
+	return f
+}
+
+// IndexOf returns the position of a CVE in the feed, or -1.
+func (f Feed) IndexOf(cveID string) int {
+	for i, h := range f.Hits {
+		if h.Vulnerability.CVEID == cveID {
+			return i
+		}
+	}
+	return -1
 }
 
 // ImpactedRepository is one repository exposed to a vulnerability.

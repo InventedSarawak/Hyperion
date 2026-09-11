@@ -12,8 +12,9 @@ import (
 // IntelligenceAPI is an OUTBOUND port: query the intelligence service.
 // Implemented by adapters/outbound/grpc.
 type IntelligenceAPI interface {
-	// Search runs a full-text query over indexed vulnerabilities.
-	Search(ctx context.Context, query string, pageSize int) ([]model.SearchHit, error)
+	// Search returns one page of results. An empty query is allowed only with
+	// SortNewest; pageToken is "" for the first page.
+	Search(ctx context.Context, query string, sort model.SearchSort, pageSize int, pageToken string) (model.SearchPage, error)
 	// BlastRadius returns the repositories a vulnerability reaches.
 	BlastRadius(ctx context.Context, cveID string, maxDepth int) (model.BlastRadius, error)
 }

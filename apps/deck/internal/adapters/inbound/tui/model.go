@@ -5,6 +5,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -29,9 +30,12 @@ func (t Tab) Title() string {
 	return "Live Feed"
 }
 
-// Searcher runs the feed query (consumer-side interface).
+// Searcher loads the feed a page at a time (consumer-side interface).
 type Searcher interface {
-	Handle(ctx context.Context, query string, pageSize int) (model.Feed, error)
+	// Handle loads the first page. An empty query is the live feed.
+	Handle(ctx context.Context, query string, sort model.SearchSort, pageSize int) (model.Feed, error)
+	// More loads the page after feed's last and appends it.
+	More(ctx context.Context, feed model.Feed, pageSize int) (model.Feed, error)
 }
 
 // BlastRadiusExplorer walks the dependency graph (consumer-side interface).
@@ -64,8 +68,23 @@ type Model struct {
 	offset      int
 	graphOffset int
 
+	// query is the search box's text, which changes as the user types;
+	// active is the query last submitted, which is what refreshes use. Using
+	// the draft would let a poll fire a search for a half-typed term.
 	query   string
+	active  string
+	sort    model.SearchSort
 	editing bool
+
+	// loadingMore is a following page in flight. It is separate from loading
+	// so the list stays on screen while the next page arrives.
+	loadingMore bool
+	moreErr     error
+	// generation counts list replacements. A page is fetched against one
+	// generation of the list; if the list was replaced before it arrived,
+	// appending it would be wrong — the offsets it was fetched at no longer
+	// line up, so findings would be skipped or repeated.
+	generation int
 
 	loading     bool
 	spinner     int
@@ -84,21 +103,40 @@ func New(search Searcher, explorer BlastRadiusExplorer, opts Options) Model {
 	if opts.PageSize <= 0 {
 		opts.PageSize = 25
 	}
+	sort := model.SortRelevance
+	if strings.TrimSpace(opts.Query) == "" {
+		sort = model.SortNewest // no query: the live feed, newest first
+	}
 	return Model{
 		search:   search,
 		explorer: explorer,
 		opts:     opts,
 		query:    opts.Query,
+		active:   opts.Query,
+		sort:     sort,
 		loading:  true,
 	}
 }
 
 // --- messages ---
 
-// feedMsg carries the result of a feed refresh.
+// feedMsg carries a first page: a new query, or a refresh of the current one.
 type feedMsg struct {
 	feed model.Feed
 	err  error
+	// keep is the CVE that was selected when a refresh was issued, so the
+	// selection stays on the same finding when newer ones push it down.
+	keep string
+}
+
+// moreMsg carries the feed with its next page appended.
+type moreMsg struct {
+	feed model.Feed
+	err  error
+	// generation is the list generation the page was fetched against. A
+	// page token alone cannot tell stale from current: a refresh over
+	// unchanged data hands back the very same token.
+	generation int
 }
 
 // radiusMsg carries the result of a graph traversal.
@@ -125,13 +163,43 @@ func (m Model) spin() tea.Cmd {
 
 // --- commands ---
 
+// refresh re-runs the active query from the top. It asks for as many results
+// as are already loaded (up to the per-request cap), so a periodic refresh
+// updates what you have scrolled through instead of collapsing it to one page,
+// and it keeps the selection on the same finding.
 func (m Model) refresh() tea.Cmd {
-	query, pageSize, search := m.query, m.opts.PageSize, m.search
+	query, sort, search := m.active, m.sort, m.search
+	size := clamp(len(m.feed.Hits), m.opts.PageSize, maxPageSize)
+	keep := ""
+	if v, ok := m.Selected(); ok {
+		keep = v.CVEID
+	}
 	return func() tea.Msg {
-		feed, err := search.Handle(context.Background(), query, pageSize)
+		feed, err := search.Handle(context.Background(), query, sort, size)
+		return feedMsg{feed: feed, err: err, keep: keep}
+	}
+}
+
+// fresh runs a new query from the top, with nothing to preserve.
+func (m Model) fresh() tea.Cmd {
+	query, sort, size, search := m.active, m.sort, m.opts.PageSize, m.search
+	return func() tea.Msg {
+		feed, err := search.Handle(context.Background(), query, sort, size)
 		return feedMsg{feed: feed, err: err}
 	}
 }
+
+// more fetches the page after the last loaded one.
+func (m Model) more() tea.Cmd {
+	feed, size, search, generation := m.feed, m.opts.PageSize, m.search, m.generation
+	return func() tea.Msg {
+		next, err := search.More(context.Background(), feed, size)
+		return moreMsg{feed: next, err: err, generation: generation}
+	}
+}
+
+// maxPageSize is the most one request may ask for.
+const maxPageSize = 200
 
 func (m Model) explore(cveID string) tea.Cmd {
 	depth, explorer := m.opts.MaxDepth, m.explorer
@@ -145,8 +213,8 @@ func (m Model) tick() tea.Cmd {
 	return tea.Tick(m.opts.RefreshInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
-// Init starts the first refresh, the polling timer, and the spinner.
-func (m Model) Init() tea.Cmd { return tea.Batch(m.refresh(), m.tick(), m.spin()) }
+// Init starts the first load, the polling timer, and the spinner.
+func (m Model) Init() tea.Cmd { return tea.Batch(m.fresh(), m.tick(), m.spin()) }
 
 // Selected returns the vulnerability under the cursor, if any.
 func (m Model) Selected() (model.Vulnerability, bool) {

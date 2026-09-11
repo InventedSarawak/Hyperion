@@ -10,13 +10,13 @@ import (
 	"github.com/inventedsarawak/hyperion/apps/deck/internal/domain/ports"
 )
 
-// Default and maximum result counts for one feed refresh.
+// Default and maximum result counts for one page.
 const (
 	DefaultPageSize = 25
 	MaxPageSize     = 200
 )
 
-// RunSearch fetches the findings behind the live feed.
+// RunSearch loads the feed: the first page, and each page after it.
 type RunSearch struct {
 	api ports.IntelligenceAPI
 }
@@ -24,28 +24,55 @@ type RunSearch struct {
 // NewRunSearch wires the use case with its outbound port.
 func NewRunSearch(api ports.IntelligenceAPI) *RunSearch { return &RunSearch{api: api} }
 
-// Handle validates the query and returns a refreshed feed. An empty query is
-// rejected here rather than at the server: the service will not scan its whole
-// index, and failing locally keeps the round trip off the wire.
-func (c *RunSearch) Handle(ctx context.Context, query string, pageSize int) (model.Feed, error) {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return model.Feed{}, fmt.Errorf("search: enter a term to search for")
-	}
+// Handle loads the first page of a feed.
+//
+// No query means "the latest findings", which only makes sense newest-first:
+// under relevance every record would score the same. So an empty query always
+// sorts by newest, and a query defaults to best match unless asked otherwise.
+func (c *RunSearch) Handle(ctx context.Context, query string, sort model.SearchSort, pageSize int) (model.Feed, error) {
 	if c.api == nil {
 		return model.Feed{}, fmt.Errorf("search: not connected to the intelligence service")
 	}
 
+	query = strings.TrimSpace(query)
 	switch {
-	case pageSize <= 0:
-		pageSize = DefaultPageSize
-	case pageSize > MaxPageSize:
-		pageSize = MaxPageSize
+	case query == "":
+		sort = model.SortNewest
+	case sort != model.SortNewest:
+		sort = model.SortRelevance
 	}
 
-	hits, err := c.api.Search(ctx, query, pageSize)
+	page, err := c.api.Search(ctx, query, sort, clampPageSize(pageSize), "")
 	if err != nil {
 		return model.Feed{}, err
 	}
-	return model.Feed{Query: query, Hits: hits}, nil
+	return model.Feed{Query: query, Sort: sort}.Append(page), nil
+}
+
+// More loads the page after the last one in feed and appends it. A feed with
+// no next page is returned unchanged.
+func (c *RunSearch) More(ctx context.Context, feed model.Feed, pageSize int) (model.Feed, error) {
+	if !feed.HasMore() {
+		return feed, nil
+	}
+	if c.api == nil {
+		return feed, fmt.Errorf("search: not connected to the intelligence service")
+	}
+
+	page, err := c.api.Search(ctx, feed.Query, feed.Sort, clampPageSize(pageSize), feed.NextPageToken)
+	if err != nil {
+		return feed, err
+	}
+	return feed.Append(page), nil
+}
+
+func clampPageSize(n int) int {
+	switch {
+	case n <= 0:
+		return DefaultPageSize
+	case n > MaxPageSize:
+		return MaxPageSize
+	default:
+		return n
+	}
 }

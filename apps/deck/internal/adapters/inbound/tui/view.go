@@ -110,17 +110,11 @@ func (m Model) feedView() string {
 		return panel("Error", styleError.Render(err.Error()), m.width)
 	}
 
-	total := len(m.feed.Hits)
-	start, end := window(m.offset, m.bodyRows(), total)
+	loaded := len(m.feed.Hits)
+	start, end := window(m.offset, m.bodyRows(), loaded)
+	title := m.fit("Findings  " + m.feedCounter(start, end))
 
-	counter := fmt.Sprintf("query %q — %d findings", m.query, total)
-	if end-start < total {
-		// Only say where we are when there is somewhere else to be.
-		counter += fmt.Sprintf("  ·  %d–%d", start+1, end)
-	}
-	title := m.fit("Findings  " + counter)
-
-	if total == 0 {
+	if loaded == 0 {
 		body := styleDim.Render("no findings — press / to change the query")
 		if m.loading {
 			body = styleDim.Render(spinnerFrame(m.spinner) + " loading…")
@@ -133,6 +127,57 @@ func (m Model) feedView() string {
 		rows = append(rows, m.feedRow(m.feed.Hits[i].Vulnerability, i == m.cursor))
 	}
 	return panel(title, strings.Join(rows, "\n"), m.width)
+}
+
+// feedCounter says what the list is, how much of it is loaded out of how much
+// exists, which part is on screen, and whether more is coming:
+//
+//	latest findings — 50 of 6,771  ·  27–50  ·  ↓ more
+//	query "next" · best match — 25 of 187  ·  loading more…
+func (m Model) feedCounter(start, end int) string {
+	loaded := len(m.feed.Hits)
+
+	what := "latest findings"
+	if m.active != "" {
+		what = fmt.Sprintf("query %q · %s", m.active, m.sort.Label())
+	}
+
+	counter := fmt.Sprintf("%s — %d", what, loaded)
+	switch {
+	case m.feed.Total > 0 && m.feed.TotalIsLowerBound:
+		counter += " of " + thousands(m.feed.Total) + "+"
+	case m.feed.Total > 0:
+		counter += " of " + thousands(m.feed.Total)
+	default:
+		counter += " findings"
+	}
+
+	if end-start < loaded {
+		// Only say where we are when there is somewhere else to be.
+		counter += fmt.Sprintf("  ·  %d–%d", start+1, end)
+	}
+	switch {
+	case m.loadingMore:
+		counter += "  ·  " + spinnerFrame(m.spinner) + " loading more…"
+	case m.moreErr != nil:
+		counter += "  ·  couldn't load more (n to retry)"
+	case m.feed.HasMore() && end == loaded:
+		counter += "  ·  ↓ more"
+	}
+	return counter
+}
+
+// thousands renders 6771 as "6,771".
+func thousands(n int64) string {
+	digits := fmt.Sprintf("%d", n)
+	var b strings.Builder
+	for i, d := range digits {
+		if i > 0 && (len(digits)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(d)
+	}
+	return b.String()
 }
 
 // feedRow renders one row. Selected and unselected rows are laid out by the
@@ -218,6 +263,9 @@ func (m Model) promptBox() string {
 		box = box.BorderForeground(colAccent)
 		return box.Render(stylePrompt.Render("search: ") + query + styleSelect.Render("▏"))
 	}
+	if query == "" {
+		return box.Render(styleFaint.Render("search: ") + styleFaint.Render("none — showing the latest (press / to search)"))
+	}
 	return box.Render(styleFaint.Render("search: ") + styleDim.Render(query))
 }
 
@@ -225,7 +273,7 @@ func (m Model) footer() string {
 	if m.editing {
 		return styleFaint.Render("  enter search · esc cancel")
 	}
-	hints := "  ↑/↓ move · enter blast radius · tab switch · / search · r refresh · q quit"
+	hints := "  ↑/↓ move · enter blast radius · n more · s sort · / search · tab switch · r refresh · q quit"
 	if m.tab == TabGraph {
 		hints = "  ↑/↓ scroll · pgup/pgdn page · tab switch · r refresh · q quit"
 	}

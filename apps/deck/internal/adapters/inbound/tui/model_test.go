@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -20,16 +21,44 @@ import (
 
 // stubSearch and stubExplorer stand in for the use cases, so the whole TUI can
 // be driven without a terminal or a running backend.
+// stubSearch pages through feed.Hits the way the gateway does: the page
+// token is the offset of the next page.
 type stubSearch struct {
-	gotQuery string
-	feed     model.Feed
-	err      error
+	gotQuery  string
+	gotSort   model.SearchSort
+	gotSize   int
+	feed      model.Feed // the complete result set
+	err       error
+	moreErr   error
+	moreCalls int
 }
 
-func (s *stubSearch) Handle(_ context.Context, query string, _ int) (model.Feed, error) {
-	s.gotQuery = query
-	s.feed.Query = query
-	return s.feed, s.err
+func (s *stubSearch) Handle(_ context.Context, query string, sort model.SearchSort, size int) (model.Feed, error) {
+	s.gotQuery, s.gotSort, s.gotSize = query, sort, size
+	if s.err != nil {
+		return model.Feed{}, s.err
+	}
+	return model.Feed{Query: query, Sort: sort}.Append(s.page(0, size)), nil
+}
+
+func (s *stubSearch) More(_ context.Context, feed model.Feed, size int) (model.Feed, error) {
+	s.moreCalls++
+	if s.moreErr != nil {
+		return feed, s.moreErr
+	}
+	offset, _ := strconv.Atoi(feed.NextPageToken)
+	return feed.Append(s.page(offset, size)), nil
+}
+
+func (s *stubSearch) page(offset, size int) model.SearchPage {
+	all := s.feed.Hits
+	offset = min(offset, len(all))
+	end := min(len(all), offset+size)
+	page := model.SearchPage{Hits: all[offset:end], Total: int64(len(all))}
+	if end < len(all) {
+		page.NextPageToken = strconv.Itoa(end)
+	}
+	return page
 }
 
 type stubExplorer struct {
@@ -506,7 +535,7 @@ func manyHits(n int) model.Feed {
 func loadedAt(feed model.Feed, width, height int) tui.Model {
 	GinkgoHelper()
 	m := tui.New(&stubSearch{feed: feed}, &stubExplorer{},
-		tui.Options{Query: "cve", PageSize: 25, Endpoint: "nexus"})
+		tui.Options{Query: "cve", PageSize: 200, Endpoint: "nexus"})
 	m, _ = apply(m, tea.WindowSizeMsg{Width: width, Height: height})
 	got, cmd := apply(m, key("r"))
 	return deliver(got, cmd)
@@ -564,7 +593,7 @@ var _ = Describe("Fitting the terminal", func() {
 
 	It("says which part of a long list is on screen", func() {
 		view := stripANSI(loadedAt(manyHits(80), 110, 40).View())
-		Expect(view).To(ContainSubstring("80 findings  ·  1–"))
+		Expect(view).To(ContainSubstring("80 of 80  ·  1–"))
 	})
 
 	It("does not show a range when everything fits", func() {
@@ -634,5 +663,216 @@ var _ = Describe("Fitting the terminal", func() {
 		for _, line := range viewLines(m) {
 			Expect(runewidth.StringWidth(line)).To(BeNumerically("<=", 80))
 		}
+	})
+})
+
+// feedModel is a loaded model at a comfortable size, for paging specs.
+func feedModel(search *stubSearch, query string, pageSize int) tui.Model {
+	GinkgoHelper()
+	m := tui.New(search, &stubExplorer{}, tui.Options{Query: query, PageSize: pageSize, Endpoint: "nexus"})
+	m, _ = apply(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	return deliver(m, m.Init())
+}
+
+var _ = Describe("Paging the feed", func() {
+	It("opens on the live feed — newest first — when there is no query", func() {
+		search := &stubSearch{feed: manyHits(80)}
+		m := feedModel(search, "", 25)
+
+		Expect(search.gotSort).To(Equal(model.SortNewest))
+		Expect(search.gotQuery).To(BeEmpty())
+		view := stripANSI(m.View())
+		Expect(view).To(ContainSubstring("latest findings — 25 of 80"))
+		Expect(view).To(ContainSubstring("none — showing the latest"))
+	})
+
+	It("loads the next page when the cursor reaches the end of what is loaded", func() {
+		search := &stubSearch{feed: manyHits(80)}
+		m := feedModel(search, "", 25)
+
+		m, cmd := apply(m, key("G"))
+		Expect(cmd).ToNot(BeNil(), "reaching the last row asks for more")
+		Expect(stripANSI(m.View())).To(ContainSubstring("loading more"))
+
+		m = deliver(m, cmd)
+		Expect(search.moreCalls).To(Equal(1))
+		Expect(stripANSI(m.View())).To(ContainSubstring("50 of 80"))
+
+		selected, _ := m.Selected()
+		Expect(selected.CVEID).To(Equal("CVE-2026-00024"), "the cursor stays where it was")
+	})
+
+	It("keeps going with the down key, one row past the last", func() {
+		search := &stubSearch{feed: manyHits(30)}
+		m := feedModel(search, "", 25)
+		for i := 0; i < 23; i++ {
+			m, _ = apply(m, key("j"))
+		}
+		m, cmd := apply(m, key("j")) // lands on row 25, the last loaded: that asks for more
+		Expect(cmd).ToNot(BeNil())
+		m = deliver(m, cmd)
+
+		m, _ = apply(m, key("j"))
+		selected, _ := m.Selected()
+		Expect(selected.CVEID).To(Equal("CVE-2026-00025"), "row 26 is reachable now")
+	})
+
+	It("loads more on n, and stops offering more at the end", func() {
+		search := &stubSearch{feed: manyHits(40)}
+		m := feedModel(search, "", 25)
+		Expect(stripANSI(m.View())).To(ContainSubstring("25 of 40"))
+
+		m, cmd := apply(m, key("n"))
+		m = deliver(m, cmd)
+		m, _ = apply(m, key("G")) // the bottom of the list is on screen
+		Expect(stripANSI(m.View())).To(ContainSubstring("40 of 40"))
+		Expect(stripANSI(m.View())).ToNot(ContainSubstring("↓ more"))
+
+		_, cmd = apply(m, key("n"))
+		Expect(cmd).To(BeNil(), "nothing left to load")
+	})
+
+	It("does not fire a second page request while one is in flight", func() {
+		search := &stubSearch{feed: manyHits(80)}
+		m := feedModel(search, "", 25)
+		m, first := apply(m, key("n"))
+		Expect(first).ToNot(BeNil())
+		_, second := apply(m, key("n"))
+		Expect(second).To(BeNil())
+	})
+
+	It("keeps the loaded rows when the next page fails, and says so", func() {
+		search := &stubSearch{feed: manyHits(80), moreErr: errors.New("gateway down")}
+		m := feedModel(search, "", 25)
+		m, cmd := apply(m, key("n"))
+		m = deliver(m, cmd)
+
+		view := stripANSI(m.View())
+		Expect(view).To(ContainSubstring("25 of 80"))
+		Expect(view).To(ContainSubstring("couldn't load more"))
+		Expect(view).To(ContainSubstring("CVE-2026-00000"))
+	})
+
+	It("refreshes as many results as are loaded, not just the first page", func() {
+		search := &stubSearch{feed: manyHits(80)}
+		m := feedModel(search, "", 25)
+		m, cmd := apply(m, key("n"))
+		m = deliver(m, cmd)
+
+		m, cmd = apply(m, key("r"))
+		m = deliver(m, cmd)
+		Expect(search.gotSize).To(Equal(50))
+		Expect(stripANSI(m.View())).To(ContainSubstring("50 of 80"))
+	})
+
+	It("keeps the selection on the same finding when newer ones arrive on refresh", func() {
+		search := &stubSearch{feed: manyHits(10)}
+		m := feedModel(search, "", 25)
+		m, _ = apply(m, key("j"))
+		m, _ = apply(m, key("j"))
+		selected, _ := m.Selected()
+		Expect(selected.CVEID).To(Equal("CVE-2026-00002"))
+
+		// Two newer findings land at the top.
+		newer := model.Feed{Hits: append(feedWith("CVE-NEW-1", "CVE-NEW-2").Hits, manyHits(10).Hits...)}
+		search.feed = newer
+		m, cmd := apply(m, key("r"))
+		m = deliver(m, cmd)
+
+		selected, _ = m.Selected()
+		Expect(selected.CVEID).To(Equal("CVE-2026-00002"), "the list moved; the selection did not")
+	})
+
+	It("drops a page that arrives after a refresh replaced the list", func() {
+		search := &stubSearch{feed: manyHits(80)}
+		m := feedModel(search, "", 25)
+		m, stale := apply(m, key("n")) // request page 2...
+		m, refresh := apply(m, key("r"))
+		m = deliver(m, refresh) // ...but the refresh lands first
+		m = deliver(m, stale)
+
+		Expect(len(m.LoadedIDs())).To(Equal(25), "the stale page was not appended")
+	})
+
+	It("toggles between best match and newest for a search term", func() {
+		search := &stubSearch{feed: manyHits(5)}
+		m := feedModel(search, "next", 25)
+		Expect(search.gotSort).To(Equal(model.SortRelevance))
+		Expect(stripANSI(m.View())).To(ContainSubstring(`query "next" · best match`))
+
+		m, cmd := apply(m, key("s"))
+		m = deliver(m, cmd)
+		Expect(search.gotSort).To(Equal(model.SortNewest))
+		Expect(stripANSI(m.View())).To(ContainSubstring(`query "next" · newest`))
+	})
+
+	It("has nothing to toggle on the live feed", func() {
+		m := feedModel(&stubSearch{feed: manyHits(5)}, "", 25)
+		_, cmd := apply(m, key("s"))
+		Expect(cmd).To(BeNil())
+	})
+
+	It("searches by best match when a term is submitted, and back to newest when cleared", func() {
+		search := &stubSearch{feed: manyHits(5)}
+		m := feedModel(search, "", 25)
+
+		m, _ = apply(m, key("/"))
+		m, _ = apply(m, key("lodash"))
+		m, cmd := apply(m, tea.KeyMsg{Type: tea.KeyEnter})
+		m = deliver(m, cmd)
+		Expect(search.gotQuery).To(Equal("lodash"))
+		Expect(search.gotSort).To(Equal(model.SortRelevance))
+
+		m, _ = apply(m, key("/"))
+		for i := 0; i < len("lodash"); i++ {
+			m, _ = apply(m, tea.KeyMsg{Type: tea.KeyBackspace})
+		}
+		_, cmd = apply(m, tea.KeyMsg{Type: tea.KeyEnter})
+		deliver(m, cmd)
+		Expect(search.gotQuery).To(BeEmpty())
+		Expect(search.gotSort).To(Equal(model.SortNewest))
+	})
+
+	It("polls with the submitted query, never a half-typed one", func() {
+		search := &stubSearch{feed: manyHits(5)}
+		m := feedModel(search, "lodash", 25)
+
+		m, _ = apply(m, key("/"))
+		m, _ = apply(m, key("xyz")) // the user is mid-edit
+		_, cmd := apply(m, tui.PollTick())
+		deliver(m, cmd)
+
+		Expect(search.gotQuery).To(Equal("lodash"))
+	})
+})
+
+var _ = Describe("Paging indicators", func() {
+	It("shows ↓ more at the bottom of a list that has more", func() {
+		search := &stubSearch{feed: manyHits(80)}
+		m := feedModel(search, "", 10) // 10 rows fit entirely on screen
+		Expect(stripANSI(m.View())).To(ContainSubstring("10 of 80  ·  ↓ more"))
+	})
+
+	It("does not skip findings when a page arrives for a list that changed", func() {
+		// Two newer findings land, then a page fetched before they did
+		// arrives. Its offsets are from the old list; appending it would
+		// silently skip the two findings it shifted past.
+		search := &stubSearch{feed: manyHits(80)}
+		m := feedModel(search, "", 25)
+		m, stale := apply(m, key("n"))
+
+		search.feed = model.Feed{Hits: append(feedWith("CVE-NEW-1", "CVE-NEW-2").Hits, manyHits(80).Hits...)}
+		m, refresh := apply(m, key("r"))
+		m = deliver(m, refresh)
+		m = deliver(m, stale)
+
+		Expect(m.LoadedIDs()).To(HaveLen(25))
+		Expect(m.LoadedIDs()[0]).To(Equal("CVE-NEW-1"))
+
+		m, more := apply(m, key("n"))
+		m = deliver(m, more)
+		ids := m.LoadedIDs()
+		Expect(ids).To(ContainElement("CVE-2026-00023"), "nothing skipped")
+		Expect(ids).To(ContainElement("CVE-2026-00024"))
 	})
 })

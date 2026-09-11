@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -18,15 +19,16 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case spinnerMsg:
-		if !m.loading {
+		if !m.loading && !m.loadingMore {
 			return m, nil // stop animating; a new request re-arms it
 		}
 		m.spinner++
 		return m, m.spin()
 
 	case tickMsg:
-		// Skip a beat rather than stacking requests on a slow backend.
-		if m.loading {
+		// Skip a beat rather than stacking requests on a slow backend, or
+		// replacing the list underneath a page that is still arriving.
+		if m.loading || m.loadingMore {
 			return m, m.tick()
 		}
 		m.loading = true
@@ -39,9 +41,34 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.feed = msg.feed
 			m.feed.UpdatedAt = time.Now()
 			m.lastRefresh = m.feed.UpdatedAt
-			if m.cursor >= len(m.feed.Hits) {
-				m.cursor = max(0, len(m.feed.Hits)-1)
+			m.sort = m.feed.Sort // the use case may have settled it
+			// A new list: any page still in flight belongs to the old one.
+			m.generation++
+			m.loadingMore = false
+			m.moreErr = nil
+			// Newer findings arriving at the top would otherwise slide a
+			// different row under a cursor that stayed put.
+			if msg.keep != "" {
+				if i := m.feed.IndexOf(msg.keep); i >= 0 {
+					m.cursor = i
+				}
 			}
+		}
+		return m, nil
+
+	case moreMsg:
+		if msg.generation != m.generation {
+			// Fetched for a list that has since been replaced. Leave
+			// loadingMore alone: a request for the current list may be in
+			// flight, and this stale reply says nothing about it.
+			return m, nil
+		}
+		m.loadingMore = false
+		// A failed page must not cost the rows already loaded, so it is
+		// reported alongside the list rather than in place of it.
+		m.moreErr = msg.err
+		if msg.err == nil {
+			m.feed = msg.feed
 		}
 		return m, nil
 
@@ -68,10 +95,18 @@ func (m Model) updateEditing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		m.editing = false
 		m.loading = true
-		return m, tea.Batch(m.refresh(), m.spin())
+		m.active = strings.TrimSpace(m.query)
+		// A search term is asking for the best match; clearing it goes back
+		// to the live feed. Either way it is a new list, so start at the top.
+		m.sort = model.SortRelevance
+		if m.active == "" {
+			m.sort = model.SortNewest
+		}
+		m.cursor, m.offset = 0, 0
+		return m, tea.Batch(m.fresh(), m.spin())
 	case tea.KeyEsc:
 		m.editing = false
-		m.query = m.feed.Query // discard the edit
+		m.query = m.active // discard the edit
 		return m, nil
 	case tea.KeyBackspace:
 		if runes := []rune(m.query); len(runes) > 0 {
@@ -113,13 +148,13 @@ func (m Model) updateBrowsing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// message, so the limits live in one place.
 	case "j", "down":
 		m = m.scroll(1)
-		return m, nil
+		return m.loadMoreIfAtEnd()
 	case "k", "up":
 		m = m.scroll(-1)
 		return m, nil
 	case "pgdown", "ctrl+d":
 		m = m.scroll(max(1, m.bodyRows()-1))
-		return m, nil
+		return m.loadMoreIfAtEnd()
 	case "pgup", "ctrl+u":
 		m = m.scroll(-max(1, m.bodyRows()-1))
 		return m, nil
@@ -128,7 +163,30 @@ func (m Model) updateBrowsing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "G", "end":
 		m = m.scroll(unbounded)
-		return m, nil
+		return m.loadMoreIfAtEnd()
+
+	case "n", "]":
+		if m.tab != TabFeed || m.loadingMore || !m.feed.HasMore() {
+			return m, nil
+		}
+		m.loadingMore = true
+		return m, tea.Batch(m.more(), m.spin())
+
+	case "s":
+		// Best match and newest are both meaningful for a search term. With
+		// no term there is only one order — newest — so there is nothing to
+		// toggle.
+		if m.tab != TabFeed || m.active == "" {
+			return m, nil
+		}
+		if m.sort == model.SortNewest {
+			m.sort = model.SortRelevance
+		} else {
+			m.sort = model.SortNewest
+		}
+		m.loading = true
+		m.cursor, m.offset = 0, 0
+		return m, tea.Batch(m.fresh(), m.spin())
 
 	case "enter":
 		// Opening the graph for the selected finding is the whole point of
@@ -181,4 +239,17 @@ func saturatingAdd(v, delta int) int {
 	default:
 		return v + delta
 	}
+}
+
+// loadMoreIfAtEnd fetches the next page when the cursor reaches the last
+// loaded row, so scrolling simply keeps going instead of stopping at a wall.
+func (m Model) loadMoreIfAtEnd() (tea.Model, tea.Cmd) {
+	if m.tab != TabFeed || m.loading || m.loadingMore || !m.feed.HasMore() {
+		return m, nil
+	}
+	if m.cursor < len(m.feed.Hits)-1 {
+		return m, nil
+	}
+	m.loadingMore = true
+	return m, tea.Batch(m.more(), m.spin())
 }

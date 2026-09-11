@@ -20,9 +20,10 @@ const (
 	// debugging a cortex the gateway cannot reach.
 	TransportGateway = "gateway"
 	TransportGRPC    = "grpc"
-	// The feed needs a term: cortex refuses to scan its whole index, so
-	// "cve" is the broadest query that still matches essentially everything.
-	DefaultFeedQuery = "cve"
+	// No query is the live feed: the newest findings first. It used to
+	// default to "cve", which matched every record equally and ranked them by
+	// an accidental text score — the oddest-looking order possible.
+	DefaultFeedQuery = ""
 )
 
 // Config holds deck's runtime settings.

@@ -42,27 +42,38 @@ func Dial(addr string) (*Client, error) {
 // Close releases the connection.
 func (c *Client) Close() error { return c.conn.Close() }
 
-// Search calls cortex and maps the response into deck's view models.
-func (c *Client) Search(ctx context.Context, query string, pageSize int) ([]model.SearchHit, error) {
+// Search calls cortex and maps one page into deck's view models.
+func (c *Client) Search(ctx context.Context, query string, sort model.SearchSort, pageSize int, pageToken string) (model.SearchPage, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
+	wireSort := intelv1.SearchSort_SEARCH_SORT_RELEVANCE
+	if sort == model.SortNewest {
+		wireSort = intelv1.SearchSort_SEARCH_SORT_NEWEST
+	}
 	resp, err := c.stub.Search(ctx, &intelv1.SearchRequest{
-		Query:    query,
-		PageSize: int32(pageSize),
+		Query:     query,
+		Sort:      wireSort,
+		PageSize:  int32(pageSize),
+		PageToken: pageToken,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("grpc: search: %w", err)
+		return model.SearchPage{}, fmt.Errorf("grpc: search: %w", err)
 	}
 
-	hits := make([]model.SearchHit, 0, len(resp.GetResults()))
+	page := model.SearchPage{
+		NextPageToken:     resp.GetNextPageToken(),
+		Total:             resp.GetTotalResults(),
+		TotalIsLowerBound: resp.GetTotalIsLowerBound(),
+		Hits:              make([]model.SearchHit, 0, len(resp.GetResults())),
+	}
 	for _, r := range resp.GetResults() {
-		hits = append(hits, model.SearchHit{
+		page.Hits = append(page.Hits, model.SearchHit{
 			Vulnerability: toViewModel(r.GetVulnerability()),
 			Score:         r.GetScore(),
 		})
 	}
-	return hits, nil
+	return page, nil
 }
 
 // BlastRadius calls cortex and maps the traversal into deck's view models.
