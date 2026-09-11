@@ -39,11 +39,16 @@ func Dial(addr string) (*Client, error) {
 func (c *Client) Close() error { return c.conn.Close() }
 
 // Search calls cortex and maps the response back into nexus view models.
-func (c *Client) Search(ctx context.Context, query string, pageSize int, pageToken string) (model.SearchResult, error) {
+func (c *Client) Search(ctx context.Context, query string, sort model.SearchSort, pageSize int, pageToken string) (model.SearchResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timout)
 	defer cancel()
 
+	wireSort := intelv1.SearchSort_SEARCH_SORT_RELEVANCE
+	if sort == model.SortNewest {
+		wireSort = intelv1.SearchSort_SEARCH_SORT_NEWEST
+	}
 	resp, err := c.stub.Search(ctx, &intelv1.SearchRequest{
+		Sort:      wireSort,
 		Query:     query,
 		PageSize:  int32(pageSize),
 		PageToken: pageToken,
@@ -59,7 +64,12 @@ func (c *Client) Search(ctx context.Context, query string, pageSize int, pageTok
 			Score:         r.GetScore(),
 		})
 	}
-	return model.SearchResult{Hits: hits, NextPageToken: resp.GetNextPageToken()}, nil
+	return model.SearchResult{
+		Hits:              hits,
+		NextPageToken:     resp.GetNextPageToken(),
+		TotalResults:      resp.GetTotalResults(),
+		TotalIsLowerBound: resp.GetTotalIsLowerBound(),
+	}, nil
 }
 
 // --- mapping: wire contract -> nexus view model ---

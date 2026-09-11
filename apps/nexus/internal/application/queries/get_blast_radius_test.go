@@ -20,7 +20,7 @@ type blastStub struct {
 	err      error
 }
 
-func (s *blastStub) Search(context.Context, string, int, string) (model.SearchResult, error) {
+func (s *blastStub) Search(context.Context, string, model.SearchSort, int, string) (model.SearchResult, error) {
 	return model.SearchResult{}, nil
 }
 

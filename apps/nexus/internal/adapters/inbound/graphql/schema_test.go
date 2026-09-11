@@ -19,12 +19,17 @@ import (
 
 // stubSearcher stands in for the search use case.
 type stubSearcher struct {
+	gotSort model.SearchSort
 	gotTerm string
 	result  model.SearchResult
+	err     error
 }
 
-func (s *stubSearcher) Handle(_ context.Context, term string, _ int, _ string) (model.SearchResult, error) {
-	s.gotTerm = term
+func (s *stubSearcher) Handle(_ context.Context, term string, sort model.SearchSort, _ int, _ string) (model.SearchResult, error) {
+	s.gotTerm, s.gotSort = term, sort
+	if s.err != nil {
+		return model.SearchResult{}, s.err
+	}
 	return s.result, nil
 }
 
@@ -84,8 +89,12 @@ var _ = Describe("GraphQL adapter", func() {
 		Expect(scores[0].(map[string]any)["severity"]).To(Equal("CRITICAL"))
 	})
 
-	It("reports a GraphQL error when the required term is missing", func() {
-		schema, err := graphqladapter.NewSchema(&stubSearcher{}, &stubBlast{})
+	It("reports a GraphQL error when a relevance search has no term", func() {
+		// The schema accepts a missing term (sort: NEWEST needs none); the
+		// use case is what rejects one under relevance, and its error must
+		// reach the client rather than an empty result.
+		stub := &stubSearcher{err: errors.New("search: term must not be empty when sorting by relevance")}
+		schema, err := graphqladapter.NewSchema(stub, &stubBlast{})
 		Expect(err).ToNot(HaveOccurred())
 
 		out := post(graphqladapter.NewHandler(schema), `{ search { hits { score } } }`)
@@ -201,6 +210,43 @@ var _ = Describe("GraphQL blastRadius query", func() {
 
 	It("requires a cveId", func() {
 		result := run(&stubBlast{}, `{ blastRadius{ cveId } }`)
+		Expect(result.Errors).ToNot(BeEmpty())
+	})
+})
+
+var _ = Describe("GraphQL search sort and totals", func() {
+	run := func(stub *stubSearcher, query string) *graphql.Result {
+		GinkgoHelper()
+		schema, err := graphqladapter.NewSchema(stub, &stubBlast{})
+		Expect(err).ToNot(HaveOccurred())
+		return graphql.Do(graphql.Params{Schema: schema, RequestString: query})
+	}
+
+	It("serves the live feed: no term, newest first", func() {
+		stub := &stubSearcher{result: model.SearchResult{TotalResults: 6771, NextPageToken: "25"}}
+
+		result := run(stub, `{ search(sort: NEWEST, pageSize: 25){ totalResults totalIsLowerBound nextPageToken } }`)
+
+		Expect(result.Errors).To(BeEmpty())
+		Expect(stub.gotSort).To(Equal(model.SortNewest))
+		Expect(stub.gotTerm).To(BeEmpty())
+
+		data, _ := result.Data.(map[string]any)
+		search, _ := data["search"].(map[string]any)
+		Expect(search["totalResults"]).To(BeEquivalentTo(6771))
+		Expect(search["nextPageToken"]).To(Equal("25"))
+	})
+
+	It("defaults to relevance, so existing clients behave as before", func() {
+		stub := &stubSearcher{}
+		result := run(stub, `{ search(term: "log4j"){ nextPageToken } }`)
+
+		Expect(result.Errors).To(BeEmpty())
+		Expect(stub.gotSort).To(Equal(model.SortRelevance))
+	})
+
+	It("rejects a sort it does not know", func() {
+		result := run(&stubSearcher{}, `{ search(term: "x", sort: SIDEWAYS){ nextPageToken } }`)
 		Expect(result.Errors).ToNot(BeEmpty())
 	})
 })

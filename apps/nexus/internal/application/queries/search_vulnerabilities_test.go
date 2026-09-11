@@ -13,6 +13,8 @@ import (
 
 // stubIntelligence stands in for the cortex client (outbound port).
 type stubIntelligence struct {
+	called   bool
+	gotSort  model.SearchSort
 	gotTerm  string
 	gotSize  int
 	gotToken string
@@ -20,8 +22,9 @@ type stubIntelligence struct {
 	err      error
 }
 
-func (s *stubIntelligence) Search(_ context.Context, term string, size int, token string) (model.SearchResult, error) {
-	s.gotTerm, s.gotSize, s.gotToken = term, size, token
+func (s *stubIntelligence) Search(_ context.Context, term string, sort model.SearchSort, size int, token string) (model.SearchResult, error) {
+	s.called = true
+	s.gotTerm, s.gotSort, s.gotSize, s.gotToken = term, sort, size, token
 	return s.result, s.err
 }
 
@@ -34,7 +37,7 @@ var _ = Describe("SearchVulnerabilities use case", func() {
 			NextPageToken: "25",
 		}}
 
-		got, err := queries.NewSearchVulnerabilities(stub).Handle(ctx, "log4j", 10, "")
+		got, err := queries.NewSearchVulnerabilities(stub).Handle(ctx, "log4j", model.SortRelevance, 10, "")
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(stub.gotTerm).To(Equal("log4j"))
@@ -45,21 +48,38 @@ var _ = Describe("SearchVulnerabilities use case", func() {
 
 	It("rejects an empty term without calling the backend", func() {
 		stub := &stubIntelligence{}
-		_, err := queries.NewSearchVulnerabilities(stub).Handle(ctx, "  ", 10, "")
+		_, err := queries.NewSearchVulnerabilities(stub).Handle(ctx, "  ", model.SortRelevance, 10, "")
 
 		Expect(err).To(HaveOccurred())
-		Expect(stub.gotTerm).To(BeEmpty())
+		Expect(stub.called).To(BeFalse())
+	})
+
+	It("accepts an empty term when sorting by newest: the live feed", func() {
+		stub := &stubIntelligence{result: model.SearchResult{TotalResults: 6771}}
+		got, err := queries.NewSearchVulnerabilities(stub).Handle(ctx, "", model.SortNewest, 25, "")
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(stub.called).To(BeTrue())
+		Expect(stub.gotSort).To(Equal(model.SortNewest))
+		Expect(got.TotalResults).To(Equal(int64(6771)))
+	})
+
+	It("treats an unknown sort as relevance", func() {
+		stub := &stubIntelligence{}
+		_, err := queries.NewSearchVulnerabilities(stub).Handle(ctx, "log4j", "sideways", 25, "")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(stub.gotSort).To(Equal(model.SortRelevance))
 	})
 
 	It("propagates a backend failure", func() {
 		stub := &stubIntelligence{err: errors.New("cortex down")}
-		_, err := queries.NewSearchVulnerabilities(stub).Handle(ctx, "log4j", 10, "")
+		_, err := queries.NewSearchVulnerabilities(stub).Handle(ctx, "log4j", model.SortRelevance, 10, "")
 		Expect(err).To(HaveOccurred())
 	})
 
 	It("forwards the page token", func() {
 		stub := &stubIntelligence{}
-		_, err := queries.NewSearchVulnerabilities(stub).Handle(ctx, "log4j", 10, "50")
+		_, err := queries.NewSearchVulnerabilities(stub).Handle(ctx, "log4j", model.SortRelevance, 10, "50")
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(stub.gotToken).To(Equal("50"))

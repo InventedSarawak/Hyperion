@@ -14,7 +14,7 @@ import (
 
 // Searcher is the use case this adapter drives (consumer-side interface).
 type Searcher interface {
-	Handle(ctx context.Context, term string, pageSize int, pageToken string) (model.SearchResult, error)
+	Handle(ctx context.Context, term string, sort model.SearchSort, pageSize int, pageToken string) (model.SearchResult, error)
 }
 
 // BlastRadiusResolver answers which repositories a vulnerability reaches.
@@ -55,11 +55,31 @@ var searchHitType = graphql.NewObject(graphql.ObjectConfig{
 	},
 })
 
+// searchSortEnum orders search results.
+var searchSortEnum = graphql.NewEnum(graphql.EnumConfig{
+	Name: "SearchSort",
+	Values: graphql.EnumValueConfigMap{
+		"RELEVANCE": &graphql.EnumValueConfig{
+			Value:       string(model.SortRelevance),
+			Description: "Best match first; ties broken by newest, then CVE id.",
+		},
+		"NEWEST": &graphql.EnumValueConfig{
+			Value:       string(model.SortNewest),
+			Description: "Most recently published first. The only sort that accepts an empty term.",
+		},
+	},
+})
+
 var searchResultType = graphql.NewObject(graphql.ObjectConfig{
 	Name: "SearchResult",
 	Fields: graphql.Fields{
 		"hits":          &graphql.Field{Type: graphql.NewList(searchHitType)},
 		"nextPageToken": &graphql.Field{Type: graphql.String},
+		"totalResults": &graphql.Field{
+			Type:        graphql.Float,
+			Description: "How many records match. A floor when totalIsLowerBound is true.",
+		},
+		"totalIsLowerBound": &graphql.Field{Type: graphql.Boolean},
 	},
 })
 
@@ -123,16 +143,21 @@ func NewSchema(searcher Searcher, blast BlastRadiusResolver) (graphql.Schema, er
 				Type:        searchResultType,
 				Description: "Full-text search across ingested vulnerabilities.",
 				Args: graphql.FieldConfigArgument{
-					"term":      &graphql.ArgumentConfig{Type: graphql.NewNonNull(graphql.String)},
+					// Optional: an empty term with sort NEWEST is the live feed.
+					// Relaxing non-null to nullable does not break existing
+					// clients, which always sent a term.
+					"term":      &graphql.ArgumentConfig{Type: graphql.String},
+					"sort":      &graphql.ArgumentConfig{Type: searchSortEnum, DefaultValue: string(model.SortRelevance)},
 					"pageSize":  &graphql.ArgumentConfig{Type: graphql.Int},
 					"pageToken": &graphql.ArgumentConfig{Type: graphql.String},
 				},
 				Resolve: func(p graphql.ResolveParams) (any, error) {
 					term, _ := p.Args["term"].(string)
+					sort, _ := p.Args["sort"].(string)
 					pageSize, _ := p.Args["pageSize"].(int)
 					pageToken, _ := p.Args["pageToken"].(string)
 
-					result, err := searcher.Handle(p.Context, term, pageSize, pageToken)
+					result, err := searcher.Handle(p.Context, term, model.SearchSort(sort), pageSize, pageToken)
 					if err != nil {
 						return nil, err
 					}
@@ -179,7 +204,12 @@ func toGraphQL(r model.SearchResult) map[string]any {
 			"score":         h.Score,
 		})
 	}
-	return map[string]any{"hits": hits, "nextPageToken": r.NextPageToken}
+	return map[string]any{
+		"hits":              hits,
+		"nextPageToken":     r.NextPageToken,
+		"totalResults":      float64(r.TotalResults), // GraphQL Int is 32-bit
+		"totalIsLowerBound": r.TotalIsLowerBound,
+	}
 }
 
 func vulnerabilityMap(v model.Vulnerability) map[string]any {
