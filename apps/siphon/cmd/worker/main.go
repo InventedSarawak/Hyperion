@@ -18,7 +18,10 @@ import (
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/intelligence"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/publisher"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/repos/githubrepo"
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/sources/nvd"
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/sources/osvbulk"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/application/workflows"
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/ports"
 	siphonconfig "github.com/inventedsarawak/hyperion/apps/siphon/internal/platform/config"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/platform/sources"
 )
@@ -29,11 +32,17 @@ func main() {
 	checkLookback := flag.Duration("check-lookback", 24*time.Hour,
 		"how far back the -check-sources probe reaches")
 	scanRepos := flag.Bool("scan-repos", false,
-		"scan the watched repositories' manifests once, report, and exit")
+		"scan repositories' manifests once, report, and exit (the whole watchlist unless -repos/-orgs)")
 	repos := flag.String("repos", "",
-		"comma-separated owner/name list overriding SIPHON_REPO_WATCHLIST for this run")
+		"comma-separated owner/name list to scan instead of the watchlist")
 	orgs := flag.String("orgs", "",
 		"comma-separated GitHub orgs/users whose repositories are discovered and scanned")
+	backfill := flag.Bool("backfill", false,
+		"publish the history of NVD and the OSV ecosystem exports once, then exit")
+	backfillFrom := flag.String("backfill-from", time.Now().AddDate(-10, 0, 0).Format(time.DateOnly),
+		"earliest publication date the backfill reaches, as YYYY-MM-DD")
+	backfillSources := flag.String("backfill-sources", "nvd,osv",
+		"comma-separated backfill sources: nvd, osv")
 	flag.Parse()
 
 	// Logs go to stderr; published events go to stdout (kept separate on purpose).
@@ -59,6 +68,13 @@ func main() {
 	// reading manifests has nothing to do with polling advisory feeds.
 	if *scanRepos {
 		runRepositoryScan(ctx, logger, cfg, *repos, *orgs)
+		return
+	}
+
+	// History, once: what polling can never reach. Events go to stdout like
+	// any poll's, so the same pipe into cortex stores them.
+	if *backfill {
+		runBackfill(ctx, logger, cfg, *backfillFrom, *backfillSources)
 		return
 	}
 
@@ -93,21 +109,16 @@ func main() {
 	logger.Info("siphon stopped")
 }
 
-// startRepositoryScan wires the manifest scanner and runs it in the
-// background, returning a function that releases its connection.
+// startRepositoryScan runs the watchlist scanner in the background,
+// returning a function that releases its connection.
 //
-// It is skipped rather than fatal when unconfigured: reading advisories is
-// siphon's primary job, and it must keep working whether or not anyone has
-// named repositories to watch or stood cortex up.
+// It is skipped rather than fatal when it cannot start: reading advisories is
+// siphon's primary job, and it must keep working whether or not cortex is up.
 func startRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphonconfig.Config) func() {
 	noop := func() {}
 
 	if !cfg.RepoScan.Enabled {
-		logger.Info("repository scan disabled (set SIPHON_REPO_SCAN_ENABLED=true)")
-		return noop
-	}
-	if len(cfg.RepoScan.Watchlist) == 0 {
-		logger.Warn("repository scan enabled but SIPHON_REPO_WATCHLIST is empty; nothing to scan")
+		logger.Info("repository scan disabled (SIPHON_REPO_SCAN_ENABLED=false)")
 		return noop
 	}
 
@@ -119,16 +130,12 @@ func startRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphoncon
 	}
 
 	repos := githubrepo.New(cfg.RepoScan.BaseURL, cfg.RepoScan.Token)
-	scan := workflows.NewScanRepositories(repos, repos, client, workflows.Targets{
-		Repositories:  cfg.RepoScan.Watchlist,
-		Organizations: cfg.RepoScan.Organizations,
-		PerOwnerLimit: cfg.RepoScan.PerOwnerLimit,
-	})
+	scan := workflows.NewScanWatchlist(client, repos, client, cfg.RepoScan.Interval, cfg.RepoScan.RetryInterval)
 
-	logger.Info("repository scan starting",
-		"repositories", cfg.RepoScan.Watchlist,
-		"organizations", cfg.RepoScan.Organizations,
-		"interval", cfg.RepoScan.Interval.String(),
+	logger.Info("watchlist scanner starting",
+		"check_every", cfg.RepoScan.WatchInterval.String(),
+		"rescan_after", cfg.RepoScan.Interval.String(),
+		"retry_after", cfg.RepoScan.RetryInterval.String(),
 		"cortex", cfg.RepoScan.CortexAddr,
 		"authenticated", cfg.RepoScan.Token != "",
 	)
@@ -136,9 +143,9 @@ func startRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphoncon
 	go func() {
 		// Lookback is irrelevant to a manifest read: its current contents are
 		// the whole truth, so the watermark the scheduler tracks is unused.
-		if err := scheduler.New(scan, cfg.RepoScan.Interval, 0).Start(ctx); err != nil &&
+		if err := scheduler.New(scan, cfg.RepoScan.WatchInterval, 0).Start(ctx); err != nil &&
 			!errors.Is(err, context.Canceled) {
-			logger.Error("repository scan stopped", "error", err)
+			logger.Error("watchlist scanner stopped", "error", err)
 		}
 	}()
 
@@ -185,28 +192,11 @@ func runSourceCheck(ctx context.Context, registry *sources.Registry, lookback ti
 	}
 }
 
-// runRepositoryScan performs a single scan of the watched repositories and
-// exits non-zero if any of them failed, so it is usable as a CI or cron step.
-func runRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphonconfig.Config, override, orgs string) {
-	targets := workflows.Targets{
-		Repositories:  cfg.RepoScan.Watchlist,
-		Organizations: cfg.RepoScan.Organizations,
-		PerOwnerLimit: cfg.RepoScan.PerOwnerLimit,
-	}
-	// An explicit flag replaces the configured targets entirely, so a one-off
-	// scan never drags in the whole watchlist by surprise.
-	if override != "" {
-		targets = workflows.Targets{Repositories: splitList(override), PerOwnerLimit: cfg.RepoScan.PerOwnerLimit}
-	}
-	if orgs != "" {
-		targets = workflows.Targets{Organizations: splitList(orgs), PerOwnerLimit: cfg.RepoScan.PerOwnerLimit}
-	}
-	if len(targets.Repositories) == 0 && len(targets.Organizations) == 0 {
-		logger.Error("nothing to scan: set SIPHON_REPO_WATCHLIST or SIPHON_REPO_ORGS, " +
-			"or pass -repos owner/name or -orgs vercel")
-		os.Exit(1)
-	}
-
+// runRepositoryScan performs one scan and exits non-zero if anything failed,
+// so it is usable as a CI or cron step. -repos and -orgs scan exactly what
+// they name; with neither, every repository on the watchlist is scanned now,
+// whether or not it is due.
+func runRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphonconfig.Config, repoFlag, orgFlag string) {
 	client, err := intelligence.Dial(cfg.RepoScan.CortexAddr)
 	if err != nil {
 		logger.Error("cannot reach the intelligence service",
@@ -215,14 +205,22 @@ func runRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphonconfi
 	}
 	defer client.Close()
 
-	logger.Info("scanning repositories",
-		"repositories", targets.Repositories,
-		"organizations", targets.Organizations,
-		"cortex", cfg.RepoScan.CortexAddr,
-		"authenticated", cfg.RepoScan.Token != "")
-
 	repos := githubrepo.New(cfg.RepoScan.BaseURL, cfg.RepoScan.Token)
-	scan := workflows.NewScanRepositories(repos, repos, client, targets)
+
+	var scan scheduler.Poller
+	switch {
+	case repoFlag != "" || orgFlag != "":
+		scan = workflows.NewScanRepositories(repos, repos, client, workflows.Targets{
+			Repositories:  splitList(repoFlag),
+			Organizations: splitList(orgFlag),
+			PerOwnerLimit: cfg.RepoScan.PerOwnerLimit,
+		})
+		logger.Info("scanning named repositories", "repositories", repoFlag, "organizations", orgFlag)
+	default:
+		// Zero intervals make every tracked repository due.
+		scan = workflows.NewScanWatchlist(client, repos, client, 0, 0)
+		logger.Info("scanning every repository on the watchlist")
+	}
 
 	written, err := scan.Run(ctx, time.Time{})
 	if err != nil {
@@ -230,6 +228,45 @@ func runRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphonconfi
 		os.Exit(1)
 	}
 	logger.Info("repository scan complete", "dependency_edges_written", written)
+}
+
+// runBackfill publishes the history of the chosen sources from a date, and
+// exits non-zero if any of them could not be read in full.
+func runBackfill(ctx context.Context, logger *slog.Logger, cfg siphonconfig.Config, fromFlag, sourcesFlag string) {
+	from, err := time.Parse(time.DateOnly, fromFlag)
+	if err != nil {
+		logger.Error("invalid -backfill-from; expected YYYY-MM-DD", "value", fromFlag, "error", err)
+		os.Exit(1)
+	}
+
+	var backfillers []ports.Backfiller
+	for _, name := range splitList(sourcesFlag) {
+		switch strings.ToLower(name) {
+		case "nvd":
+			backfillers = append(backfillers, nvd.New(nil, cfg.NVD.BaseURL, cfg.NVD.APIKey,
+				nvd.WithPageSize(cfg.NVD.PageSize)))
+		case "osv":
+			backfillers = append(backfillers, osvbulk.New(nil, cfg.PackageFeeds.BulkBaseURL, cfg.PackageFeeds.BulkEcosystems))
+		default:
+			logger.Error("unknown backfill source; use nvd and/or osv", "source", name)
+			os.Exit(1)
+		}
+	}
+	if len(backfillers) == 0 {
+		logger.Error("no backfill sources selected")
+		os.Exit(1)
+	}
+	if cfg.NVD.APIKey == "" && strings.Contains(strings.ToLower(sourcesFlag), "nvd") {
+		logger.Warn("no NVD API key: the NVD backfill paces at 6s per page and will take hours")
+	}
+
+	logger.Info("backfill starting", "from", from.Format(time.DateOnly), "sources", sourcesFlag)
+	published, err := workflows.NewBackfill(backfillers, publisher.NewStdout(os.Stdout)).Run(ctx, from)
+	if err != nil {
+		logger.Error("backfill finished with errors", "published", published, "error", err)
+		os.Exit(1)
+	}
+	logger.Info("backfill complete", "published", published)
 }
 
 // splitList parses a comma-separated flag value, ignoring empty entries.

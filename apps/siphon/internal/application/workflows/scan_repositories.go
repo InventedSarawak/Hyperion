@@ -124,32 +124,42 @@ func (s *ScanRepositories) Run(ctx context.Context, _ time.Time) (int, error) {
 			continue
 		}
 
-		snapshot, err := s.client.Scan(ctx, owner, name)
+		written, err := scanAndPublish(ctx, s.client, s.publisher, owner, name)
 		if err != nil {
-			// A partial read is still worth publishing: one unreadable
-			// manifest should not discard the ones that parsed.
-			s.log.Warn("repository scan incomplete", "repository", entry, "error", err)
 			errs = append(errs, err)
-			if snapshot.Validate() != nil {
+			if written == 0 {
 				continue
 			}
 		}
 
-		written, err := s.publisher.Publish(ctx, snapshot)
-		if err != nil {
-			s.log.Error("dependency publish failed", "repository", entry, "error", err)
-			errs = append(errs, err)
-			continue
-		}
-
 		total += written
-		s.log.Info("repository scanned",
-			"repository", snapshot.Repository.FullName(),
-			"publishes", snapshot.Publishes.Name,
-			"dependencies", len(snapshot.Dependencies),
-			"written", written)
+		s.log.Info("repository scanned", "repository", entry, "written", written)
 	}
 	return total, errors.Join(errs...)
+}
+
+// scanAndPublish reads one repository's manifests and hands them to the
+// intelligence service, returning the edges written.
+//
+// A partial read is still published — one unreadable manifest should not
+// discard the ones that parsed — and its error is returned alongside the
+// count, so the caller can both record the edges and report the problem.
+func scanAndPublish(
+	ctx context.Context,
+	client ports.RepositoryClient,
+	publisher ports.DependencyPublisher,
+	owner, name string,
+) (int, error) {
+	snapshot, scanErr := client.Scan(ctx, owner, name)
+	if scanErr != nil && snapshot.Validate() != nil {
+		return 0, scanErr
+	}
+
+	written, err := publisher.Publish(ctx, snapshot)
+	if err != nil {
+		return 0, errors.Join(scanErr, err)
+	}
+	return written, scanErr
 }
 
 // splitRepository parses an "owner/name" watchlist entry.

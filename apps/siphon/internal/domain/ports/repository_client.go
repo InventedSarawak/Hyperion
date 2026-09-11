@@ -33,3 +33,14 @@ type RepositoryDiscoverer interface {
 	// excluded: neither tells us anything about what the owner actually ships.
 	Discover(ctx context.Context, owner string, limit int) ([]string, error)
 }
+
+// Watchlist is an OUTBOUND port: the repositories the intelligence service
+// tracks. siphon reads it to decide what to scan and reports back how each
+// scan went, so the list a user edits in the product is what gets scanned —
+// there is no second list in siphon's configuration to keep in step.
+type Watchlist interface {
+	// Tracked returns every repository on the watchlist.
+	Tracked(ctx context.Context) ([]model.TrackedRepository, error)
+	// ReportScan records one scan's outcome.
+	ReportScan(ctx context.Context, outcome model.ScanOutcome) error
+}

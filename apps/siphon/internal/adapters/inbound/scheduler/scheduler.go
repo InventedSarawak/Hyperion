@@ -65,5 +65,11 @@ func (s *Scheduler) pollOnce(ctx context.Context) {
 		return
 	}
 	s.since = start
+	// A pass that found nothing is the normal case for the watchlist
+	// scanner, which checks every few seconds; at Info it would drown the log.
+	if n == 0 {
+		s.log.Debug("poll complete", "published", n)
+		return
+	}
 	s.log.Info("poll complete", "published", n)
 }

@@ -36,23 +36,25 @@ type Config struct {
 	loader *config.Loader
 }
 
-// RepoScanConfig drives the supply-chain half of ingestion: reading watched
-// repositories' manifests and reporting them to cortex. It is off by default,
-// because an empty watchlist has nothing to scan and an unauthenticated GitHub
-// budget (60 requests/hour) is spent within a few repositories.
+// RepoScanConfig drives the supply-chain half of ingestion: reading tracked
+// repositories' manifests and reporting them to cortex.
+//
+// What to scan is not configured here. The watchlist lives in cortex and is
+// edited in the product (deck's Repositories tab); siphon polls it. The
+// -repos and -orgs flags remain for one-off scans from a script.
 type RepoScanConfig struct {
 	Enabled bool
-	// Watchlist names repositories explicitly, as "owner/name".
-	Watchlist []string
-	// Organizations are GitHub org or user logins whose repositories are
-	// discovered automatically, so the graph is not limited to what someone
-	// remembered to list.
-	Organizations []string
-	// PerOwnerLimit caps how many repositories each owner contributes. Every
-	// repository costs roughly three API calls, so an unbounded org scan can
-	// exhaust the hourly budget on its own.
+	// PerOwnerLimit caps how many repositories a one-off -orgs scan takes
+	// from each owner. Every repository costs roughly three API calls.
 	PerOwnerLimit int
-	Interval      time.Duration
+	// WatchInterval is how often the watchlist is checked for repositories
+	// that are due — short, so one added in the UI is read within seconds.
+	WatchInterval time.Duration
+	// Interval is how long a successful scan stays fresh before the
+	// repository is read again.
+	Interval time.Duration
+	// RetryInterval is how long a failed scan waits before it is retried.
+	RetryInterval time.Duration
 	BaseURL       string
 	Token         string
 	CortexAddr    string
@@ -111,6 +113,10 @@ type PackageFeedConfig struct {
 	Enabled   bool
 	BaseURL   string
 	Watchlist []string
+	// BulkBaseURL and BulkEcosystems drive the backfill, which reads OSV's
+	// per-ecosystem exports rather than querying package by package.
+	BulkBaseURL    string
+	BulkEcosystems []string
 }
 
 // ShodanConfig — source 9. Uses the FREE CVEDB service; api.shodan.io key is
@@ -138,6 +144,7 @@ const (
 	DefaultMSRCBaseURL       = "https://api.msrc.microsoft.com/cvrf/v3.0"
 	DefaultShodanBaseURL     = "https://cvedb.shodan.io"
 	DefaultOSVBaseURL        = "https://api.osv.dev/v1"
+	DefaultOSVBulkBaseURL    = "https://osv-vulnerabilities.storage.googleapis.com"
 	DefaultFullDisclosureRSS = "https://seclists.org/rss/fulldisclosure.rss"
 	DefaultCortexGRPCAddr    = "localhost:50051"
 )
@@ -186,9 +193,12 @@ func Load() Config {
 			FeedURLs: l.List("OSINT_RSS_FEEDS", []string{DefaultFullDisclosureRSS}),
 		},
 		PackageFeeds: PackageFeedConfig{
-			Enabled:   l.Bool("PACKAGE_FEEDS_ENABLED", true),
-			BaseURL:   l.String("PACKAGE_OSV_BASE_URL", DefaultOSVBaseURL),
-			Watchlist: l.List("PACKAGE_WATCHLIST", nil),
+			Enabled:     l.Bool("PACKAGE_FEEDS_ENABLED", true),
+			BaseURL:     l.String("PACKAGE_OSV_BASE_URL", DefaultOSVBaseURL),
+			Watchlist:   l.List("PACKAGE_WATCHLIST", nil),
+			BulkBaseURL: l.String("PACKAGE_OSV_BULK_BASE_URL", DefaultOSVBulkBaseURL),
+			BulkEcosystems: l.List("PACKAGE_OSV_BULK_ECOSYSTEMS",
+				[]string{"npm", "PyPI", "Go", "Maven", "crates.io", "RubyGems", "NuGet", "Packagist"}),
 		},
 		Shodan: ShodanConfig{
 			Enabled: l.Bool("SHODAN_ENABLED", true),
@@ -201,17 +211,17 @@ func Load() Config {
 		},
 
 		RepoScan: RepoScanConfig{
-			Enabled:       l.Bool("REPO_SCAN_ENABLED", false),
-			Watchlist:     l.List("REPO_WATCHLIST", nil),
-			Organizations: l.List("REPO_ORGS", nil),
+			Enabled:       l.Bool("REPO_SCAN_ENABLED", true),
 			PerOwnerLimit: l.Int("REPO_ORG_LIMIT", 20),
+			WatchInterval: l.Duration("REPO_WATCH_INTERVAL", 30*time.Second),
 			// Manifests change on the order of days, not minutes, and every
 			// scan costs GitHub quota — so this is deliberately far slower
 			// than the advisory poll.
-			Interval:   l.Duration("REPO_SCAN_INTERVAL", 6*time.Hour),
-			BaseURL:    l.String("GITHUB_BASE_URL", DefaultGitHubBaseURL),
-			Token:      l.Secret("GITHUB_TOKEN"),
-			CortexAddr: l.String("CORTEX_GRPC_ADDR", DefaultCortexGRPCAddr),
+			Interval:      l.Duration("REPO_SCAN_INTERVAL", 6*time.Hour),
+			RetryInterval: l.Duration("REPO_RETRY_INTERVAL", 15*time.Minute),
+			BaseURL:       l.String("GITHUB_BASE_URL", DefaultGitHubBaseURL),
+			Token:         l.Secret("GITHUB_TOKEN"),
+			CortexAddr:    l.String("CORTEX_GRPC_ADDR", DefaultCortexGRPCAddr),
 		},
 	}
 }

@@ -12,6 +12,7 @@ package intelligence
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc"
@@ -20,16 +21,19 @@ import (
 
 	commonv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/common/v1"
 	intelv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/intelligence/v1"
+	watchlistv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/watchlist/v1"
 
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/model"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/valueobject"
 )
 
-// Client wraps the generated gRPC stub.
+// Client wraps the generated gRPC stubs. The dependency graph and the
+// watchlist both live in cortex, so they share one connection.
 type Client struct {
-	conn    *grpc.ClientConn
-	stub    intelv1.IntelligenceServiceClient
-	timeout time.Duration
+	conn      *grpc.ClientConn
+	stub      intelv1.IntelligenceServiceClient
+	watchlist watchlistv1.WatchlistServiceClient
+	timeout   time.Duration
 }
 
 // Dial opens a connection to cortex. Local development uses plaintext; TLS
@@ -40,9 +44,10 @@ func Dial(addr string) (*Client, error) {
 		return nil, fmt.Errorf("intelligence: dial %s: %w", addr, err)
 	}
 	return &Client{
-		conn:    conn,
-		stub:    intelv1.NewIntelligenceServiceClient(conn),
-		timeout: 30 * time.Second,
+		conn:      conn,
+		stub:      intelv1.NewIntelligenceServiceClient(conn),
+		watchlist: watchlistv1.NewWatchlistServiceClient(conn),
+		timeout:   30 * time.Second,
 	}, nil
 }
 
@@ -64,6 +69,60 @@ func (c *Client) Publish(ctx context.Context, snapshot model.RepositorySnapshot)
 			snapshot.Repository.FullName(), err)
 	}
 	return int(resp.GetDependenciesWritten()), nil
+}
+
+// Tracked lists the repositories on cortex's watchlist.
+func (c *Client) Tracked(ctx context.Context) ([]model.TrackedRepository, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	resp, err := c.watchlist.ListRepositories(ctx, &watchlistv1.ListRepositoriesRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("intelligence: list watchlist: %w", err)
+	}
+
+	out := make([]model.TrackedRepository, 0, len(resp.GetRepositories()))
+	for _, r := range resp.GetRepositories() {
+		owner, name, ok := strings.Cut(r.GetFullName(), "/")
+		if !ok {
+			continue
+		}
+		t := model.TrackedRepository{Owner: owner, Name: name, Status: fromProtoScanStatus(r.GetStatus())}
+		if r.GetLastScanAt() != nil {
+			t.LastScanAt = r.GetLastScanAt().AsTime()
+		}
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+// ReportScan tells cortex how one scan went.
+func (c *Client) ReportScan(ctx context.Context, o model.ScanOutcome) error {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	_, err := c.watchlist.ReportScan(ctx, &watchlistv1.ReportScanRequest{
+		FullName:        o.FullName,
+		Succeeded:       o.Succeeded,
+		Error:           o.Error,
+		DependencyCount: int32(o.DependencyCount),
+		ScannedAt:       timestamppb.New(o.ScannedAt),
+	})
+	if err != nil {
+		return fmt.Errorf("intelligence: report scan %s: %w", o.FullName, err)
+	}
+	return nil
+}
+
+func fromProtoScanStatus(s watchlistv1.ScanStatus) model.ScanStatus {
+	switch s {
+	case watchlistv1.ScanStatus_SCAN_STATUS_SCANNED:
+		return model.ScanScanned
+	case watchlistv1.ScanStatus_SCAN_STATUS_FAILED:
+		return model.ScanFailed
+	default:
+		return model.ScanPending
+	}
 }
 
 // --- mapping: domain -> wire contract ---
