@@ -98,7 +98,7 @@ func main() {
 	ingest := commands.NewIngestSignal(repo, index, graph, match)
 	ingestDeps := commands.NewIngestDependency(graph)
 	search := queries.NewSearch(index)
-	blast := queries.NewCalculateBlastRadius(graph, cfg.BlastRadiusMaxDepth)
+	blast := queries.NewCalculateBlastRadius(graph, cfg.BlastRadiusMaxDepth).WithResolver(repo)
 
 	if *reindex {
 		runReindex(ctx, logger, repo, index)

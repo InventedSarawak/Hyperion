@@ -26,7 +26,7 @@ var _ = Describe("Identifier", func() {
 	)
 
 	It("rejects things that are not ids", func() {
-		for _, raw := range []string{"", "   ", "log4j", "not an id", "-2021"} {
+		for _, raw := range []string{"", "   ", "log4j", "not an id", "-2021", "log4j-core", "react-dom"} {
 			_, ok := valueobject.ParseIdentifier(raw)
 			Expect(ok).To(BeFalse(), "%q", raw)
 		}

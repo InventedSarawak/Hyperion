@@ -23,7 +23,7 @@ import (
 
 // Searcher is the use case this adapter drives (consumer-side interface).
 type Searcher interface {
-	Handle(ctx context.Context, query string, sort model.SearchSort, pageSize int, pageToken string) (queries.Result, error)
+	Handle(ctx context.Context, query string, sort model.SearchSort, kinds []model.FindingKind, pageSize int, pageToken string) (queries.Result, error)
 }
 
 // DependencyIngester records a repository's manifest in the dependency graph.
@@ -76,7 +76,7 @@ func (s *Server) GetVulnerability(ctx context.Context, req *intelv1.GetVulnerabi
 // Search handles the RPC: proto request -> use case -> proto response.
 func (s *Server) Search(ctx context.Context, req *intelv1.SearchRequest) (*intelv1.SearchResponse, error) {
 	result, err := s.search.Handle(ctx, req.GetQuery(), fromProtoSort(req.GetSort()),
-		int(req.GetPageSize()), req.GetPageToken())
+		fromProtoKinds(req.GetKinds()), int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -105,11 +105,34 @@ func fromProtoSort(s intelv1.SearchSort) model.SearchSort {
 	return model.SortRelevance
 }
 
+// fromProtoKinds maps the kinds a search asks for; none means every kind.
+func fromProtoKinds(kinds []commonv1.FindingKind) []model.FindingKind {
+	var out []model.FindingKind
+	for _, k := range kinds {
+		switch k {
+		case commonv1.FindingKind_FINDING_KIND_MALWARE:
+			out = append(out, model.KindMalware)
+		case commonv1.FindingKind_FINDING_KIND_VULNERABILITY, commonv1.FindingKind_FINDING_KIND_UNSPECIFIED:
+			out = append(out, model.KindVulnerability)
+		}
+	}
+	return out
+}
+
 // --- mapping: cortex domain -> wire contract ---
+
+func toProtoKind(k model.FindingKind) commonv1.FindingKind {
+	if k == model.KindMalware {
+		return commonv1.FindingKind_FINDING_KIND_MALWARE
+	}
+	return commonv1.FindingKind_FINDING_KIND_VULNERABILITY
+}
 
 func toProtoVulnerability(v model.Vulnerability) *commonv1.Vulnerability {
 	return &commonv1.Vulnerability{
 		CveId:       v.CVEID,
+		Aliases:     v.Aliases,
+		Kind:        toProtoKind(v.Kind),
 		Title:       v.Title,
 		Description: v.Description,
 		Scores:      toProtoScores(v.Scores),

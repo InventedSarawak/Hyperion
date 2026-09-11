@@ -70,6 +70,8 @@ const indexMapping = `{
   "mappings": {
     "properties": {
       "cve_id":      {"type": "keyword", "fields": {"text": {"type": "text"}}},
+      "aliases":     {"type": "keyword"},
+      "kind":        {"type": "keyword"},
       "title":       {"type": "text"},
       "description": {"type": "text"},
       "references":  {"type": "keyword"},
@@ -115,7 +117,9 @@ func (i *Index) ensureIndex(ctx context.Context) error {
 const addedFields = `{
   "properties": {
     "packages":      {"type": "keyword"},
-    "package_names": {"type": "text"}
+    "package_names": {"type": "text"},
+    "aliases":       {"type": "keyword"},
+    "kind":          {"type": "keyword"}
   }
 }`
 
@@ -164,7 +168,8 @@ const maxWindow = 10000
 // the way an analyst expects:
 //   - best_fields with AUTO fuzziness tolerates typos ("log4shel" -> log4shell)
 //   - phrase_prefix matches partial tokens ("log4j" -> "Log4j2")
-//   - a term match on cve_id makes an exact id lookup the top hit
+//   - a term match on cve_id or any alias makes an exact id lookup the top
+//     hit, whichever of the finding's ids was typed and in whatever case
 //   - a match on affected package names ranks a record that *affects* the
 //     library above one that merely uses the word: "next" is both Next.js and
 //     "fix next buffer leak" in a kernel changelog, and text alone cannot tell
@@ -173,6 +178,7 @@ const maxWindow = 10000
 // Fields are weighted so the CVE id outranks packages, which outrank the
 // title, which outranks the body.
 func relevanceQuery(text string) map[string]any {
+	id := valueobject.NormalizeID(text)
 	return map[string]any{
 		"bool": map[string]any{
 			"minimum_should_match": 1,
@@ -192,7 +198,10 @@ func relevanceQuery(text string) map[string]any {
 					"type":   "phrase_prefix",
 				}},
 				map[string]any{"term": map[string]any{"cve_id": map[string]any{
-					"value": text, "boost": 5,
+					"value": id, "boost": 5,
+				}}},
+				map[string]any{"term": map[string]any{"aliases": map[string]any{
+					"value": id, "boost": 5,
 				}}},
 				// Affecting a library is categorical — a record either
 				// does or it does not — so it is scored as a flat bonus
@@ -245,7 +254,38 @@ func searchBody(q model.SearchQuery) map[string]any {
 		body["query"] = relevanceQuery(text)
 		body["sort"] = append([]any{"_score"}, newestFirst...)
 	}
+	if len(q.Kinds) > 0 {
+		body["query"] = map[string]any{"bool": map[string]any{
+			"must":   body["query"],
+			"filter": kindFilter(q.Kinds, text),
+		}}
+	}
 	return body
+}
+
+// kindFilter keeps the requested kinds of finding, plus any record whose id
+// is exactly what was typed: asking for an id by name is asking for that
+// record, whatever it is. A document indexed before kinds existed has none,
+// and counts as a vulnerability — which is all it could have been then.
+func kindFilter(kinds []model.FindingKind, text string) map[string]any {
+	names := make([]string, 0, len(kinds))
+	var should []any
+	for _, k := range kinds {
+		names = append(names, string(k))
+		if k == model.KindVulnerability {
+			should = append(should, map[string]any{"bool": map[string]any{
+				"must_not": map[string]any{"exists": map[string]any{"field": "kind"}},
+			}})
+		}
+	}
+	should = append(should, map[string]any{"terms": map[string]any{"kind": names}})
+	if id := valueobject.NormalizeID(text); id != "" {
+		should = append(should,
+			map[string]any{"term": map[string]any{"cve_id": id}},
+			map[string]any{"term": map[string]any{"aliases": id}},
+		)
+	}
+	return map[string]any{"bool": map[string]any{"should": should, "minimum_should_match": 1}}
 }
 
 // Search runs one page of a query.
@@ -305,6 +345,8 @@ func (i *Index) do(ctx context.Context, method, path string, body io.Reader) (*h
 
 type document struct {
 	CVEID       string       `json:"cve_id"`
+	Aliases     []string     `json:"aliases,omitempty"`
+	Kind        string       `json:"kind,omitempty"`
 	Title       string       `json:"title"`
 	Description string       `json:"description"`
 	Scores      []model.CVSS `json:"scores"`
@@ -330,8 +372,14 @@ func toDocument(v model.Vulnerability) document {
 			severity = string(s.Severity)
 		}
 	}
+	kind := v.Kind
+	if kind == "" {
+		kind = model.KindVulnerability
+	}
 	return document{
 		CVEID:        v.CVEID,
+		Aliases:      v.Aliases,
+		Kind:         string(kind),
 		Title:        v.Title,
 		Description:  v.Description,
 		Scores:       v.Scores,
@@ -347,8 +395,14 @@ func toDocument(v model.Vulnerability) document {
 }
 
 func (d document) toDomain() model.Vulnerability {
+	kind := model.FindingKind(d.Kind)
+	if kind == "" {
+		kind = model.KindVulnerability
+	}
 	v := model.Vulnerability{
 		CVEID:       d.CVEID,
+		Aliases:     d.Aliases,
+		Kind:        kind,
 		Title:       d.Title,
 		Description: d.Description,
 		Scores:      d.Scores,

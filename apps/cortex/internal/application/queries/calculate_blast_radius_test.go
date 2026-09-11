@@ -40,8 +40,38 @@ func (g *recordingGraph) Ready(context.Context) error { return nil }
 
 func (g *recordingGraph) RemoveRepository(context.Context, string) error { return nil }
 
+// stubResolver maps ids to the findings they name, like the repo.
+type stubResolver map[string]model.Vulnerability
+
+func (s stubResolver) GetByID(_ context.Context, id string) (model.Vulnerability, error) {
+	if v, ok := s[id]; ok {
+		return v, nil
+	}
+	return model.Vulnerability{}, ports.ErrNotFound
+}
+
 var _ = Describe("CalculateBlastRadius use case", func() {
 	ctx := context.Background()
+
+	It("walks from the canonical id whichever of the finding's ids was asked for", func() {
+		graph := &recordingGraph{}
+		resolver := stubResolver{"GHSA-jfh8-c2jp-5v3q": {CVEID: "CVE-2021-44228"}}
+
+		radius, err := queries.NewCalculateBlastRadius(graph, 0).WithResolver(resolver).
+			Handle(ctx, "ghsa-jfh8-c2jp-5v3q", 0, 0)
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(graph.cveID).To(Equal("CVE-2021-44228"))
+		Expect(radius.CVEID).To(Equal("CVE-2021-44228"))
+	})
+
+	It("still asks the graph about an id the store does not know", func() {
+		graph := &recordingGraph{}
+		_, err := queries.NewCalculateBlastRadius(graph, 0).WithResolver(stubResolver{}).
+			Handle(ctx, "CVE-1970-0001", 0, 0)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(graph.cveID).To(Equal("CVE-1970-0001"))
+	})
 
 	It("rejects an empty CVE id rather than enumerating the graph", func() {
 		_, err := queries.NewCalculateBlastRadius(&recordingGraph{}, 0).Handle(ctx, "   ", 0, 0)

@@ -63,6 +63,11 @@ func ParseIdentifier(raw string) (Identifier, bool) {
 		return Identifier{SchemeMAL, strings.ToUpper(s)}, true
 	case otherPattern.MatchString(s):
 		prefix, rest, _ := strings.Cut(s, "-")
+		// Every database numbers its ids; "log4j-core" and "react-dom" are
+		// package names, not advisories.
+		if !strings.ContainsAny(rest, "0123456789") {
+			return Identifier{}, false
+		}
 		return Identifier{SchemeOther, strings.ToUpper(prefix) + "-" + rest}, true
 	default:
 		return Identifier{}, false

@@ -23,7 +23,21 @@ const (
 // question: given a vulnerability, which repositories does it actually reach?
 type CalculateBlastRadius struct {
 	graph        ports.DependencyGraph
+	resolver     FindingResolver
 	defaultDepth int
+}
+
+// FindingResolver looks up the finding an id names (consumer-side interface,
+// implemented by the vulnerability repo).
+type FindingResolver interface {
+	GetByID(ctx context.Context, id string) (model.Vulnerability, error)
+}
+
+// WithResolver lets the query take any id a finding is known by — its GHSA,
+// its MAL, a PYSEC — rather than only the canonical id the graph is keyed on.
+func (q *CalculateBlastRadius) WithResolver(r FindingResolver) *CalculateBlastRadius {
+	q.resolver = r
+	return q
 }
 
 // NewCalculateBlastRadius wires the use case with the graph port.
@@ -47,6 +61,13 @@ func (q *CalculateBlastRadius) Handle(ctx context.Context, cveID string, maxDept
 	}
 	if q.graph == nil {
 		return model.BlastRadius{}, ports.ErrGraphUnavailable
+	}
+	// A miss is not an error here: the id may simply be one cortex has not
+	// stored, and the graph answers that as "not linked to any library".
+	if q.resolver != nil {
+		if v, err := q.resolver.GetByID(ctx, cveID); err == nil {
+			cveID = v.CVEID
+		}
 	}
 
 	depth := maxDepth

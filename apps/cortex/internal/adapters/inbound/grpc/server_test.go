@@ -22,19 +22,44 @@ import (
 type stubSearcher struct {
 	gotQuery string
 	gotSort  model.SearchSort
+	gotKinds []model.FindingKind
 	gotSize  int
 	gotToken string
 	result   queries.Result
 	err      error
 }
 
-func (s *stubSearcher) Handle(_ context.Context, q string, sort model.SearchSort, size int, token string) (queries.Result, error) {
-	s.gotQuery, s.gotSort, s.gotSize, s.gotToken = q, sort, size, token
+func (s *stubSearcher) Handle(_ context.Context, q string, sort model.SearchSort, kinds []model.FindingKind, size int, token string) (queries.Result, error) {
+	s.gotQuery, s.gotSort, s.gotKinds, s.gotSize, s.gotToken = q, sort, kinds, size, token
 	return s.result, s.err
 }
 
 var _ = Describe("gRPC Server", func() {
 	ctx := context.Background()
+
+	It("passes the kinds asked for, and returns every id and the kind of each hit", func() {
+		stub := &stubSearcher{result: queries.Result{Hits: []model.SearchHit{{Vulnerability: model.Vulnerability{
+			CVEID: "GHSA-fw8c-xr5c-95f9", Aliases: []string{"MAL-2026-2307"}, Kind: model.KindMalware,
+		}}}}}
+
+		resp, err := grpcadapter.NewServer(stub, nil, nil, nil).Search(ctx, &intelv1.SearchRequest{
+			Query: "axios",
+			Kinds: []commonv1.FindingKind{commonv1.FindingKind_FINDING_KIND_MALWARE},
+		})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(stub.gotKinds).To(Equal([]model.FindingKind{model.KindMalware}))
+		got := resp.GetResults()[0].GetVulnerability()
+		Expect(got.GetAliases()).To(Equal([]string{"MAL-2026-2307"}))
+		Expect(got.GetKind()).To(Equal(commonv1.FindingKind_FINDING_KIND_MALWARE))
+	})
+
+	It("asks for every kind when the request names none", func() {
+		stub := &stubSearcher{}
+		_, err := grpcadapter.NewServer(stub, nil, nil, nil).Search(ctx, &intelv1.SearchRequest{Query: "axios"})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(stub.gotKinds).To(BeEmpty())
+	})
 
 	It("maps a domain result onto the wire contract", func() {
 		stub := &stubSearcher{result: queries.Result{

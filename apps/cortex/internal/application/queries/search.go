@@ -43,7 +43,7 @@ type Result struct {
 // findings" is a bounded, paged read. Under relevance an empty query has no
 // meaning — every record would score the same — so it is rejected rather than
 // quietly returning an arbitrary slice of the index.
-func (q *Search) Handle(ctx context.Context, query string, sort model.SearchSort, pageSize int, pageToken string) (Result, error) {
+func (q *Search) Handle(ctx context.Context, query string, sort model.SearchSort, kinds []model.FindingKind, pageSize int, pageToken string) (Result, error) {
 	query = strings.TrimSpace(query)
 	if sort != model.SortNewest {
 		sort = model.SortRelevance
@@ -71,7 +71,7 @@ func (q *Search) Handle(ctx context.Context, query string, sort model.SearchSort
 	// deep paging reaches, not a reason to refuse the final page.
 	size = min(size, MaxResultWindow-offset)
 
-	page, err := q.index.Search(ctx, model.SearchQuery{Text: query, Sort: sort, Size: size, Offset: offset})
+	page, err := q.index.Search(ctx, model.SearchQuery{Text: query, Sort: sort, Kinds: kinds, Size: size, Offset: offset})
 	if err != nil {
 		return Result{}, fmt.Errorf("search: %w", err)
 	}

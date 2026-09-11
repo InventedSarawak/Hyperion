@@ -21,8 +21,11 @@ const (
 
 // SearchQuery is one page of a search.
 type SearchQuery struct {
-	Text   string
-	Sort   SearchSort
+	Text string
+	Sort SearchSort
+	// Kinds limits results to these kinds of finding; empty means every
+	// kind. A query that is exactly a finding's id finds it regardless.
+	Kinds  []FindingKind
 	Size   int
 	Offset int
 }
