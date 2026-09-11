@@ -2,7 +2,6 @@ package grpc
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	watchlistv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/watchlist/v1"
@@ -17,7 +16,7 @@ func (c *Client) TrackedRepositories(ctx context.Context) ([]model.TrackedReposi
 
 	resp, err := c.watchlist.ListRepositories(ctx, &watchlistv1.ListRepositoriesRequest{})
 	if err != nil {
-		return nil, fmt.Errorf("grpc: list repositories: %w", err)
+		return nil, describe(err)
 	}
 	return toTracked(resp.GetRepositories()), nil
 }
@@ -33,7 +32,7 @@ func (c *Client) DiscoverRepositories(ctx context.Context, owner string, limit i
 		Owner: owner, Limit: int32(limit),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("grpc: discover repositories: %w", err)
+		return nil, describe(err)
 	}
 
 	out := make([]model.DiscoveredRepository, 0, len(resp.GetRepositories()))
@@ -59,7 +58,7 @@ func (c *Client) TrackRepositories(ctx context.Context, fullNames []string) ([]m
 
 	resp, err := c.watchlist.TrackRepositories(ctx, &watchlistv1.TrackRepositoriesRequest{FullNames: fullNames})
 	if err != nil {
-		return nil, fmt.Errorf("grpc: track repositories: %w", err)
+		return nil, describe(err)
 	}
 	return toTracked(resp.GetRepositories()), nil
 }
@@ -71,7 +70,7 @@ func (c *Client) UntrackRepository(ctx context.Context, fullName string) (bool, 
 
 	resp, err := c.watchlist.UntrackRepository(ctx, &watchlistv1.UntrackRepositoryRequest{FullName: fullName})
 	if err != nil {
-		return false, fmt.Errorf("grpc: untrack repository: %w", err)
+		return false, describe(err)
 	}
 	return resp.GetRemoved(), nil
 }

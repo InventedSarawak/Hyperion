@@ -33,7 +33,7 @@ func NewGetBlastRadius(intelligence ports.IntelligenceClient) *GetBlastRadius {
 func (q *GetBlastRadius) Handle(ctx context.Context, cveID string, maxDepth, limit int) (model.BlastRadius, error) {
 	cveID = strings.TrimSpace(cveID)
 	if cveID == "" {
-		return model.BlastRadius{}, fmt.Errorf("blast radius: cveId must not be empty")
+		return model.BlastRadius{}, fmt.Errorf("enter a finding id to trace — a CVE, GHSA or MAL id")
 	}
 
 	switch {
@@ -51,7 +51,7 @@ func (q *GetBlastRadius) Handle(ctx context.Context, cveID string, maxDepth, lim
 
 	radius, err := q.intelligence.BlastRadius(ctx, cveID, maxDepth, limit)
 	if err != nil {
-		return model.BlastRadius{}, fmt.Errorf("blast radius %s: %w", cveID, err)
+		return model.BlastRadius{}, err
 	}
 	return radius, nil
 }

@@ -30,12 +30,12 @@ func (q *SearchVulnerabilities) Handle(ctx context.Context, term string, sort mo
 		sort = model.SortRelevance
 	}
 	if term == "" && sort == model.SortRelevance {
-		return model.SearchResult{}, fmt.Errorf("search: term must not be empty when sorting by relevance")
+		return model.SearchResult{}, fmt.Errorf("enter a search term, or sort by NEWEST to see the latest findings")
 	}
 
 	result, err := q.intelligence.Search(ctx, term, sort, kinds, pageSize, pageToken)
 	if err != nil {
-		return model.SearchResult{}, fmt.Errorf("search %q: %w", term, err)
+		return model.SearchResult{}, err
 	}
 	return result, nil
 }

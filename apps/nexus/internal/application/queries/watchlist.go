@@ -33,7 +33,7 @@ func (w *Watchlist) Tracked(ctx context.Context) ([]model.TrackedRepository, err
 func (w *Watchlist) Discover(ctx context.Context, owner string, limit int) ([]model.DiscoveredRepository, error) {
 	owner = strings.TrimSpace(owner)
 	if owner == "" {
-		return nil, fmt.Errorf("discover: owner must not be empty")
+		return nil, fmt.Errorf("enter a GitHub user or organization")
 	}
 	return w.client.DiscoverRepositories(ctx, owner, limit)
 }
@@ -41,10 +41,10 @@ func (w *Watchlist) Discover(ctx context.Context, owner string, limit int) ([]mo
 // Track adds repositories to the watchlist.
 func (w *Watchlist) Track(ctx context.Context, fullNames []string) ([]model.TrackedRepository, error) {
 	if len(fullNames) == 0 {
-		return nil, fmt.Errorf("track: name at least one repository")
+		return nil, fmt.Errorf("name at least one repository to track, as owner/name")
 	}
 	if len(fullNames) > MaxTrackBatch {
-		return nil, fmt.Errorf("track: at most %d repositories per request", MaxTrackBatch)
+		return nil, fmt.Errorf("track at most %d repositories at a time", MaxTrackBatch)
 	}
 	return w.client.TrackRepositories(ctx, fullNames)
 }
@@ -53,7 +53,7 @@ func (w *Watchlist) Track(ctx context.Context, fullNames []string) ([]model.Trac
 func (w *Watchlist) Untrack(ctx context.Context, fullName string) (bool, error) {
 	fullName = strings.TrimSpace(fullName)
 	if fullName == "" {
-		return false, fmt.Errorf("untrack: fullName must not be empty")
+		return false, fmt.Errorf("name the repository to stop tracking, as owner/name")
 	}
 	return w.client.UntrackRepository(ctx, fullName)
 }

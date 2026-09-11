@@ -36,7 +36,7 @@ var _ = Describe("GetBlastRadius use case", func() {
 		stub := &blastStub{}
 		_, err := queries.NewGetBlastRadius(stub).Handle(ctx, "   ", 0, 0)
 
-		Expect(err).To(MatchError(ContainSubstring("must not be empty")))
+		Expect(err).To(MatchError(ContainSubstring("enter a finding id")))
 		Expect(stub.gotCVE).To(BeEmpty(), "the backend should not have been called")
 	})
 
@@ -58,12 +58,11 @@ var _ = Describe("GetBlastRadius use case", func() {
 		Expect(stub.gotLimit).To(Equal(queries.MaxBlastRadiusLimit))
 	})
 
-	It("wraps a backend failure with the CVE it was asking about", func() {
-		stub := &blastStub{err: errors.New("graph unavailable")}
+	It("passes a backend failure through as cortex worded it, without prefixes", func() {
+		stub := &blastStub{err: errors.New("dependency graph: no backend configured")}
 		_, err := queries.NewGetBlastRadius(stub).Handle(ctx, "CVE-2021-44228", 0, 0)
 
-		Expect(err).To(MatchError(ContainSubstring("CVE-2021-44228")))
-		Expect(err).To(MatchError(ContainSubstring("graph unavailable")))
+		Expect(err).To(MatchError("dependency graph: no backend configured"))
 	})
 
 	It("passes the result through", func() {
