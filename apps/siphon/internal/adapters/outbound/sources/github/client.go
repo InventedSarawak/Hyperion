@@ -80,7 +80,7 @@ func (c *Client) Fetch(ctx context.Context, since time.Time) ([]model.SourceSign
 		seen    = make(map[string]struct{})
 	)
 
-	for _, advisoryType := range []string{"", typeReviewed} {
+	for _, advisoryType := range []string{"", typeReviewed, typeMalware} {
 		batch, err := c.fetchPass(ctx, since, advisoryType, seen)
 		signals = append(signals, batch...)
 		if err != nil {
@@ -93,6 +93,12 @@ func (c *Client) Fetch(ctx context.Context, since time.Time) ([]model.SourceSign
 // typeReviewed selects the advisories GitHub curates by hand, which are the
 // ones carrying ecosystem package linkage.
 const typeReviewed = "reviewed"
+
+// typeMalware selects compromised or malicious package releases — the axios
+// compromise (GHSA-fw8c-xr5c-95f9) is one. GitHub never includes them unless
+// asked by name, and they rarely carry a CVE, so without this pass the most
+// urgent class of supply-chain finding never arrived at all.
+const typeMalware = "malware"
 
 // fetchPass walks the pages of one feed, skipping advisories already seen.
 func (c *Client) fetchPass(ctx context.Context, since time.Time, advisoryType string, seen map[string]struct{}) ([]model.SourceSignal, error) {
@@ -202,13 +208,19 @@ func toSourceSignal(a advisory) model.SourceSignal {
 	}
 
 	var scores []model.CVSS
-	if a.CVSS.Score > 0 || a.CVSS.VectorString != "" {
+	switch severity := toSeverity(a.Severity); {
+	case a.CVSS.Score > 0 || a.CVSS.VectorString != "":
 		scores = append(scores, model.CVSS{
 			Version:   cvssVersion(a.CVSS.VectorString),
 			BaseScore: a.CVSS.Score,
 			Vector:    a.CVSS.VectorString,
-			Severity:  toSeverity(a.Severity),
+			Severity:  severity,
 		})
+	case severity != model.SeverityUnknown:
+		// Malware advisories are rated but never scored: there is no CVSS
+		// vector for "this release is a remote-access trojan". Dropping the
+		// rating would list the axios compromise as UNKNOWN.
+		scores = append(scores, model.CVSS{Severity: severity})
 	}
 
 	return model.SourceSignal{

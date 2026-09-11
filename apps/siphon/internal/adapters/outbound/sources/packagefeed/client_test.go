@@ -18,14 +18,14 @@ const osvQueryJSON = `{"vulns":[
   "aliases":["CVE-2026-3333"],"modified":"2026-09-01T00:00:00Z","published":"2026-08-01T00:00:00Z",
   "references":[{"type":"WEB","url":"https://example.test/pkg"}],
   "database_specific":{"severity":"HIGH"}},
- {"id":"GHSA-bbbb","summary":"No CVE alias","details":"x",
+ {"id":"MAL-bbbb","summary":"No shared identity","details":"x",
   "aliases":[],"modified":"2026-09-01T00:00:00Z"}
 ]}`
 
 var _ = Describe("Package feed adapter", func() {
 	ctx := context.Background()
 
-	It("resolves watched packages against OSV and keeps only CVE-aliased records", func() {
+	It("resolves watched packages against OSV and keeps only records other feeds can reconcile", func() {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(osvQueryJSON))
 		}))
@@ -37,9 +37,10 @@ var _ = Describe("Package feed adapter", func() {
 		got, err := c.Fetch(ctx, time.Time{})
 		Expect(err).ToNot(HaveOccurred())
 
-		Expect(got).To(HaveLen(1)) // the alias-less record is skipped
+		Expect(got).To(HaveLen(1)) // the record with no CVE or GHSA id is skipped
 		Expect(got[0].CVEID).To(Equal("CVE-2026-3333"))
-		Expect(got[0].Description).To(ContainSubstring("watched package lodash"))
+		// The advisory's own text, untouched.
+		Expect(got[0].Description).To(Equal("Details here."))
 	})
 
 	It("de-duplicates a CVE that affects several watched packages", func() {

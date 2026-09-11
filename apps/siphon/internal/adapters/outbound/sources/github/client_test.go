@@ -157,6 +157,33 @@ var _ = Describe("GitHub Advisory reviewed pass", func() {
 		Expect(got[1].AffectedPackages[0].Name).To(Equal("lodash"))
 	})
 
+	It("asks for malware by name and keeps its rating although it has no CVSS", func() {
+		// GitHub omits malware unless type=malware is requested, and these
+		// advisories carry a severity but a null score and no CVE.
+		const malware = `[{"ghsa_id":"GHSA-fw8c-xr5c-95f9","cve_id":null,"type":"malware",
+		  "summary":"Malware in axios","severity":"critical","cvss":{"score":null,"vector_string":null},
+		  "vulnerabilities":[{"package":{"ecosystem":"npm","name":"axios"},"vulnerable_version_range":"= 1.14.1"}]}]`
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("type") == "malware" {
+				_, _ = w.Write([]byte(malware))
+				return
+			}
+			_, _ = w.Write([]byte(`[]`))
+		}))
+		defer srv.Close()
+
+		got, err := github.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()),
+			sourcehttp.WithRateLimit(time.Millisecond)).Fetch(ctx, time.Time{})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got).To(HaveLen(1))
+		Expect(got[0].CVEID).To(Equal("GHSA-fw8c-xr5c-95f9"))
+		Expect(got[0].Scores).To(HaveLen(1))
+		Expect(got[0].Scores[0].Severity).To(Equal(model.SeverityCritical))
+		Expect(got[0].AffectedPackages[0].Name).To(Equal("axios"))
+	})
+
 	It("does not report an advisory twice when it appears in both passes", func() {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(reviewed))

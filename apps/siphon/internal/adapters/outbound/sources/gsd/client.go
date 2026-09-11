@@ -11,7 +11,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/sources/osv"
@@ -93,7 +92,8 @@ func (c *Client) Fetch(ctx context.Context, since time.Time) ([]model.SourceSign
 		if !ok {
 			continue
 		}
-		signal.Title = strings.TrimSpace(signal.Title) + " (OSV/GSD)"
+		// Provenance travels as the event's source, not as a suffix on the
+		// title — that suffix leaked into every list and search result.
 		signals = append(signals, signal)
 	}
 	return signals, nil

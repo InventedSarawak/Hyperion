@@ -5,6 +5,7 @@
 package osv
 
 import (
+	"regexp"
 	"strings"
 	"time"
 
@@ -20,6 +21,9 @@ type Vulnerability struct {
 	Aliases   []string `json:"aliases"`
 	Modified  string   `json:"modified"`
 	Published string   `json:"published"`
+	// Withdrawn is set when the advisory was retracted — a false positive
+	// or a duplicate. A withdrawn record must not raise a finding.
+	Withdrawn string `json:"withdrawn"`
 	Severity  []struct {
 		Type  string `json:"type"`
 		Score string `json:"score"`
@@ -44,6 +48,9 @@ type Affected struct {
 		Purl      string `json:"purl"`
 	} `json:"package"`
 	Ranges []AffectedRange `json:"ranges"`
+	// Versions enumerates affected releases exactly. Malware records use it
+	// instead of ranges: one poisoned release is not a span of versions.
+	Versions []string `json:"versions"`
 }
 
 // AffectedRange is one version range, expressed as ordered events.
@@ -56,11 +63,11 @@ type AffectedRange struct {
 }
 
 // ToSourceSignal maps an OSV record to a domain signal. It reports false when
-// the record has no CVE alias (the domain keys signals by CVE id) or when it
-// predates `since`.
+// the record was withdrawn, has no identity other feeds share (see Identity),
+// or predates `since`.
 func ToSourceSignal(v Vulnerability, since time.Time) (model.SourceSignal, bool) {
-	cve := cveAlias(v)
-	if cve == "" {
+	id := Identity(v)
+	if id == "" || v.Withdrawn != "" {
 		return model.SourceSignal{}, false
 	}
 
@@ -69,7 +76,7 @@ func ToSourceSignal(v Vulnerability, since time.Time) (model.SourceSignal, bool)
 		return model.SourceSignal{}, false
 	}
 
-	description := v.Details
+	description := cleanDetails(v.Details)
 	if description == "" {
 		description = v.Summary
 	}
@@ -81,16 +88,13 @@ func ToSourceSignal(v Vulnerability, since time.Time) (model.SourceSignal, bool)
 		}
 	}
 
-	title := v.Summary
-	if title == "" {
-		title = v.ID
-	}
-
+	// No summary means no title. Substituting the record id would pass a
+	// placeholder off as a title, which is exactly what hid NVD descriptions.
 	return model.SourceSignal{
-		CVEID:            cve,
-		Title:            title,
+		CVEID:            id,
+		Title:            strings.TrimSpace(v.Summary),
 		Description:      description,
-		Scores:           toScores(v),
+		Scores:           scoresFor(v),
 		References:       references,
 		PublishedAt:      parseTime(v.Published),
 		ModifiedAt:       modified,
@@ -102,8 +106,8 @@ func ToSourceSignal(v Vulnerability, since time.Time) (model.SourceSignal, bool)
 //
 // OSV ecosystem strings can carry a distribution suffix ("Debian:11",
 // "Alpine:v3.18"); only the registry before the colon is the ecosystem. The
-// affected range is recorded as the first "introduced" version, which is what
-// the feed states rather than a resolved version.
+// version is the affected range written the way GitHub writes it (see
+// affectedRange), so records from both feeds read the same.
 func toAffectedPackages(v Vulnerability) []valueobject.PackageRef {
 	seen := make(map[string]struct{}, len(v.Affected))
 	out := make([]valueobject.PackageRef, 0, len(v.Affected))
@@ -113,7 +117,7 @@ func toAffectedPackages(v Vulnerability) []valueobject.PackageRef {
 			continue
 		}
 		ecosystem, _, _ := strings.Cut(a.Package.Ecosystem, ":")
-		ref := valueobject.NewPackageRef(ecosystem, a.Package.Name, introducedVersion(a.Ranges))
+		ref := valueobject.NewPackageRef(ecosystem, a.Package.Name, affectedRange(a))
 		if _, ok := seen[ref.Ecosystem.String()+":"+ref.Name]; ok {
 			continue
 		}
@@ -126,31 +130,139 @@ func toAffectedPackages(v Vulnerability) []valueobject.PackageRef {
 	return out
 }
 
-// introducedVersion returns the first non-zero "introduced" bound, which is
-// the closest thing OSV offers to "the version this starts affecting".
-func introducedVersion(ranges []AffectedRange) string {
-	for _, r := range ranges {
+// affectedRange renders the affected versions in GitHub's range syntax:
+//
+//	introduced 2.0.1, fixed 2.15.0   ->  ">= 2.0.1, < 2.15.0"
+//	introduced 0, fixed 4.17.21      ->  "< 4.17.21"
+//	two spans                        ->  ">= 1.0.0, < 1.2.3 || >= 2.0.0, < 2.0.4"
+//	exact releases (malware)         ->  "= 1.14.1 || = 0.30.4"
+//
+// The upper bound is the point of it: "< 2.15.0" is what tells an analyst
+// which release to upgrade to, and recording only where the range starts threw
+// that away. "introduced 0" means "from the first release" and has no lower
+// bound to print. GIT ranges are skipped — commit hashes mean nothing next to a
+// version number.
+func affectedRange(a Affected) string {
+	var spans []string
+	for _, r := range a.Ranges {
+		if r.Type == "GIT" {
+			continue
+		}
+		lower := ""
 		for _, e := range r.Events {
-			if e.Introduced != "" && e.Introduced != "0" {
-				return e.Introduced
+			switch {
+			case e.Introduced != "":
+				lower = e.Introduced
+			case e.Fixed != "":
+				spans = append(spans, span(lower, "< "+e.Fixed))
+				lower = ""
 			}
+		}
+		if lower != "" {
+			spans = append(spans, span(lower, "")) // still open: no fix yet
+		}
+	}
+	if len(spans) == 0 {
+		for _, v := range a.Versions {
+			spans = append(spans, "= "+v)
+		}
+	}
+	return strings.Join(spans, " || ")
+}
+
+// span joins a lower and upper bound, omitting the lower one when it is the
+// very first release.
+func span(introduced, upper string) string {
+	if introduced == "" || introduced == "0" {
+		if upper == "" {
+			return ">= 0"
+		}
+		return upper
+	}
+	if upper == "" {
+		return ">= " + introduced
+	}
+	return ">= " + introduced + ", " + upper
+}
+
+// Identity picks the id a record is stored under: its CVE when it has one,
+// otherwise its GitHub advisory (GHSA) id, otherwise nothing.
+//
+// The CVE comes first because it is what every other feed reports under, so
+// that is what lets records reconcile. But plenty of real findings never get
+// a CVE — the axios compromise (MAL-2026-2307, GHSA-fw8c-xr5c-95f9) was
+// malware published to npm, not a bug in axios — and keying only on CVEs made
+// them invisible. The GHSA id is the fallback because GitHub reports the same
+// advisory under it, so the two feeds still merge.
+//
+// A record with neither is skipped. That is mostly OSV's malicious-package
+// dataset (MAL-*): hundreds of thousands of typosquats nobody installs, which
+// would bury every search. The malware GitHub has reviewed carries a GHSA id
+// and comes through.
+func Identity(v Vulnerability) string {
+	if isCVE(v.ID) {
+		return strings.ToUpper(v.ID)
+	}
+	for _, alias := range v.Aliases {
+		if isCVE(alias) {
+			return strings.ToUpper(alias)
+		}
+	}
+	if isGHSA(v.ID) {
+		return v.ID
+	}
+	for _, alias := range v.Aliases {
+		if isGHSA(alias) {
+			return alias
 		}
 	}
 	return ""
 }
 
-// cveAlias finds the CVE identifier among an OSV record's aliases (or its own
-// id, when the record is itself a CVE).
-func cveAlias(v Vulnerability) string {
-	if strings.HasPrefix(strings.ToUpper(v.ID), "CVE-") {
-		return strings.ToUpper(v.ID)
+func isCVE(id string) bool { return strings.HasPrefix(strings.ToUpper(id), "CVE-") }
+
+// isGHSA is case-sensitive on purpose: GHSA ids are, and cortex keeps them so.
+func isGHSA(id string) bool { return strings.HasPrefix(id, "GHSA-") }
+
+// scoresFor is the record's scores, with one domain rule on top: a malicious
+// package is critical. OSV's malware records (MAL-*) carry no severity at all,
+// which would list the axios compromise as UNKNOWN — below every ordinary
+// bug. Installing one means the machine is compromised, and GitHub rates every
+// malware advisory critical for the same reason.
+func scoresFor(v Vulnerability) []model.CVSS {
+	scores := toScores(v)
+	if len(scores) == 0 && isMalware(v) {
+		return []model.CVSS{{Severity: model.SeverityCritical}}
+	}
+	return scores
+}
+
+// isMalware reports whether the record is from OSV's malicious-package data.
+func isMalware(v Vulnerability) bool {
+	if strings.HasPrefix(v.ID, "MAL-") {
+		return true
 	}
 	for _, alias := range v.Aliases {
-		if strings.HasPrefix(strings.ToUpper(alias), "CVE-") {
-			return strings.ToUpper(alias)
+		if strings.HasPrefix(alias, "MAL-") {
+			return true
 		}
 	}
-	return ""
+	return false
+}
+
+// perSourceMarker and sourceDigest are the scaffolding OSV's malware records
+// wrap each contributor's report in: a separator, an editing notice, and a
+// 64-character digest after each source name. None of it is the advisory.
+var (
+	perSourceMarker = regexp.MustCompile(`(?m)^\s*(---|_-= Per source details\. Do not edit below this line\.=-_)\s*$`)
+	sourceDigest    = regexp.MustCompile(` \([0-9a-f]{64}\)`)
+)
+
+// cleanDetails strips that scaffolding and leaves the reports.
+func cleanDetails(details string) string {
+	details = perSourceMarker.ReplaceAllString(details, "")
+	details = sourceDigest.ReplaceAllString(details, "")
+	return strings.TrimSpace(details)
 }
 
 // toScores reads CVSS vectors out of the OSV severity array.
@@ -195,6 +307,15 @@ func severityLabel(s string) model.Severity {
 	default:
 		return model.SeverityUnknown
 	}
+}
+
+// PublishedOrModified is when the record was disclosed, falling back to its
+// last change for records that omit publication.
+func PublishedOrModified(v Vulnerability) time.Time {
+	if t := parseTime(v.Published); !t.IsZero() {
+		return t
+	}
+	return parseTime(v.Modified)
 }
 
 func parseTime(s string) time.Time {

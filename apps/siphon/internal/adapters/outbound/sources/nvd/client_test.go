@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -139,6 +141,138 @@ var _ = Describe("NVD Client", func() {
 		Expect(signals).To(HaveLen(4))
 		Expect(signals[0].CVEID).To(Equal("CVE-PAGE-1"))
 		Expect(signals[2].CVEID).To(Equal("CVE-PAGE-2"))
+	})
+
+	It("leaves the title empty, because NVD has none", func() {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(sampleResponse))
+		}))
+		defer srv.Close()
+
+		signals, err := nvd.New(srv.Client(), srv.URL, "", fast).Fetch(ctx, time.Time{})
+		Expect(err).ToNot(HaveOccurred())
+		// A placeholder title (the id) would overwrite real titles from
+		// other feeds on merge, and hide the description in every list.
+		Expect(signals[0].Title).To(BeEmpty())
+	})
+
+	Describe("Backfill", func() {
+		It("walks consecutive published-date windows of at most 120 days up to now", func() {
+			var (
+				mu      sync.Mutex
+				windows [][2]time.Time
+			)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				start, _ := time.Parse("2006-01-02T15:04:05.000", r.URL.Query().Get("pubStartDate"))
+				end, _ := time.Parse("2006-01-02T15:04:05.000", r.URL.Query().Get("pubEndDate"))
+				defer GinkgoRecover()
+				Expect(r.URL.Query().Get("lastModStartDate")).To(BeEmpty())
+				mu.Lock()
+				windows = append(windows, [2]time.Time{start, end})
+				mu.Unlock()
+				_, _ = w.Write([]byte(`{"totalResults":1,"vulnerabilities":[{"cve":{"id":"CVE-2020-0001"}}]}`))
+			}))
+			defer srv.Close()
+
+			from := time.Now().Add(-365 * 24 * time.Hour)
+			var emitted int
+			err := nvd.New(srv.Client(), srv.URL, "", fast).Backfill(ctx, from, func(page []model.SourceSignal) error {
+				emitted += len(page)
+				return nil
+			})
+
+			Expect(err).ToNot(HaveOccurred())
+			// Windows are fetched concurrently, so check coverage in date order.
+			sort.Slice(windows, func(i, j int) bool { return windows[i][0].Before(windows[j][0]) })
+			Expect(windows).To(HaveLen(4)) // 365 days = three full windows and a remainder
+			for i, w := range windows {
+				Expect(w[1].Sub(w[0])).To(BeNumerically("<=", 120*24*time.Hour))
+				if i > 0 {
+					Expect(w[0]).To(BeTemporally("==", windows[i-1][1]), "windows must not leave a gap")
+				}
+			}
+			Expect(time.Since(windows[len(windows)-1][1])).To(BeNumerically("<", time.Minute))
+			Expect(emitted).To(Equal(4))
+		})
+
+		It("ignores the max-pages bound, so history is not silently truncated", func() {
+			var calls int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				atomic.AddInt32(&calls, 1)
+				_, _ = w.Write([]byte(`{"totalResults":5,"vulnerabilities":[{"cve":{"id":"CVE-X"}}]}`))
+			}))
+			defer srv.Close()
+
+			client := nvd.New(srv.Client(), srv.URL, "", fast, nvd.WithPageSize(1), nvd.WithMaxPages(2))
+			err := client.Backfill(ctx, time.Now().Add(-24*time.Hour), func([]model.SourceSignal) error { return nil })
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(atomic.LoadInt32(&calls)).To(Equal(int32(5)))
+		})
+
+		It("retries a page whose body breaks off mid-read", func() {
+			var calls int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if atomic.AddInt32(&calls, 1) == 1 {
+					// Promise more than is sent, then hang up: the client
+					// sees a truncated body, as with a connection reset.
+					w.Header().Set("Content-Length", "100000")
+					_, _ = w.Write([]byte(`{"totalResults":1,"vulnerabilities":[{"cve":`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"totalResults":1,"vulnerabilities":[{"cve":{"id":"CVE-2025-55182"}}]}`))
+			}))
+			defer srv.Close()
+
+			var got []string
+			err := nvd.New(srv.Client(), srv.URL, "", fast).Backfill(ctx, time.Now().Add(-24*time.Hour),
+				func(page []model.SourceSignal) error {
+					for _, s := range page {
+						got = append(got, s.CVEID)
+					}
+					return nil
+				})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(got).To(Equal([]string{"CVE-2025-55182"}))
+			Expect(atomic.LoadInt32(&calls)).To(Equal(int32(2)))
+		})
+
+		It("keeps reading other windows when one cannot be served, and names the hole", func() {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				start, _ := time.Parse("2006-01-02T15:04:05.000", r.URL.Query().Get("pubStartDate"))
+				if time.Since(start) > 200*24*time.Hour {
+					http.Error(w, "bad window", http.StatusBadRequest) // not retryable
+					return
+				}
+				_, _ = w.Write([]byte(`{"totalResults":1,"vulnerabilities":[{"cve":{"id":"CVE-X"}}]}`))
+			}))
+			defer srv.Close()
+
+			var emitted int
+			var mu sync.Mutex
+			err := nvd.New(srv.Client(), srv.URL, "", fast).Backfill(ctx, time.Now().Add(-365*24*time.Hour),
+				func(page []model.SourceSignal) error {
+					mu.Lock()
+					emitted += len(page)
+					mu.Unlock()
+					return nil
+				})
+
+			Expect(err).To(MatchError(ContainSubstring("window(s) incomplete")))
+			Expect(emitted).To(Equal(2), "the two recent windows are still read")
+		})
+
+		It("stops at the first failed emit", func() {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`{"totalResults":1,"vulnerabilities":[{"cve":{"id":"CVE-X"}}]}`))
+			}))
+			defer srv.Close()
+
+			boom := fmt.Errorf("pipe closed")
+			err := nvd.New(srv.Client(), srv.URL, "", fast).Backfill(ctx, time.Now().Add(-365*24*time.Hour),
+				func([]model.SourceSignal) error { return boom })
+			Expect(err).To(MatchError(boom))
+		})
 	})
 
 	It("honours the max-pages bound", func() {
