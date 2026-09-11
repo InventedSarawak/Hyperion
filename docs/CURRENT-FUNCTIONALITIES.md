@@ -242,6 +242,31 @@ finding's ids works (`GHSA-…`, `MAL-…`); the walk starts from its canonical 
 track; a dependency of a library nobody tracks looks one hop deep, so reach can be
 understated.
 
+**Version matching.** Depending on a library is not the same as being exposed to its flaw,
+so every path from a repository to a finding is judged by comparing what the manifest
+declares with what the advisory says is affected:
+
+| Verdict           | Means                                                           | Example                                |
+| :---------------- | :-------------------------------------------------------------- | :------------------------------------- |
+| affected          | every version the declaration allows is affected                | `4.17.4` against `< 4.17.12`           |
+| possibly affected | some allowed versions are; the installed one (lockfile) decides | `^5.11.0` against `>= 5.2.0, < 5.12.8` |
+| not affected      | no allowed version is                                           | `^5.11.0` against `< 5.0.8`            |
+| unknown           | one side cannot be read — a dist-tag, a git or file reference   | `latest`                               |
+
+npm ranges are read as npm reads them (`^`, `~`, x-ranges, hyphen ranges, `||`, and
+pre-releases kept out of a range unless named); a `go.mod` requirement is the exact version
+built. Blast radius lists the exposed repositories first and marks the rest.
+
+**Repository exposure — the other direction.** Given a repository, lists the findings its
+dependencies reach (to the same depth as blast radius), each with its verdict, severity,
+declared version and affected range, worst first. Findings its versions rule out are hidden
+unless asked for. A repository the graph has never seen is reported as not scanned —
+unknown, not clean.
+
+**How to use.** deck's Repositories tab (`enter` on a repository); GraphQL
+`repositoryExposure(fullName:, includeUnaffected:)`; gRPC
+`IntelligenceService/GetRepositoryExposure`.
+
 ### 2.5 Watchlist
 
 **What it does.** The list of repositories blast radius can reach, stored in Postgres:
@@ -262,6 +287,13 @@ Names are case-insensitive, like GitHub's. Discovery uses `CORTEX_GITHUB_TOKEN` 
 **Limits.** One shared list — no per-user or per-team lists until auth arrives (v4).
 Libraries and library-to-library edges are kept on untrack, since other repositories and
 advisories use them.
+
+**Flags.** Every listed repository carries an exposure summary: how many critical and high
+findings it may be exposed to, split into affected and possibly affected, each finding
+counted once at its worst verdict. Malware counts as critical; an unknown verdict counts as
+possible, since it cannot be ruled out. A repository that is not scanned, or had no
+dependency file read, is marked "not computed" rather than clean. deck shows it as the RISK
+column; GraphQL `trackedRepositories { exposure { … } }`.
 
 ### 2.6 Real-time alerts
 
@@ -361,13 +393,23 @@ not reached by any tracked repository
 
 `↑↓` scroll · `esc` back · `r` re-run the traversal.
 
+Each repository is marked with its version verdict — `affected`, `possibly affected`,
+`ruled out by version` or `version unknown` — with the declared and affected versions, so
+the judgement can be checked by eye. Exposed repositories come first.
+
 ### 4.4 Repositories (4)
 
-The watchlist, with each repository's scan state, dependency count and last scan (and the
-error, when a scan failed). While a scan is pending the list refreshes itself every 5s.
+The watchlist, with each repository's scan state, dependency count, **risk** and last scan
+(and the error, when a scan failed). While a scan is pending the list refreshes itself every
+5s.
+
+The RISK column flags what a repository may be exposed to: `▲ 1 crit 6 high`, `▲ 2 high`,
+`3 lower` (medium and low only), `clean`, or `—` when nothing could be judged — not scanned
+yet, or no dependency file read (only `package.json` and `go.mod` are read today).
 
 | Key     | Does                                                                   |
 | :------ | :--------------------------------------------------------------------- |
+| `enter` | open the repository's **findings**                                     |
 | `a`     | add: type a GitHub user or org, `enter` lists its repositories         |
 | `space` | (in the list) select / unselect and move down; tracked ones show `[✓]` |
 | `a`     | (in the list) select every untracked repository, or clear them         |
@@ -376,6 +418,19 @@ error, when a scan failed). While a scan is pending the list refreshes itself ev
 | `s`     | re-scan the selected repository now                                    |
 | `r`     | reload the list                                                        |
 | `esc`   | cancel adding                                                          |
+
+**Findings.** Everything the selected repository may be exposed to, worst first: verdict,
+severity (`MALWARE` for malicious packages), id, package, declared version → affected range,
+and title, under a line counting its critical and high findings. From here a repository leads
+to a finding, and the finding's blast radius back to every repository it reaches.
+
+| Key     | Does                                                         |
+| :------ | :----------------------------------------------------------- |
+| `enter` | open the finding in **Details** (its blast radius loads too) |
+| `b`     | open the finding straight in the **Graph Explorer**          |
+| `u`     | show or hide the findings ruled out by version               |
+| `r`     | reload                                                       |
+| `esc`   | back to the list                                             |
 
 ### 4.5 Always
 

@@ -129,6 +129,19 @@ the record moves to the CVE (see CURRENT-FUNCTIONALITIES 1.3).
 - **Fix:** derive the alert id from the subscription and the finding's first-stored id,
   or dedupe on every id the finding carries.
 
+### 🟡 Versions are judged from manifests, not lockfiles
+
+Version matching compares what `package.json` declares with an advisory's affected range. A
+declared range such as `^5.11.0` allows many versions, so a finding whose fix falls inside
+that range can only be "possibly affected".
+
+- **Why:** the scanner reads `package.json` and `go.mod`, which say what is allowed, not
+  what is installed.
+- **Cost:** most npm findings read "possibly affected"; which way each one goes depends on
+  the installed version, which only the lockfile records.
+- **Fix:** read `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock` and `go.sum`, and judge
+  the installed versions instead.
+
 ### 🟡 Descriptions and scores are last-writer-wins
 
 `Merge` unions sources, references and affected packages, but for the description and
