@@ -47,6 +47,7 @@ func main() {
 			Endpoint:        cfg.Endpoint(),
 			Details:         queries.NewGetVulnerability(client),
 			Repositories:    commands.NewManageWatchlist(client),
+			Findings:        queries.NewGetRepositoryExposure(client),
 		},
 	)
 

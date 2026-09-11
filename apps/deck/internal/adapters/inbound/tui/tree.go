@@ -51,7 +51,7 @@ func RenderTree(radius model.BlastRadius) string {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		b.WriteString(fmt.Sprintf("%s  (%s)\n", repo.FullName, repo.Reach()))
+		b.WriteString(fmt.Sprintf("%s  (%s)%s\n", repo.FullName, repo.Reach(), verdictNote(repo)))
 
 		chain := append(chainBelow(repo), cve)
 		for depth, node := range chain {
@@ -73,6 +73,33 @@ func RenderTree(radius model.BlastRadius) string {
 		}
 	}
 	return b.String()
+}
+
+// verdictNote says whether the version the repository declares is actually
+// affected — depending on a library is not the same as being exposed to its
+// flaw — with both versions, so the judgement can be checked by eye.
+func verdictNote(repo model.ImpactedRepository) string {
+	var what string
+	switch repo.Verdict {
+	case model.VerdictAffected:
+		what = "affected"
+	case model.VerdictPossiblyAffected:
+		what = "possibly affected"
+	case model.VerdictNotAffected:
+		what = "ruled out by version"
+	case model.VerdictUnknown:
+		what = "version unknown"
+	default:
+		return ""
+	}
+	return fmt.Sprintf("  · %s: declares %s, affected %s", what, orDash(repo.DeclaredVersion), orDash(repo.AffectedVersions))
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
 }
 
 // chainBelow is the dependency path from a repository down to the vulnerable

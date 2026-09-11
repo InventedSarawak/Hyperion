@@ -111,6 +111,7 @@ func (m Model) clampScroll() Model {
 
 	m.repos.cursor, m.repos.offset = follow(m.repos.cursor, m.repos.offset, len(m.repos.list), m.repoRows())
 	m.repos.pickCursor, m.repos.pickOffset = follow(m.repos.pickCursor, m.repos.pickOffset, len(m.repos.discovered), m.repoRows())
+	m.repos.findCursor, m.repos.findOffset = follow(m.repos.findCursor, m.repos.findOffset, len(m.repos.exposure.Findings), m.findingRows())
 	return m
 }
 
@@ -135,6 +136,10 @@ func (m Model) repoRows() int {
 	}
 	return max(1, rows)
 }
+
+// findingRows is how many findings fit: the body less the summary line and
+// the column header.
+func (m Model) findingRows() int { return max(1, m.bodyRows()-2) }
 
 // window returns the [start, end) slice of n items that fits in rows.
 func window(offset, rows, n int) (int, int) {

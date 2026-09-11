@@ -220,6 +220,12 @@ type ImpactedRepository struct {
 	Depth      int
 	Direct     bool
 	Path       []string
+	// DeclaredVersion is what the repository's manifest asks for,
+	// AffectedVersions what the advisory says, and Verdict the judgement of
+	// one against the other.
+	DeclaredVersion  string
+	AffectedVersions string
+	Verdict          string
 }
 
 // Chain renders the dependency path as an arrow-separated line.

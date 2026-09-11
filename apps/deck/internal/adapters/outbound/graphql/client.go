@@ -67,7 +67,7 @@ const blastRadiusQuery = `query BlastRadius($cveId: String!, $maxDepth: Int) {
     cveId
     linked
     vulnerablePackages
-    repositories { fullName authorName url viaPackage depth direct path }
+    repositories { fullName authorName url viaPackage depth direct path declaredVersion affectedVersions verdict }
   }
 }`
 
@@ -162,6 +162,10 @@ func (c *Client) BlastRadius(ctx context.Context, cveID string, maxDepth int) (m
 				Depth      int      `json:"depth"`
 				Direct     bool     `json:"direct"`
 				Path       []string `json:"path"`
+
+				DeclaredVersion  string `json:"declaredVersion"`
+				AffectedVersions string `json:"affectedVersions"`
+				Verdict          string `json:"verdict"`
 			} `json:"repositories"`
 		} `json:"blastRadius"`
 	}
@@ -182,9 +186,83 @@ func (c *Client) BlastRadius(ctx context.Context, cveID string, maxDepth int) (m
 			Depth:      r.Depth,
 			Direct:     r.Direct,
 			Path:       r.Path,
+
+			DeclaredVersion:  r.DeclaredVersion,
+			AffectedVersions: r.AffectedVersions,
+			Verdict:          strings.ToLower(r.Verdict), // the enum name, e.g. NOT_AFFECTED
 		})
 	}
 	return radius, nil
+}
+
+const repositoryExposureQuery = `query RepositoryExposure($fullName: String!, $includeUnaffected: Boolean) {
+  repositoryExposure(fullName: $fullName, includeUnaffected: $includeUnaffected) {
+    fullName scanned
+    summary { computed criticalAffected criticalPossible highAffected highPossible total }
+    findings {
+      package declaredVersion affectedVersions verdict depth direct path
+      vulnerability {
+        cveId aliases kind title description references publishedAt modifiedAt sources
+        scores { version baseScore vector severity }
+        affectedPackages { package }
+      }
+    }
+  }
+}`
+
+// RepositoryExposure asks the gateway which vulnerabilities a repository has.
+func (c *Client) RepositoryExposure(ctx context.Context, fullName string, includeUnaffected bool) (model.RepositoryExposure, error) {
+	var out struct {
+		Exposure struct {
+			FullName string `json:"fullName"`
+			Scanned  bool   `json:"scanned"`
+			Summary  struct {
+				Computed         bool `json:"computed"`
+				CriticalAffected int  `json:"criticalAffected"`
+				CriticalPossible int  `json:"criticalPossible"`
+				HighAffected     int  `json:"highAffected"`
+				HighPossible     int  `json:"highPossible"`
+				Total            int  `json:"total"`
+			} `json:"summary"`
+			Findings []struct {
+				Package          string        `json:"package"`
+				DeclaredVersion  string        `json:"declaredVersion"`
+				AffectedVersions string        `json:"affectedVersions"`
+				Verdict          string        `json:"verdict"`
+				Depth            int           `json:"depth"`
+				Direct           bool          `json:"direct"`
+				Path             []string      `json:"path"`
+				Vulnerability    vulnerability `json:"vulnerability"`
+			} `json:"findings"`
+		} `json:"repositoryExposure"`
+	}
+	variables := map[string]any{"fullName": fullName, "includeUnaffected": includeUnaffected}
+	if err := c.do(ctx, repositoryExposureQuery, variables, &out); err != nil {
+		return model.RepositoryExposure{}, err
+	}
+	e := out.Exposure
+	exp := model.RepositoryExposure{
+		FullName: e.FullName,
+		Scanned:  e.Scanned,
+		Summary: model.ExposureSummary{
+			Computed: e.Summary.Computed, CriticalAffected: e.Summary.CriticalAffected,
+			CriticalPossible: e.Summary.CriticalPossible, HighAffected: e.Summary.HighAffected,
+			HighPossible: e.Summary.HighPossible, Total: e.Summary.Total,
+		},
+	}
+	for _, f := range e.Findings {
+		exp.Findings = append(exp.Findings, model.RepositoryFinding{
+			Vulnerability:    f.Vulnerability.toModel(),
+			Package:          f.Package,
+			DeclaredVersion:  f.DeclaredVersion,
+			AffectedVersions: f.AffectedVersions,
+			Verdict:          strings.ToLower(f.Verdict),
+			Depth:            f.Depth,
+			Direct:           f.Direct,
+			Path:             f.Path,
+		})
+	}
+	return exp, nil
 }
 
 // do executes one GraphQL request and decodes `data` into out.

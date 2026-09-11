@@ -210,3 +210,56 @@ var _ = Describe("Gateway client paging", func() {
 		Expect(vars["sort"]).To(Equal("RELEVANCE"))
 	})
 })
+
+var _ = Describe("Gateway client exposure", func() {
+	ctx := context.Background()
+
+	It("asks for one repository's findings and reads back verdicts and its flag", func() {
+		var req map[string]any
+		srv := gateway(`{"data":{"repositoryExposure":{"fullName":"InventedSarawak/CacheMiss","scanned":true,
+		  "summary":{"computed":true,"criticalAffected":1,"criticalPossible":0,"highAffected":4,"highPossible":2,"total":25},
+		  "findings":[{"package":"npm:astro","declaredVersion":"^5.11.0","affectedVersions":"< 5.0.8",
+		    "verdict":"NOT_AFFECTED","depth":1,"direct":true,"path":[],
+		    "vulnerability":{"cveId":"CVE-2024-56159","kind":"VULNERABILITY","scores":[{"severity":"HIGH"}]}}]}}}`, 0, &req)
+		defer srv.Close()
+
+		exp, err := gatewayadapter.New(srv.URL, srv.Client()).RepositoryExposure(ctx, "InventedSarawak/CacheMiss", true)
+
+		Expect(err).ToNot(HaveOccurred())
+		vars, _ := req["variables"].(map[string]any)
+		Expect(vars["fullName"]).To(Equal("InventedSarawak/CacheMiss"))
+		Expect(vars["includeUnaffected"]).To(BeTrue())
+		Expect(exp.Scanned).To(BeTrue())
+		Expect(exp.Summary.Critical()).To(Equal(1))
+		Expect(exp.Summary.High()).To(Equal(6))
+		Expect(exp.Findings[0].Verdict).To(Equal(model.VerdictNotAffected))
+		Expect(exp.Findings[0].DeclaredVersion).To(Equal("^5.11.0"))
+		Expect(exp.Findings[0].Vulnerability.CVEID).To(Equal("CVE-2024-56159"))
+	})
+
+	It("reads each tracked repository's flag", func() {
+		srv := gateway(`{"data":{"trackedRepositories":[{"fullName":"InventedSarawak/CacheMiss","status":"scanned",
+		  "dependencyCount":27,"exposure":{"computed":true,"criticalAffected":1,"criticalPossible":0,
+		  "highAffected":4,"highPossible":2,"total":25}}]}}`, 0, nil)
+		defer srv.Close()
+
+		got, err := gatewayadapter.New(srv.URL, srv.Client()).TrackedRepositories(ctx)
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got[0].Exposure.Computed).To(BeTrue())
+		Expect(got[0].Exposure.Critical()).To(Equal(1))
+	})
+
+	It("reads each blast-radius repository's verdict", func() {
+		srv := gateway(`{"data":{"blastRadius":{"cveId":"CVE-2024-56159","linked":true,"vulnerablePackages":["npm:astro"],
+		  "repositories":[{"fullName":"InventedSarawak/CacheMiss","viaPackage":"npm:astro","depth":1,"direct":true,"path":[],
+		  "declaredVersion":"^5.11.0","affectedVersions":"< 5.0.8","verdict":"NOT_AFFECTED"}]}}}`, 0, nil)
+		defer srv.Close()
+
+		radius, err := gatewayadapter.New(srv.URL, srv.Client()).BlastRadius(ctx, "CVE-2024-56159", 3)
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(radius.Repositories[0].Verdict).To(Equal(model.VerdictNotAffected))
+		Expect(radius.Repositories[0].DeclaredVersion).To(Equal("^5.11.0"))
+	})
+})

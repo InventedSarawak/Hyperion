@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"github.com/inventedsarawak/hyperion/apps/deck/internal/domain/model"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -44,6 +45,18 @@ func severityStyle(label string) lipgloss.Style {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	case "LOW":
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("35"))
+	default:
+		return styleDim
+	}
+}
+
+// verdictStyle colours an exposure verdict.
+func verdictStyle(v string) lipgloss.Style {
+	switch v {
+	case model.VerdictAffected:
+		return lipgloss.NewStyle().Bold(true).Foreground(colAlarm)
+	case model.VerdictPossiblyAffected:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	default:
 		return styleDim
 	}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
 	"github.com/inventedsarawak/hyperion/apps/deck/internal/domain/model"
@@ -25,6 +26,8 @@ const (
 	repoPicker
 	// repoConfirmRemove is waiting for y/n before untracking.
 	repoConfirmRemove
+	// repoFindings lists the vulnerabilities the selected repository has.
+	repoFindings
 )
 
 // repoState is the Repositories tab: the watchlist, and the add flow
@@ -52,6 +55,23 @@ type repoState struct {
 	// added or removed, or why it could not be.
 	notice   string
 	noticeOK bool
+
+	// The findings view: one repository's vulnerabilities.
+	exposure        model.RepositoryExposure
+	exposureFor     string
+	exposureLoading bool
+	exposureErr     error
+	findCursor      int
+	findOffset      int
+	showUnaffected  bool
+}
+
+// selectedFinding is the finding under the cursor in the findings view.
+func (r repoState) selectedFinding() (model.RepositoryFinding, bool) {
+	if r.findCursor < 0 || r.findCursor >= len(r.exposure.Findings) {
+		return model.RepositoryFinding{}, false
+	}
+	return r.exposure.Findings[r.findCursor], true
 }
 
 func (r repoState) busy() bool { return r.loading || r.discovering || r.tracking }
@@ -108,6 +128,12 @@ type untrackMsg struct {
 	err      error
 }
 
+type exposureMsg struct {
+	fullName string
+	exposure model.RepositoryExposure
+	err      error
+}
+
 // reposPollMsg re-reads the watchlist while scans are pending, so a
 // repository visibly moves from "pending" to "scanned" without a keypress.
 type reposPollMsg time.Time
@@ -150,6 +176,31 @@ func (m Model) untrack(fullName string) tea.Cmd {
 	}
 }
 
+func (m Model) loadExposure(fullName string, includeUnaffected bool) tea.Cmd {
+	loader := m.opts.Findings
+	return func() tea.Msg {
+		exp, err := loader.Handle(context.Background(), fullName, includeUnaffected)
+		return exposureMsg{fullName: fullName, exposure: exp, err: err}
+	}
+}
+
+// openFindings shows the vulnerabilities of the selected repository.
+func (m Model) openFindings() (Model, tea.Cmd) {
+	repo, ok := m.repos.selected()
+	if !ok || m.opts.Findings == nil {
+		return m, nil
+	}
+	m.repos.mode = repoFindings
+	if !strings.EqualFold(repo.FullName, m.repos.exposureFor) {
+		m.repos.exposure = model.RepositoryExposure{}
+		m.repos.findCursor, m.repos.findOffset = 0, 0
+	}
+	m.repos.exposureFor = repo.FullName
+	m.repos.exposureErr = nil
+	m.repos.exposureLoading = true
+	return m, tea.Batch(m.loadExposure(repo.FullName, m.repos.showUnaffected), m.spin())
+}
+
 func pollRepos() tea.Cmd {
 	return tea.Tick(reposPollInterval, func(t time.Time) tea.Msg { return reposPollMsg(t) })
 }
@@ -183,6 +234,17 @@ func (m Model) updateRepoMsg(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		if m.repos.pending() {
 			return m, pollRepos()
+		}
+		return m, nil
+
+	case exposureMsg:
+		if !strings.EqualFold(msg.fullName, m.repos.exposureFor) {
+			return m, nil // a different repository has been opened since
+		}
+		m.repos.exposureLoading = false
+		m.repos.exposureErr = msg.err
+		if msg.err == nil {
+			m.repos.exposure = msg.exposure
 		}
 		return m, nil
 
@@ -323,9 +385,14 @@ func (m Model) updateRepoKeys(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 
 	case repoPicker:
 		return m.updatePicker(msg)
+	case repoFindings:
+		return m.updateFindingKeys(msg)
 	}
 
 	switch msg.String() {
+	case "enter":
+		next, cmd := m.openFindings()
+		return next, cmd, true
 	case "a", "+":
 		m.repos.mode = repoOwnerPrompt
 		m.repos.owner = ""
@@ -439,6 +506,7 @@ const (
 	colRepoStatus = 9
 	colRepoDeps   = 6
 	colRepoWhen   = 10
+	colRepoRisk   = 16
 	colPickMark   = 4
 	colPickStars  = 7
 	colPickLang   = 11
@@ -450,6 +518,9 @@ func (m Model) reposView() string {
 	}
 	if m.repos.mode == repoPicker {
 		return m.pickerView()
+	}
+	if m.repos.mode == repoFindings {
+		return m.findingsView()
 	}
 
 	title := fmt.Sprintf("Repositories  %d tracked", len(m.repos.list))
@@ -518,13 +589,13 @@ func (m Model) repoNameWidth() int {
 	for _, t := range m.repos.list {
 		longest = max(longest, runewidth.StringWidth(t.FullName))
 	}
-	room := m.innerWidth() - colMarker - colRepoStatus - colRepoDeps - colRepoWhen - 3
+	room := m.innerWidth() - colMarker - colRepoStatus - colRepoDeps - colRepoRisk - colRepoWhen - 4
 	return clamp(longest, 8, max(8, min(room, m.innerWidth()/2)))
 }
 
 func (m Model) repoHeader() string {
 	return m.fit("  " + pad("REPOSITORY", m.repoNameWidth()) + " " + pad("STATUS", colRepoStatus) +
-		" " + pad("DEPS", colRepoDeps) + " " + "SCANNED")
+		" " + pad("DEPS", colRepoDeps) + " " + pad("RISK", colRepoRisk) + " " + "SCANNED")
 }
 
 func (m Model) repoRow(t model.TrackedRepository, selected bool) string {
@@ -535,12 +606,15 @@ func (m Model) repoRow(t model.TrackedRepository, selected bool) string {
 	if t.Status == model.ScanFailed && t.LastError != "" {
 		when += "  " + model.OneLine(t.LastError)
 	}
-	tail := truncate(when, max(0, m.innerWidth()-colMarker-m.repoNameWidth()-colRepoStatus-colRepoDeps-3))
+	tail := truncate(when, max(0, m.innerWidth()-colMarker-m.repoNameWidth()-colRepoStatus-colRepoDeps-colRepoRisk-4))
+	riskText, riskStyle := riskLabel(t)
+	risk := pad(truncate(riskText, colRepoRisk), colRepoRisk)
 
 	if selected {
-		return styleSelect.Render("▸ " + name + " " + status + " " + deps + " " + tail)
+		return styleSelect.Render("▸ " + name + " " + status + " " + deps + " " + risk + " " + tail)
 	}
-	return "  " + name + " " + statusStyle(t.Status).Render(status) + " " + styleDim.Render(deps) + " " + styleDim.Render(tail)
+	return "  " + name + " " + statusStyle(t.Status).Render(status) + " " + styleDim.Render(deps) + " " +
+		riskStyle.Render(risk) + " " + styleDim.Render(tail)
 }
 
 func (m Model) pickerView() string {
@@ -642,4 +716,163 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// updateFindingKeys handles the findings view. Tab switching and quitting
+// fall through to the global keys.
+func (m Model) updateFindingKeys(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
+	switch msg.String() {
+	case "esc", "backspace", "left", "h":
+		m.repos.mode = repoList
+		return m, nil, true
+	case "enter":
+		if f, ok := m.repos.selectedFinding(); ok {
+			next, cmd := m.open(f.Vulnerability)
+			return next, cmd, true
+		}
+		return m, nil, true
+	case "b":
+		if f, ok := m.repos.selectedFinding(); ok {
+			next, cmd := m.open(f.Vulnerability)
+			next.tab = TabGraph
+			return next, cmd, true
+		}
+		return m, nil, true
+	case "u":
+		// Findings the declared versions rule out are hidden by default;
+		// showing them is how to see what version matching removed.
+		m.repos.showUnaffected = !m.repos.showUnaffected
+		m.repos.exposureLoading = true
+		return m, tea.Batch(m.loadExposure(m.repos.exposureFor, m.repos.showUnaffected), m.spin()), true
+	case "r":
+		m.repos.exposureLoading = true
+		return m, tea.Batch(m.loadExposure(m.repos.exposureFor, m.repos.showUnaffected), m.spin()), true
+	case "j", "down":
+		m.repos.findCursor++
+		return m, nil, true
+	case "k", "up":
+		m.repos.findCursor--
+		return m, nil, true
+	case "g", "home":
+		m.repos.findCursor = 0
+		return m, nil, true
+	case "G", "end":
+		m.repos.findCursor = len(m.repos.exposure.Findings) - 1
+		return m, nil, true
+	case "pgdown", "ctrl+d":
+		m.repos.findCursor += max(1, m.findingRows()-1)
+		return m, nil, true
+	case "pgup", "ctrl+u":
+		m.repos.findCursor -= max(1, m.findingRows()-1)
+		return m, nil, true
+	}
+	return m, nil, false
+}
+
+// Columns of the findings view.
+const colVerdict = 9
+
+// findingsView lists one repository's vulnerabilities, worst first.
+func (m Model) findingsView() string {
+	exp := m.repos.exposure
+	name := m.repos.exposureFor
+
+	title := "Findings  " + name
+	switch {
+	case m.repos.exposureLoading:
+		title += "  ·  " + spinnerFrame(m.spinner) + " loading…"
+	case m.repos.showUnaffected:
+		title += fmt.Sprintf("  ·  %d, including those ruled out by version", len(exp.Findings))
+	default:
+		title += fmt.Sprintf("  ·  %d it may be exposed to", len(exp.Findings))
+	}
+
+	var lines []string
+	switch {
+	case m.repos.exposureErr != nil:
+		lines = append(lines, styleError.Render(m.fit("couldn't load findings: "+m.repos.exposureErr.Error())))
+	case m.repos.exposureLoading && len(exp.Findings) == 0:
+		lines = append(lines, styleDim.Render(spinnerFrame(m.spinner)+" walking the dependency graph…"))
+	case !exp.Scanned && !m.repos.exposureLoading:
+		lines = append(lines,
+			styleDim.Render(m.fit("not scanned yet — its dependencies have not been read, so its findings are unknown, not none")))
+	case len(exp.Findings) == 0:
+		msg := "nothing it depends on is affected by a known advisory"
+		if exp.Summary.Total == 0 && !m.repos.showUnaffected {
+			msg += " — press u to see findings its versions rule out"
+		}
+		lines = append(lines, styleSelect.Render(m.fit(msg)))
+	default:
+		lines = append(lines, styleDim.Render(m.fit(summaryLine(exp.Summary))))
+		lines = append(lines, styleFaint.Render(m.fit("  "+pad("VERDICT", colVerdict)+" "+pad("SEVERITY", colSeverity)+" "+
+			pad("FINDING", colID)+" "+"PACKAGE  DECLARED → AFFECTED  ·  TITLE")))
+		start, end := window(m.repos.findOffset, m.findingRows(), len(exp.Findings))
+		for i := start; i < end; i++ {
+			lines = append(lines, m.findingRow(exp.Findings[i], i == m.repos.findCursor))
+		}
+	}
+	return panel(m.fit(title), strings.Join(lines, "\n"), m.width)
+}
+
+// summaryLine says what the flag in the list is made of.
+func summaryLine(s model.ExposureSummary) string {
+	return fmt.Sprintf("critical: %d affected, %d possible  ·  high: %d affected, %d possible  ·  %d in all",
+		s.CriticalAffected, s.CriticalPossible, s.HighAffected, s.HighPossible, s.Total)
+}
+
+func (m Model) findingRow(f model.RepositoryFinding, selected bool) string {
+	verdict := pad(verdictLabel(f.Verdict), colVerdict)
+	severity := f.Vulnerability.SeverityLabel()
+	if f.Vulnerability.IsMalware() {
+		severity = labelMalware
+	}
+	sev := pad(severity, colSeverity)
+	id := pad(truncate(f.Vulnerability.CVEID, colID), colID)
+	rest := f.Package + " " + f.DeclaredVersion + " → " + f.AffectedVersions
+	if title := model.OneLine(f.Vulnerability.Headline()); title != "" {
+		rest += "  ·  " + title
+	}
+	rest = truncate(rest, max(0, m.innerWidth()-colMarker-colVerdict-colSeverity-colID-3))
+
+	if selected {
+		return styleSelect.Render("▸ " + verdict + " " + sev + " " + id + " " + rest)
+	}
+	return "  " + verdictStyle(f.Verdict).Render(verdict) + " " + severityStyle(severity).Render(sev) + " " +
+		styleCVE.Render(id) + " " + rest
+}
+
+// verdictLabel is how a verdict reads in a column.
+func verdictLabel(v string) string {
+	switch v {
+	case model.VerdictAffected:
+		return "AFFECTED"
+	case model.VerdictPossiblyAffected:
+		return "POSSIBLE"
+	case model.VerdictNotAffected:
+		return "RULED OUT"
+	case model.VerdictUnknown:
+		return "UNKNOWN"
+	default:
+		return "—"
+	}
+}
+
+// riskLabel is the flag beside a tracked repository: its critical and high
+// findings, or "clean", or "—" when nothing could be judged.
+func riskLabel(t model.TrackedRepository) (string, lipgloss.Style) {
+	e := t.Exposure
+	switch {
+	case !e.Computed:
+		return "—", styleFaint
+	case e.Critical() > 0 && e.High() > 0:
+		return fmt.Sprintf("▲ %d crit %d high", e.Critical(), e.High()), severityStyle("CRITICAL")
+	case e.Critical() > 0:
+		return fmt.Sprintf("▲ %d critical", e.Critical()), severityStyle("CRITICAL")
+	case e.High() > 0:
+		return fmt.Sprintf("▲ %d high", e.High()), severityStyle("HIGH")
+	case e.Total > 0:
+		return fmt.Sprintf("%d lower", e.Total), styleDim
+	default:
+		return "clean", severityStyle("LOW")
+	}
 }

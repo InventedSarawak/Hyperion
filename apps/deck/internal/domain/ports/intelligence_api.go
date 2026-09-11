@@ -20,6 +20,9 @@ type IntelligenceAPI interface {
 	BlastRadius(ctx context.Context, cveID string, maxDepth int) (model.BlastRadius, error)
 	// Vulnerability returns one finding in full.
 	Vulnerability(ctx context.Context, id string) (model.Vulnerability, error)
+	// RepositoryExposure returns the findings a repository reaches, judged by
+	// version; includeUnaffected keeps the ones its versions rule out.
+	RepositoryExposure(ctx context.Context, fullName string, includeUnaffected bool) (model.RepositoryExposure, error)
 }
 
 // WatchlistAPI is an OUTBOUND port: the repositories Hyperion tracks.

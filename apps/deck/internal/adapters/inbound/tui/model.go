@@ -96,6 +96,13 @@ type Options struct {
 
 	Details      VulnerabilityLoader
 	Repositories RepositoryManager
+	Findings     RepositoryFindingsLoader
+}
+
+// RepositoryFindingsLoader lists the vulnerabilities one repository has
+// (consumer-side interface).
+type RepositoryFindingsLoader interface {
+	Handle(ctx context.Context, fullName string, includeUnaffected bool) (model.RepositoryExposure, error)
 }
 
 // Model is the Bubble Tea state.

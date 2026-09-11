@@ -7,7 +7,8 @@ import (
 )
 
 const trackedQuery = `query Tracked {
-  trackedRepositories { fullName url status addedAt lastScanAt lastError dependencyCount }
+  trackedRepositories { fullName url status addedAt lastScanAt lastError dependencyCount
+    exposure { computed criticalAffected criticalPossible highAffected highPossible total } }
 }`
 
 const discoverQuery = `query Discover($owner: String!) {
@@ -15,7 +16,8 @@ const discoverQuery = `query Discover($owner: String!) {
 }`
 
 const trackMutation = `mutation Track($fullNames: [String!]!) {
-  trackRepositories(fullNames: $fullNames) { fullName url status addedAt lastScanAt lastError dependencyCount }
+  trackRepositories(fullNames: $fullNames) { fullName url status addedAt lastScanAt lastError dependencyCount
+    exposure { computed criticalAffected criticalPossible highAffected highPossible total } }
 }`
 
 const untrackMutation = `mutation Untrack($fullName: String!) {
@@ -30,10 +32,26 @@ type trackedRepository struct {
 	LastScanAt      string `json:"lastScanAt"`
 	LastError       string `json:"lastError"`
 	DependencyCount int    `json:"dependencyCount"`
+	Exposure        *struct {
+		Computed         bool `json:"computed"`
+		CriticalAffected int  `json:"criticalAffected"`
+		CriticalPossible int  `json:"criticalPossible"`
+		HighAffected     int  `json:"highAffected"`
+		HighPossible     int  `json:"highPossible"`
+		Total            int  `json:"total"`
+	} `json:"exposure"`
 }
 
 func (r trackedRepository) toModel() model.TrackedRepository {
+	var exposure model.ExposureSummary
+	if e := r.Exposure; e != nil {
+		exposure = model.ExposureSummary{
+			Computed: e.Computed, CriticalAffected: e.CriticalAffected, CriticalPossible: e.CriticalPossible,
+			HighAffected: e.HighAffected, HighPossible: e.HighPossible, Total: e.Total,
+		}
+	}
 	return model.TrackedRepository{
+		Exposure:        exposure,
 		FullName:        r.FullName,
 		URL:             r.URL,
 		Status:          r.Status,

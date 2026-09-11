@@ -200,3 +200,7 @@ var _ = Describe("RunSearch malware", func() {
 		Expect(api.gotKinds).To(BeEmpty())
 	})
 })
+
+func (a *pagingAPI) RepositoryExposure(context.Context, string, bool) (model.RepositoryExposure, error) {
+	return model.RepositoryExposure{}, nil
+}

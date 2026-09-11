@@ -338,8 +338,10 @@ func (m Model) repoHints() string {
 		return "  ↑/↓ move · space select · a select all · enter track selected · esc cancel"
 	case repoConfirmRemove:
 		return "  y remove · n keep"
+	case repoFindings:
+		return "  ↑/↓ move · enter details · b blast radius · u show/hide ruled out · r refresh · esc back · q quit"
 	}
-	return "  ↑/↓ move · a add · d remove · s rescan · r refresh · tab switch · q quit"
+	return "  ↑/↓ move · enter findings · a add · d remove · s rescan · r refresh · tab switch · q quit"
 }
 
 // fixedColumns is the marker, id and severity columns with their gaps.

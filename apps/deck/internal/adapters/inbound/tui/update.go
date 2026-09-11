@@ -98,7 +98,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case reposMsg, reposPollMsg, discoverMsg, trackMsg, untrackMsg:
+	case reposMsg, reposPollMsg, discoverMsg, trackMsg, untrackMsg, exposureMsg:
 		return m.updateRepoMsg(msg)
 
 	case tea.KeyMsg:
