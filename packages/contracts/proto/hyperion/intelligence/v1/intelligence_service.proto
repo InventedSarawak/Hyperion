@@ -41,6 +41,9 @@ message SearchRequest {
   int32 page_size = 2;
   string page_token = 3;
   SearchSort sort = 4;
+  // Which kinds to return. Empty means every kind. An exact id lookup ignores
+  // this: asking for "MAL-2026-2307" by name always finds it.
+  repeated hyperion.common.v1.FindingKind kinds = 5;
 }
 
 message SearchResult {
@@ -102,7 +105,7 @@ message GetBlastRadiusResponse {
 }
 
 message GetVulnerabilityRequest {
-  string cve_id = 1; // a CVE id, or a GHSA id for advisories with no CVE
+  string cve_id = 1; // any id the finding is known by: CVE, GHSA, MAL, PYSEC…
 }
 
 message GetVulnerabilityResponse {
