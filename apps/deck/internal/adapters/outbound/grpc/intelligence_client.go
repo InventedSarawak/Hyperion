@@ -14,15 +14,17 @@ import (
 
 	commonv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/common/v1"
 	intelv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/intelligence/v1"
+	watchlistv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/watchlist/v1"
 
 	"github.com/inventedsarawak/hyperion/apps/deck/internal/domain/model"
 )
 
-// Client wraps the generated gRPC stub.
+// Client wraps the generated gRPC stubs, which share one connection.
 type Client struct {
-	conn    *grpc.ClientConn
-	stub    intelv1.IntelligenceServiceClient
-	timeout time.Duration
+	conn      *grpc.ClientConn
+	stub      intelv1.IntelligenceServiceClient
+	watchlist watchlistv1.WatchlistServiceClient
+	timeout   time.Duration
 }
 
 // Dial opens a connection to cortex. Local development uses plaintext; TLS
@@ -33,9 +35,10 @@ func Dial(addr string) (*Client, error) {
 		return nil, fmt.Errorf("grpc: dial %s: %w", addr, err)
 	}
 	return &Client{
-		conn:    conn,
-		stub:    intelv1.NewIntelligenceServiceClient(conn),
-		timeout: 15 * time.Second,
+		conn:      conn,
+		stub:      intelv1.NewIntelligenceServiceClient(conn),
+		watchlist: watchlistv1.NewWatchlistServiceClient(conn),
+		timeout:   15 * time.Second,
 	}, nil
 }
 
@@ -146,15 +149,33 @@ func ecosystemLabel(e commonv1.Ecosystem) string {
 // --- mapping: wire contract -> deck view model ---
 
 func toViewModel(v *commonv1.Vulnerability) model.Vulnerability {
-	return model.Vulnerability{
-		CVEID:       v.GetCveId(),
-		Title:       v.GetTitle(),
-		Description: v.GetDescription(),
-		Scores:      toViewScores(v.GetScores()),
-		References:  v.GetReferences(),
-		PublishedAt: fromTimestamp(v.GetPublishedAt()),
-		ModifiedAt:  fromTimestamp(v.GetModifiedAt()),
+	packages := make([]model.AffectedPackage, 0, len(v.GetAffectedPackages()))
+	for _, p := range v.GetAffectedPackages() {
+		packages = append(packages, model.AffectedPackage{Package: packageLabel(p), VersionRange: p.GetVersion()})
 	}
+	return model.Vulnerability{
+		CVEID:            v.GetCveId(),
+		Title:            v.GetTitle(),
+		Description:      v.GetDescription(),
+		Scores:           toViewScores(v.GetScores()),
+		References:       v.GetReferences(),
+		PublishedAt:      fromTimestamp(v.GetPublishedAt()),
+		ModifiedAt:       fromTimestamp(v.GetModifiedAt()),
+		Sources:          v.GetSources(),
+		AffectedPackages: packages,
+	}
+}
+
+// Vulnerability fetches one finding in full.
+func (c *Client) Vulnerability(ctx context.Context, id string) (model.Vulnerability, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	resp, err := c.stub.GetVulnerability(ctx, &intelv1.GetVulnerabilityRequest{CveId: id})
+	if err != nil {
+		return model.Vulnerability{}, fmt.Errorf("grpc: get vulnerability: %w", err)
+	}
+	return toViewModel(resp.GetVulnerability()), nil
 }
 
 func toViewScores(scores []*commonv1.Cvss) []model.CVSS {

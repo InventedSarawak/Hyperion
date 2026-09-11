@@ -10,11 +10,21 @@ import (
 )
 
 // IntelligenceAPI is an OUTBOUND port: query the intelligence service.
-// Implemented by adapters/outbound/grpc.
+// Implemented by adapters/outbound/graphql and adapters/outbound/grpc.
 type IntelligenceAPI interface {
 	// Search returns one page of results. An empty query is allowed only with
 	// SortNewest; pageToken is "" for the first page.
 	Search(ctx context.Context, query string, sort model.SearchSort, pageSize int, pageToken string) (model.SearchPage, error)
 	// BlastRadius returns the repositories a vulnerability reaches.
 	BlastRadius(ctx context.Context, cveID string, maxDepth int) (model.BlastRadius, error)
+	// Vulnerability returns one finding in full.
+	Vulnerability(ctx context.Context, id string) (model.Vulnerability, error)
+}
+
+// WatchlistAPI is an OUTBOUND port: the repositories Hyperion tracks.
+type WatchlistAPI interface {
+	TrackedRepositories(ctx context.Context) ([]model.TrackedRepository, error)
+	DiscoverRepositories(ctx context.Context, owner string) ([]model.DiscoveredRepository, error)
+	TrackRepositories(ctx context.Context, fullNames []string) ([]model.TrackedRepository, error)
+	UntrackRepository(ctx context.Context, fullName string) error
 }

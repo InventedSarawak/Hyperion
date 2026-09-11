@@ -47,6 +47,10 @@ func (a *pagingAPI) BlastRadius(context.Context, string, int) (model.BlastRadius
 	return model.BlastRadius{}, nil
 }
 
+func (a *pagingAPI) Vulnerability(context.Context, string) (model.Vulnerability, error) {
+	return model.Vulnerability{}, nil
+}
+
 func results(n int) []model.SearchHit {
 	out := make([]model.SearchHit, 0, n)
 	for i := 0; i < n; i++ {

@@ -10,8 +10,9 @@ import (
 )
 
 // update handles one message; Update (layout.go) wraps it to keep scrolling in
-// range. Keys are dispatched by mode first: while the query is being edited
-// every printable key belongs to the query, not to the application's shortcuts.
+// range. Keys are dispatched by mode first: while text is being typed — a
+// search, or an owner to add repositories from — every printable key belongs
+// to the text, not to the application's shortcuts.
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -19,7 +20,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case spinnerMsg:
-		if !m.loading && !m.loadingMore {
+		if !m.busy() {
 			return m, nil // stop animating; a new request re-arms it
 		}
 		m.spinner++
@@ -73,16 +74,39 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case radiusMsg:
-		m.loading = false
-		m.err = msg.err
+		if msg.cveID != m.radius.CVEID {
+			return m, nil // a traversal for a finding no longer open
+		}
+		m.radiusLoading = false
+		m.radiusErr = msg.err
 		if msg.err == nil {
 			m.radius = msg.radius
+			if m.radius.CVEID == "" {
+				m.radius.CVEID = msg.cveID
+			}
 		}
 		return m, nil
 
+	case detailMsg:
+		if msg.id != m.detail.CVEID {
+			return m, nil
+		}
+		m.detailLoading = false
+		m.detailErr = msg.err
+		if msg.err == nil && msg.v.CVEID != "" {
+			m.detail = msg.v
+		}
+		return m, nil
+
+	case reposMsg, reposPollMsg, discoverMsg, trackMsg, untrackMsg:
+		return m.updateRepoMsg(msg)
+
 	case tea.KeyMsg:
-		if m.editing {
+		switch {
+		case m.editing:
 			return m.updateEditing(msg)
+		case m.typingOwner():
+			return m.updateOwnerPrompt(msg)
 		}
 		return m.updateBrowsing(msg)
 	}
@@ -95,6 +119,7 @@ func (m Model) updateEditing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		m.editing = false
 		m.loading = true
+		m.tab = TabFeed
 		m.active = strings.TrimSpace(m.query)
 		// A search term is asking for the best match; clearing it goes back
 		// to the live feed. Either way it is a new list, so start at the top.
@@ -126,25 +151,52 @@ func (m Model) updateEditing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// switchTo shows a tab, loading what it needs the first time it is shown.
+func (m Model) switchTo(t Tab) (tea.Model, tea.Cmd) {
+	m.tab = t
+	if t == TabRepos {
+		return m.enterRepos()
+	}
+	return m, nil
+}
+
 // updateBrowsing handles keys while navigating.
 func (m Model) updateBrowsing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// The Repositories tab has keys of its own (a, d, space…), and while it
+	// is in the middle of something — picking, confirming — they come first.
+	if m.tab == TabRepos {
+		if next, cmd, handled := m.updateRepoKeys(msg); handled {
+			return next, cmd
+		}
+	}
+
 	switch msg.String() {
 	case "q", "ctrl+c":
 		m.quitting = true
 		return m, tea.Quit
 
 	case "tab":
-		m.tab = 1 - m.tab
-		return m, nil
+		return m.switchTo((m.tab + 1) % Tab(len(allTabs)))
+	case "shift+tab":
+		return m.switchTo((m.tab + Tab(len(allTabs)) - 1) % Tab(len(allTabs)))
 	case "1":
-		m.tab = TabFeed
-		return m, nil
+		return m.switchTo(TabFeed)
 	case "2":
-		m.tab = TabGraph
+		return m.switchTo(TabDetails)
+	case "3":
+		return m.switchTo(TabGraph)
+	case "4":
+		return m.switchTo(TabRepos)
+
+	case "esc":
+		// Back out of a finding to the list it came from.
+		if m.tab == TabDetails || m.tab == TabGraph {
+			m.tab = TabFeed
+		}
 		return m, nil
 
-	// Movement moves the cursor in the feed and scrolls the tree in the graph
-	// explorer. Nothing here bounds-checks: clampScroll does, after every
+	// Movement moves the cursor in the feed and scrolls the details and the
+	// tree. Nothing here bounds-checks: clampScroll does, after every
 	// message, so the limits live in one place.
 	case "j", "down":
 		m = m.scroll(1)
@@ -189,43 +241,87 @@ func (m Model) updateBrowsing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.fresh(), m.spin())
 
 	case "enter":
-		// Opening the graph for the selected finding is the whole point of
-		// having the two views side by side.
-		selected, ok := m.Selected()
-		if !ok {
-			return m, nil
+		switch m.tab {
+		case TabFeed:
+			// Reading the finding comes first; its blast radius loads
+			// alongside, one keypress away.
+			selected, ok := m.Selected()
+			if !ok {
+				return m, nil
+			}
+			return m.open(selected)
+		case TabDetails:
+			return m.showGraph()
 		}
-		m.tab = TabGraph
-		m.loading = true
-		// Clear the previous result so the view never shows one CVE's
-		// radius under another CVE's heading while the query is in flight.
-		m.radius = model.BlastRadius{CVEID: selected.CVEID}
-		m.graphOffset = 0
-		return m, tea.Batch(m.explore(selected.CVEID), m.spin())
+		return m, nil
+
+	case "b":
+		// Straight to the blast radius. From the feed that opens the finding
+		// too, so Details and the graph always describe the same one.
+		if m.tab == TabFeed {
+			selected, ok := m.Selected()
+			if !ok {
+				return m, nil
+			}
+			if selected.CVEID != m.detail.CVEID {
+				opened, cmd := m.open(selected)
+				opened.tab = TabGraph
+				return opened, cmd
+			}
+		}
+		return m.showGraph()
 
 	case "/":
 		m.editing = true
 		return m, nil
 
 	case "r":
-		m.loading = true
-		if m.tab == TabGraph {
-			if selected, ok := m.Selected(); ok {
-				return m, tea.Batch(m.explore(selected.CVEID), m.spin())
+		switch m.tab {
+		case TabGraph:
+			if id, ok := m.graphTarget(); ok {
+				next, cmd := m.startRadius(id)
+				return next, tea.Batch(cmd, next.spin())
 			}
+			return m, nil
+		case TabDetails:
+			if m.detail.CVEID != "" && m.opts.Details != nil {
+				m.detailLoading = true
+				return m, tea.Batch(m.loadDetail(m.detail.CVEID), m.spin())
+			}
+			return m, nil
 		}
+		m.loading = true
 		return m, tea.Batch(m.refresh(), m.spin())
 	}
 	return m, nil
 }
 
+// showGraph opens the Graph Explorer for the current finding, starting a
+// traversal unless one for that finding is already loaded or in flight.
+func (m Model) showGraph() (tea.Model, tea.Cmd) {
+	id, ok := m.graphTarget()
+	if !ok {
+		return m, nil
+	}
+	m.tab = TabGraph
+	// Already loaded, or on its way: nothing to fetch. A failed one is retried.
+	if m.radius.CVEID == id && (m.radiusLoading || m.radiusErr == nil) {
+		return m, nil
+	}
+	next, cmd := m.startRadius(id)
+	return next, tea.Batch(cmd, next.spin())
+}
+
 // scroll moves by delta in whichever list the active tab shows.
 func (m Model) scroll(delta int) Model {
-	if m.tab == TabGraph {
+	switch m.tab {
+	case TabGraph:
 		m.graphOffset = saturatingAdd(m.graphOffset, delta)
-		return m
+	case TabDetails:
+		m.detailOffset = saturatingAdd(m.detailOffset, delta)
+	default:
+		m.cursor = saturatingAdd(m.cursor, delta)
 	}
-	m.cursor = saturatingAdd(m.cursor, delta)
 	return m
 }
 

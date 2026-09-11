@@ -105,7 +105,35 @@ func (m Model) clampScroll() Model {
 	m.offset = clamp(m.offset, 0, max(0, total-rows))
 
 	m.graphOffset = clamp(m.graphOffset, 0, max(0, len(m.treeLines())-m.treeRows()))
+	if m.tab == TabDetails {
+		m.detailOffset = clamp(m.detailOffset, 0, max(0, len(m.detailLines())-rows))
+	}
+
+	m.repos.cursor, m.repos.offset = follow(m.repos.cursor, m.repos.offset, len(m.repos.list), m.repoRows())
+	m.repos.pickCursor, m.repos.pickOffset = follow(m.repos.pickCursor, m.repos.pickOffset, len(m.repos.discovered), m.repoRows())
 	return m
+}
+
+// follow keeps a cursor within n items and the window of rows around it.
+func follow(cursor, offset, n, rows int) (int, int) {
+	cursor = clamp(cursor, 0, max(0, n-1))
+	if cursor < offset {
+		offset = cursor
+	}
+	if cursor >= offset+rows {
+		offset = cursor - rows + 1
+	}
+	return cursor, clamp(offset, 0, max(0, n-rows))
+}
+
+// repoRows is how many repositories fit in the Repositories panel: the body
+// less the column header and, when there is one, the notice line above it.
+func (m Model) repoRows() int {
+	rows := m.bodyRows() - 1
+	if m.repoNotice() != "" {
+		rows--
+	}
+	return max(1, rows)
 }
 
 // window returns the [start, end) slice of n items that fits in rows.

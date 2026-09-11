@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/inventedsarawak/hyperion/apps/deck/internal/domain/model"
@@ -12,13 +11,23 @@ import (
 const (
 	branch     = "├── "
 	lastBranch = "└── "
-	trunk      = "│   "
 	gap        = "    "
 )
 
-// RenderTree draws a blast radius as an ASCII tree: the vulnerability at the
-// root, each vulnerable library beneath it, and every exposed repository under
-// the library it was reached through.
+// RenderTree draws a blast radius with each exposed repository at the top of
+// its own tree, and beneath it the dependency chain that leads down to the
+// vulnerable package and the finding:
+//
+//	vercel/commerce  (2 hops)
+//	└── npm:next
+//	    └── npm:react-server-dom-webpack
+//	        └── CVE-2025-55182
+//
+// Repository first, because that is the question being asked — "which of my
+// repositories does this reach, and how?" — and the answer reads top-down as
+// the path the vulnerable code travels to get there. Packages the advisory
+// names that no tracked repository reaches are listed last, so an unreached
+// package is visible rather than silently missing.
 //
 // It is a plain string function so the layout can be tested without driving a
 // terminal — the part worth getting right is the shape, not the styling.
@@ -27,87 +36,77 @@ func RenderTree(radius model.BlastRadius) string {
 
 	cve := radius.CVEID
 	if cve == "" {
-		cve = "(no vulnerability selected)"
+		return "(no vulnerability selected)\n"
 	}
-	b.WriteString(cve + "\n")
 
 	// A CVE with no package linkage is unanswerable, not unaffected. Saying
 	// "0 repositories" here would be the most dangerous kind of wrong.
 	if !radius.Linked() {
+		b.WriteString(cve + "\n")
 		b.WriteString(lastBranch + "no package linkage for this CVE — blast radius unknown\n")
 		return b.String()
 	}
 
-	grouped := radius.ByPackage()
-	packages := orderedPackages(radius, grouped)
-
-	for i, pkg := range packages {
-		lastPkg := i == len(packages)-1
-		b.WriteString(prefix(lastPkg) + pkg + "\n")
-
-		repos := grouped[pkg]
-		if len(repos) == 0 {
-			b.WriteString(indent(lastPkg) + lastBranch + "no tracked repository depends on this\n")
-			continue
+	for i, repo := range radius.Repositories {
+		if i > 0 {
+			b.WriteString("\n")
 		}
+		b.WriteString(fmt.Sprintf("%s  (%s)\n", repo.FullName, repo.Reach()))
 
-		for j, repo := range repos {
-			lastRepo := j == len(repos)-1
-			b.WriteString(indent(lastPkg) + prefix(lastRepo) +
-				fmt.Sprintf("%s  (%s)\n", repo.FullName, repo.Reach()))
+		chain := append(chainBelow(repo), cve)
+		for depth, node := range chain {
+			b.WriteString(strings.Repeat(gap, depth) + lastBranch + node + "\n")
+		}
+	}
 
-			// Only a multi-hop path tells the reader anything the line above
-			// did not already say.
-			if len(repo.Path) > 2 {
-				b.WriteString(indent(lastPkg) + indent(lastRepo) + lastBranch + repo.Chain() + "\n")
+	if unreached := unreachedPackages(radius); len(unreached) > 0 {
+		if len(radius.Repositories) > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("not reached by any tracked repository\n")
+		for i, pkg := range unreached {
+			prefix := branch
+			if i == len(unreached)-1 {
+				prefix = lastBranch
 			}
+			b.WriteString(prefix + pkg + "\n")
 		}
 	}
 	return b.String()
 }
 
-// orderedPackages lists the vulnerable packages, those with exposed
-// repositories first, then any the advisory named that nothing depends on.
-func orderedPackages(radius model.BlastRadius, grouped map[string][]model.ImpactedRepository) []string {
-	seen := make(map[string]struct{}, len(radius.VulnerablePackages))
-	withRepos := make([]string, 0, len(grouped))
-	without := make([]string, 0, len(radius.VulnerablePackages))
+// chainBelow is the dependency path from a repository down to the vulnerable
+// package, without the repository itself. The path cortex reports starts at
+// the repository; when it is missing, the package reached is all there is.
+func chainBelow(repo model.ImpactedRepository) []string {
+	path := repo.Path
+	if len(path) > 0 && path[0] == repo.FullName {
+		path = path[1:]
+	}
+	if len(path) == 0 && repo.ViaPackage != "" {
+		path = []string{repo.ViaPackage}
+	}
+	return append([]string(nil), path...)
+}
 
+// unreachedPackages lists the vulnerable packages no repository is reached
+// through, in the order the advisory named them.
+func unreachedPackages(radius model.BlastRadius) []string {
+	reached := make(map[string]struct{}, len(radius.Repositories))
+	for _, r := range radius.Repositories {
+		reached[r.ViaPackage] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(radius.VulnerablePackages))
+	var out []string
 	for _, pkg := range radius.VulnerablePackages {
-		if _, ok := seen[pkg]; ok {
+		if _, ok := reached[pkg]; ok {
+			continue
+		}
+		if _, dup := seen[pkg]; dup {
 			continue
 		}
 		seen[pkg] = struct{}{}
-		if len(grouped[pkg]) > 0 {
-			withRepos = append(withRepos, pkg)
-		} else {
-			without = append(without, pkg)
-		}
+		out = append(out, pkg)
 	}
-
-	// A repository can be reached through a library the advisory did not list
-	// by that exact name; surface it rather than dropping the finding.
-	extra := make([]string, 0)
-	for pkg := range grouped {
-		if _, ok := seen[pkg]; !ok {
-			extra = append(extra, pkg)
-		}
-	}
-	sort.Strings(extra)
-
-	return append(append(withRepos, extra...), without...)
-}
-
-func prefix(last bool) string {
-	if last {
-		return lastBranch
-	}
-	return branch
-}
-
-func indent(last bool) string {
-	if last {
-		return gap
-	}
-	return trunk
+	return out
 }

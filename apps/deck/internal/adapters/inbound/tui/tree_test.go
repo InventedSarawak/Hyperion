@@ -11,7 +11,7 @@ import (
 )
 
 var _ = Describe("Graph explorer tree", func() {
-	It("draws the vulnerability, its packages and the repositories beneath them", func() {
+	It("puts each repository at the top, with the path down to the finding beneath it", func() {
 		radius := model.BlastRadius{
 			CVEID:              "CVE-2021-44228",
 			VulnerablePackages: []string{"maven:log4j-core"},
@@ -23,17 +23,27 @@ var _ = Describe("Graph explorer tree", func() {
 			},
 		}
 
-		out := tui.RenderTree(radius)
-		lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+		lines := strings.Split(strings.TrimRight(tui.RenderTree(radius), "\n"), "\n")
 
-		Expect(lines[0]).To(Equal("CVE-2021-44228"))
-		Expect(lines[1]).To(Equal("└── maven:log4j-core"))
-		Expect(lines[2]).To(Equal("    ├── acme/api  (direct)"))
-		Expect(lines[3]).To(Equal("    └── acme/web  (2 hops)"))
-		// Only the multi-hop repository gets a chain line; the direct one
-		// would just be repeating itself.
-		Expect(lines[4]).To(Equal("        └── acme/web → maven:framework → maven:log4j-core"))
-		Expect(lines).To(HaveLen(5))
+		Expect(lines).To(Equal([]string{
+			"acme/api  (direct)",
+			"└── maven:log4j-core",
+			"    └── CVE-2021-44228",
+			"",
+			"acme/web  (2 hops)",
+			"└── maven:framework",
+			"    └── maven:log4j-core",
+			"        └── CVE-2021-44228",
+		}))
+	})
+
+	It("falls back to the package reached when there is no path", func() {
+		out := tui.RenderTree(model.BlastRadius{
+			CVEID:              "CVE-1",
+			VulnerablePackages: []string{"npm:next"},
+			Repositories:       []model.ImpactedRepository{{FullName: "acme/api", ViaPackage: "npm:next", Depth: 1, Direct: true}},
+		})
+		Expect(out).To(Equal("acme/api  (direct)\n└── npm:next\n    └── CVE-1\n"))
 	})
 
 	It("says the radius is unknown when the CVE has no package linkage", func() {
@@ -44,25 +54,26 @@ var _ = Describe("Graph explorer tree", func() {
 		Expect(out).ToNot(ContainSubstring("0 repositories"))
 	})
 
-	It("reports a named package that nothing depends on", func() {
-		out := tui.RenderTree(model.BlastRadius{
-			CVEID:              "CVE-2021-44228",
-			VulnerablePackages: []string{"maven:log4j-core"},
-		})
-
-		Expect(out).To(ContainSubstring("no tracked repository depends on this"))
-	})
-
-	It("lists packages with exposure before those without", func() {
+	It("lists the named packages no tracked repository reaches, after those it does", func() {
 		out := tui.RenderTree(model.BlastRadius{
 			CVEID:              "CVE-1",
-			VulnerablePackages: []string{"npm:unused", "npm:used"},
+			VulnerablePackages: []string{"npm:unused-a", "npm:used", "npm:unused-b"},
 			Repositories: []model.ImpactedRepository{
 				{FullName: "acme/api", ViaPackage: "npm:used", Depth: 1, Direct: true},
 			},
 		})
 
-		Expect(strings.Index(out, "npm:used")).To(BeNumerically("<", strings.Index(out, "npm:unused")))
+		Expect(out).To(HaveSuffix("not reached by any tracked repository\n├── npm:unused-a\n└── npm:unused-b\n"))
+		Expect(strings.Index(out, "acme/api")).To(BeNumerically("<", strings.Index(out, "not reached")))
+	})
+
+	It("reports every named package as unreached when nothing depends on them", func() {
+		out := tui.RenderTree(model.BlastRadius{
+			CVEID:              "CVE-2021-44228",
+			VulnerablePackages: []string{"maven:log4j-core"},
+		})
+
+		Expect(out).To(Equal("not reached by any tracked repository\n└── maven:log4j-core\n"))
 	})
 
 	It("still shows a repository reached through a package the advisory did not name", func() {
@@ -76,22 +87,7 @@ var _ = Describe("Graph explorer tree", func() {
 
 		Expect(out).To(ContainSubstring("npm:unnamed"))
 		Expect(out).To(ContainSubstring("acme/api"))
-	})
-
-	It("draws trunk lines so nested branches stay readable", func() {
-		out := tui.RenderTree(model.BlastRadius{
-			CVEID:              "CVE-1",
-			VulnerablePackages: []string{"npm:a", "npm:b"},
-			Repositories: []model.ImpactedRepository{
-				{FullName: "acme/one", ViaPackage: "npm:a", Depth: 1, Direct: true},
-				{FullName: "acme/two", ViaPackage: "npm:b", Depth: 1, Direct: true},
-			},
-		})
-
-		Expect(out).To(ContainSubstring("├── npm:a"))
-		Expect(out).To(ContainSubstring("│   └── acme/one"))
-		Expect(out).To(ContainSubstring("└── npm:b"))
-		Expect(out).To(ContainSubstring("    └── acme/two"))
+		Expect(out).To(ContainSubstring("└── npm:named"), "the named package is still listed as unreached")
 	})
 
 	It("handles an empty radius without panicking", func() {

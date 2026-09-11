@@ -47,6 +47,18 @@ func severityStyle(label string) lipgloss.Style {
 	}
 }
 
+// statusStyle colours a repository's scan state.
+func statusStyle(status string) lipgloss.Style {
+	switch status {
+	case "scanned":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("35"))
+	case "failed":
+		return lipgloss.NewStyle().Bold(true).Foreground(colAlarm)
+	default:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	}
+}
+
 // banner is the logo pinned to the top of the screen. It is 64 columns wide,
 // so showBanner only draws it when the terminal can hold it without wrapping —
 // a wrapped banner looks broken, and looking broken is worse than none. The tab

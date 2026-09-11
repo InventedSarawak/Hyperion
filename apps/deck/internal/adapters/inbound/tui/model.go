@@ -16,18 +16,45 @@ import (
 // Tab identifies which view is on screen.
 type Tab int
 
-// The two views v2 ships: the live feed and the graph explorer.
+// The four views, in the order they appear in the tab bar. A finding is read
+// left to right: find it in the feed, read it in Details, see who it reaches in
+// the Graph Explorer. Repositories decides what the graph can reach at all.
 const (
 	TabFeed Tab = iota
+	TabDetails
 	TabGraph
+	TabRepos
 )
+
+// allTabs is the tab bar, in order.
+var allTabs = []Tab{TabFeed, TabDetails, TabGraph, TabRepos}
 
 // Title is the tab's label in the header.
 func (t Tab) Title() string {
-	if t == TabGraph {
+	switch t {
+	case TabDetails:
+		return "Details"
+	case TabGraph:
 		return "Graph Explorer"
+	case TabRepos:
+		return "Repositories"
+	default:
+		return "Live Feed"
 	}
-	return "Live Feed"
+}
+
+// Short is the tab's label in a narrow terminal.
+func (t Tab) Short() string {
+	switch t {
+	case TabDetails:
+		return "Details"
+	case TabGraph:
+		return "Graph"
+	case TabRepos:
+		return "Repos"
+	default:
+		return "Feed"
+	}
 }
 
 // Searcher loads the feed a page at a time (consumer-side interface).
@@ -43,13 +70,31 @@ type BlastRadiusExplorer interface {
 	Handle(ctx context.Context, cveID string, maxDepth int) (model.BlastRadius, error)
 }
 
-// Options configure the model at construction.
+// VulnerabilityLoader fetches one finding in full (consumer-side interface).
+type VulnerabilityLoader interface {
+	Handle(ctx context.Context, id string) (model.Vulnerability, error)
+}
+
+// RepositoryManager reads and edits the watchlist (consumer-side interface).
+type RepositoryManager interface {
+	Tracked(ctx context.Context) ([]model.TrackedRepository, error)
+	Discover(ctx context.Context, owner string) ([]model.DiscoveredRepository, error)
+	Track(ctx context.Context, fullNames []string) ([]model.TrackedRepository, error)
+	Untrack(ctx context.Context, fullName string) error
+}
+
+// Options configure the model at construction. Details and Repositories are
+// optional: without them the Details tab shows what the search result
+// carried, and the Repositories tab says it is not connected.
 type Options struct {
 	Query           string
 	PageSize        int
 	MaxDepth        int
 	RefreshInterval time.Duration
 	Endpoint        string
+
+	Details      VulnerabilityLoader
+	Repositories RepositoryManager
 }
 
 // Model is the Bubble Tea state.
@@ -64,9 +109,25 @@ type Model struct {
 	radius model.BlastRadius
 
 	// offset is the first feed row on screen; graphOffset the first tree
-	// line. Both are kept in range by clampScroll after every message.
-	offset      int
-	graphOffset int
+	// line; detailOffset the first details line. All are kept in range by
+	// clampScroll after every message.
+	offset       int
+	graphOffset  int
+	detailOffset int
+
+	// detail is the finding open in the Details tab. It starts as the search
+	// hit — so the tab has something to show at once — and is replaced by the
+	// full record when that arrives.
+	detail        model.Vulnerability
+	detailLoading bool
+	detailErr     error
+
+	// radiusLoading and radiusErr belong to the graph alone, so a slow or
+	// failed traversal never blanks the feed or the details.
+	radiusLoading bool
+	radiusErr     error
+
+	repos repoState
 
 	// query is the search box's text, which changes as the user types;
 	// active is the query last submitted, which is what refreshes use. Using
@@ -86,9 +147,9 @@ type Model struct {
 	// line up, so findings would be skipped or repeated.
 	generation int
 
-	loading     bool
+	loading     bool // the feed's first page is in flight
 	spinner     int
-	err         error
+	err         error // the feed's last failure
 	lastRefresh time.Time
 	width       int
 	height      int
@@ -118,6 +179,12 @@ func New(search Searcher, explorer BlastRadiusExplorer, opts Options) Model {
 	}
 }
 
+// busy reports whether anything is in flight, which is what keeps the
+// spinner turning.
+func (m Model) busy() bool {
+	return m.loading || m.loadingMore || m.detailLoading || m.radiusLoading || m.repos.busy()
+}
+
 // --- messages ---
 
 // feedMsg carries a first page: a new query, or a refresh of the current one.
@@ -139,10 +206,18 @@ type moreMsg struct {
 	generation int
 }
 
-// radiusMsg carries the result of a graph traversal.
+// radiusMsg carries the result of a graph traversal for one CVE.
 type radiusMsg struct {
+	cveID  string
 	radius model.BlastRadius
 	err    error
+}
+
+// detailMsg carries the full record of one finding.
+type detailMsg struct {
+	id  string
+	v   model.Vulnerability
+	err error
 }
 
 // tickMsg drives the polling refresh. The feed polls because v2 has no
@@ -205,7 +280,15 @@ func (m Model) explore(cveID string) tea.Cmd {
 	depth, explorer := m.opts.MaxDepth, m.explorer
 	return func() tea.Msg {
 		radius, err := explorer.Handle(context.Background(), cveID, depth)
-		return radiusMsg{radius: radius, err: err}
+		return radiusMsg{cveID: cveID, radius: radius, err: err}
+	}
+}
+
+func (m Model) loadDetail(id string) tea.Cmd {
+	loader := m.opts.Details
+	return func() tea.Msg {
+		v, err := loader.Handle(context.Background(), id)
+		return detailMsg{id: id, v: v, err: err}
 	}
 }
 
@@ -222,4 +305,45 @@ func (m Model) Selected() (model.Vulnerability, bool) {
 		return model.Vulnerability{}, false
 	}
 	return m.feed.Hits[m.cursor].Vulnerability, true
+}
+
+// open shows a finding in the Details tab and starts loading both its full
+// record and its blast radius, so the Graph Explorer is usually ready by the
+// time anyone switches to it.
+func (m Model) open(v model.Vulnerability) (Model, tea.Cmd) {
+	m.tab = TabDetails
+	m.detail = v
+	m.detailErr = nil
+	m.detailOffset = 0
+
+	cmds := []tea.Cmd{m.spin()}
+	if m.opts.Details != nil {
+		m.detailLoading = true
+		cmds = append(cmds, m.loadDetail(v.CVEID))
+	}
+	m, cmd := m.startRadius(v.CVEID)
+	return m, tea.Batch(append(cmds, cmd)...)
+}
+
+// startRadius begins a traversal for id. The previous result is cleared first
+// so the graph never shows one CVE's radius under another CVE's heading while
+// the request is in flight.
+func (m Model) startRadius(id string) (Model, tea.Cmd) {
+	m.radius = model.BlastRadius{CVEID: id}
+	m.radiusErr = nil
+	m.radiusLoading = true
+	m.graphOffset = 0
+	return m, m.explore(id)
+}
+
+// graphTarget is the finding the graph should show: the one open in Details,
+// or failing that the one under the cursor.
+func (m Model) graphTarget() (string, bool) {
+	if m.detail.CVEID != "" {
+		return m.detail.CVEID, true
+	}
+	if v, ok := m.Selected(); ok {
+		return v.CVEID, true
+	}
+	return "", false
 }

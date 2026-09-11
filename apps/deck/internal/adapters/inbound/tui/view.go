@@ -37,9 +37,14 @@ func (m Model) View() string {
 	b.WriteString(m.header())
 	b.WriteString("\n\n")
 
-	if m.tab == TabGraph {
+	switch m.tab {
+	case TabDetails:
+		b.WriteString(m.detailsView())
+	case TabGraph:
 		b.WriteString(m.graphView())
-	} else {
+	case TabRepos:
+		b.WriteString(m.reposView())
+	default:
 		b.WriteString(m.feedView())
 	}
 
@@ -51,8 +56,8 @@ func (m Model) View() string {
 }
 
 func (m Model) header() string {
-	tabs := make([]string, 0, 2)
-	for _, t := range []Tab{TabFeed, TabGraph} {
+	tabs := make([]string, 0, len(allTabs))
+	for _, t := range allTabs {
 		label := fmt.Sprintf(" %d %s ", int(t)+1, t.Title())
 		if t == m.tab {
 			tabs = append(tabs, styleTabOn.Render("▌"+label))
@@ -63,7 +68,7 @@ func (m Model) header() string {
 
 	status := styleDim.Render("connected to " + m.opts.Endpoint)
 	switch {
-	case m.loading:
+	case m.busy():
 		status = styleSelect.Render(spinnerFrame(m.spinner)) + styleDim.Render(" working…")
 	case !m.lastRefresh.IsZero():
 		status = styleDim.Render("updated " + m.lastRefresh.Format("15:04:05"))
@@ -85,15 +90,28 @@ func (m Model) header() string {
 	return styleBrand.Render(truncate("HYPERION", m.width))
 }
 
-// compactTabs is the tab bar for a narrow terminal.
+// compactTabs is the tab bar for a narrow terminal. At the narrowest only
+// the active tab keeps its name; the rest shrink to their number.
 func (m Model) compactTabs() string {
-	feed, graph := styleTabOff.Render("1 Feed"), styleTabOff.Render("2 Graph")
-	if m.tab == TabGraph {
-		graph = styleTabOn.Render("▌2 Graph")
-	} else {
-		feed = styleTabOn.Render("▌1 Feed")
+	render := func(named bool) string {
+		parts := make([]string, 0, len(allTabs))
+		for _, t := range allTabs {
+			label := fmt.Sprintf("%d", int(t)+1)
+			if named || t == m.tab {
+				label += " " + t.Short()
+			}
+			if t == m.tab {
+				parts = append(parts, styleTabOn.Render("▌"+label))
+			} else {
+				parts = append(parts, styleTabOff.Render(label))
+			}
+		}
+		return strings.Join(parts, " ")
 	}
-	return feed + " " + graph
+	if full := render(true); m.width <= 0 || lipgloss.Width(full)+10 <= m.width {
+		return full
+	}
+	return render(false)
 }
 
 // spread pushes right to the right-hand edge when the width is known.
@@ -208,21 +226,25 @@ func (m Model) feedRow(v model.Vulnerability, selected bool) string {
 }
 
 func (m Model) graphView() string {
-	if err := m.err; err != nil {
-		return panel("Error", styleError.Render(err.Error()), m.width)
-	}
-	if m.loading && m.radius.CVEID == "" {
-		return panel("Graph Explorer", styleDim.Render(spinnerFrame(m.spinner)+" loading…"), m.width)
-	}
 	if m.radius.CVEID == "" {
 		return panel("Graph Explorer",
-			styleDim.Render("select a finding in the Live Feed and press enter"), m.width)
+			styleDim.Render("select a finding in the Live Feed and press b (or enter, then enter again)"), m.width)
+	}
+	if err := m.radiusErr; err != nil {
+		return panel(m.fit("Blast Radius  "+m.radius.CVEID), styleError.Render(m.fit(err.Error())), m.width)
+	}
+	if m.radiusLoading {
+		return panel(m.fit("Blast Radius  "+m.radius.CVEID),
+			styleDim.Render(spinnerFrame(m.spinner)+" walking the dependency graph…"), m.width)
 	}
 
 	summary := fmt.Sprintf("%d repositories exposed via %d vulnerable package(s)",
 		len(m.radius.Repositories), len(m.radius.VulnerablePackages))
-	if !m.radius.Linked() {
+	switch {
+	case !m.radius.Linked():
 		summary = "this CVE is not linked to any package yet"
+	case len(m.radius.Repositories) == 0:
+		summary = "no tracked repository reaches the affected packages — add repositories in tab 4"
 	}
 
 	lines := m.treeLines()
@@ -240,12 +262,13 @@ func (m Model) graphView() string {
 		title += fmt.Sprintf("  ·  lines %d–%d of %d", start+1, end, len(lines))
 	}
 
-	body := styleDim.Render(m.fitPlain(summary)) + "\n\n" + styleTree.Render(strings.Join(visible, "\n"))
+	body := styleDim.Render(m.fit(summary)) + "\n\n" + styleTree.Render(strings.Join(visible, "\n"))
 	return panel(m.fit(title), body, m.width)
 }
 
-// promptBox is the search input, styled after a shell prompt: always visible,
-// so it is obvious the query is editable, and focused when the user presses /.
+// promptBox is the input line, styled after a shell prompt: always visible,
+// so it is obvious it is editable. It is the search box everywhere except the
+// Repositories tab, where it is where an owner is typed to add from.
 func (m Model) promptBox() string {
 	// Sized exactly like panel() so the prompt lines up with the box above it.
 	box := lipgloss.NewStyle().
@@ -254,6 +277,20 @@ func (m Model) promptBox() string {
 		Padding(0, 1)
 	if m.width > 4 {
 		box = box.Width(m.width - 2)
+	}
+
+	if m.tab == TabRepos && m.opts.Repositories != nil {
+		const label = "add from github user or org: "
+		owner := truncateLeft(m.repos.owner, m.innerWidth()-len(label)-1)
+		if m.repos.mode == repoOwnerPrompt {
+			box = box.BorderForeground(colAccent)
+			return box.Render(stylePrompt.Render(label) + owner + styleSelect.Render("▏"))
+		}
+		hint := "press a"
+		if m.repos.pickOwner != "" && m.repos.mode == repoPicker {
+			hint = m.repos.pickOwner
+		}
+		return box.Render(styleFaint.Render(label) + styleDim.Render(truncate(hint, m.innerWidth()-len(label))))
 	}
 
 	// "search: " and the caret take 9 cells; a query longer than the rest
@@ -270,14 +307,32 @@ func (m Model) promptBox() string {
 }
 
 func (m Model) footer() string {
-	if m.editing {
-		return styleFaint.Render("  enter search · esc cancel")
-	}
-	hints := "  ↑/↓ move · enter blast radius · n more · s sort · / search · tab switch · r refresh · q quit"
-	if m.tab == TabGraph {
-		hints = "  ↑/↓ scroll · pgup/pgdn page · tab switch · r refresh · q quit"
+	var hints string
+	switch {
+	case m.editing:
+		hints = "  enter search · esc cancel"
+	case m.tab == TabDetails:
+		hints = "  ↑/↓ scroll · enter/b blast radius · esc back · tab switch · r reload · q quit"
+	case m.tab == TabGraph:
+		hints = "  ↑/↓ scroll · pgup/pgdn page · esc back · tab switch · r refresh · q quit"
+	case m.tab == TabRepos:
+		hints = m.repoHints()
+	default:
+		hints = "  ↑/↓ move · enter details · b blast radius · n more · s sort · / search · tab switch · r refresh · q quit"
 	}
 	return styleFaint.Render(m.fitPlain(hints))
+}
+
+func (m Model) repoHints() string {
+	switch m.repos.mode {
+	case repoOwnerPrompt:
+		return "  enter list repositories · esc cancel"
+	case repoPicker:
+		return "  ↑/↓ move · space select · a select all · enter track selected · esc cancel"
+	case repoConfirmRemove:
+		return "  y remove · n keep"
+	}
+	return "  ↑/↓ move · a add · d remove · s rescan · r refresh · tab switch · q quit"
 }
 
 // fixedColumns is the marker, id and severity columns with their gaps.

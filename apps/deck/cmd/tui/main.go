@@ -1,9 +1,9 @@
 // Command tui is deck's entrypoint: the composition root that wires the gRPC
 // client into the use cases and runs the Bubble Tea program.
 //
-// deck talks to cortex directly rather than through the nexus gateway: it is
-// an operator's console on the internal network, and GraphQL would add a hop
-// without adding anything a terminal client needs.
+// deck reaches cortex through the nexus gateway by default, so it is subject to
+// the same edge policy as every other client; DECK_TRANSPORT=grpc talks to
+// cortex directly for debugging.
 package main
 
 import (
@@ -45,6 +45,8 @@ func main() {
 			MaxDepth:        cfg.BlastRadiusMaxDepth,
 			RefreshInterval: cfg.RefreshInterval,
 			Endpoint:        cfg.Endpoint(),
+			Details:         queries.NewGetVulnerability(client),
+			Repositories:    commands.NewManageWatchlist(client),
 		},
 	)
 
@@ -54,10 +56,11 @@ func main() {
 	}
 }
 
-// intelligenceAPI is what both transports satisfy: the outbound port plus a
+// intelligenceAPI is what both transports satisfy: the outbound ports plus a
 // Close, so the composition root can treat them alike.
 type intelligenceAPI interface {
 	ports.IntelligenceAPI
+	ports.WatchlistAPI
 	Close() error
 }
 

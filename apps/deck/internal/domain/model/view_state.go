@@ -20,13 +20,24 @@ type CVSS struct {
 
 // Vulnerability is a finding as deck displays it.
 type Vulnerability struct {
-	CVEID       string
+	CVEID       string // a CVE id, or a GHSA id for an advisory with no CVE
 	Title       string
 	Description string
 	Scores      []CVSS
 	References  []string
 	PublishedAt time.Time
 	ModifiedAt  time.Time
+	// Sources are the feeds that reported it, e.g. "nvd", "github_advisory".
+	Sources []string
+	// AffectedPackages are the libraries it affects. Search results carry
+	// the packages without their version ranges; the full record has both.
+	AffectedPackages []AffectedPackage
+}
+
+// AffectedPackage is one library a finding affects.
+type AffectedPackage struct {
+	Package      string // e.g. "npm:next"
+	VersionRange string // e.g. ">= 13.0.0, < 14.2.25"; empty when unknown
 }
 
 // TopScore returns the highest-scoring assessment, and whether there was one.

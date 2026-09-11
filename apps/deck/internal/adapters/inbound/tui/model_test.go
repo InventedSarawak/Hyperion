@@ -197,11 +197,8 @@ var _ = Describe("TUI model", func() {
 		Expect(selected.CVEID).To(Equal("CVE-2021-23337"))
 	})
 
-	It("opens the graph explorer for the selected finding on enter", func() {
+	It("opens the finding's details on enter, with its blast radius loading alongside", func() {
 		got := loaded()
-		got, cmd := apply(got, tea.KeyMsg{Type: tea.KeyEnter})
-		Expect(cmd).ToNot(BeNil())
-
 		explorer.radius = model.BlastRadius{
 			CVEID:              "CVE-2021-44228",
 			VulnerablePackages: []string{"maven:log4j-core"},
@@ -209,13 +206,30 @@ var _ = Describe("TUI model", func() {
 				{FullName: "acme/api", ViaPackage: "maven:log4j-core", Depth: 1, Direct: true},
 			},
 		}
+		got, cmd := apply(got, tea.KeyMsg{Type: tea.KeyEnter})
+		Expect(cmd).ToNot(BeNil())
 		got = deliver(got, cmd)
 
-		Expect(explorer.gotCVE).To(Equal("CVE-2021-44228"))
-		out := got.View()
+		out := stripANSI(got.View())
+		Expect(out).To(ContainSubstring("Details  CVE-2021-44228"))
+		Expect(out).To(ContainSubstring("finding CVE-2021-44228"))
+		Expect(explorer.gotCVE).To(Equal("CVE-2021-44228"), "the traversal started with the details")
+
+		got, cmd = apply(got, key("3"))
+		Expect(cmd).To(BeNil(), "already loaded: switching tabs fetches nothing")
+		out = got.View()
 		Expect(out).To(ContainSubstring("Graph Explorer"))
 		Expect(out).To(ContainSubstring("acme/api"))
 		Expect(out).To(ContainSubstring("1 repositories exposed"))
+	})
+
+	It("goes straight to the blast radius on b", func() {
+		got := loaded()
+		explorer.radius = model.BlastRadius{CVEID: "CVE-2021-44228", VulnerablePackages: []string{"maven:a"}}
+		got, cmd := apply(got, key("b"))
+		got = deliver(got, cmd)
+		Expect(got.View()).To(ContainSubstring("Blast Radius  CVE-2021-44228"))
+		Expect(got.View()).To(ContainSubstring("maven:a"))
 	})
 
 	It("does not carry one CVE's radius under another CVE's heading", func() {
@@ -223,6 +237,7 @@ var _ = Describe("TUI model", func() {
 		got, cmd := apply(got, tea.KeyMsg{Type: tea.KeyEnter})
 		explorer.radius = model.BlastRadius{CVEID: "CVE-2021-44228", VulnerablePackages: []string{"maven:a"}}
 		got = deliver(got, cmd)
+		got, _ = apply(got, key("3"))
 		Expect(got.View()).To(ContainSubstring("maven:a"))
 
 		// Select the next finding and open it: the old result must be gone
@@ -230,8 +245,23 @@ var _ = Describe("TUI model", func() {
 		got, _ = apply(got, key("1"))
 		got, _ = apply(got, key("j"))
 		got, _ = apply(got, tea.KeyMsg{Type: tea.KeyEnter})
+		got, _ = apply(got, key("3"))
 
 		Expect(got.View()).ToNot(ContainSubstring("maven:a"))
+		Expect(got.View()).To(ContainSubstring("CVE-2021-23337"))
+	})
+
+	It("drops a traversal that answers for a finding no longer open", func() {
+		got := loaded()
+		explorer.radius = model.BlastRadius{CVEID: "CVE-2021-44228", VulnerablePackages: []string{"maven:stale"}}
+		got, stale := apply(got, tea.KeyMsg{Type: tea.KeyEnter})
+		got, _ = apply(got, key("1"))
+		got, _ = apply(got, key("j"))
+		got, _ = apply(got, tea.KeyMsg{Type: tea.KeyEnter})
+		got = deliver(got, stale) // the first traversal lands late
+		got, _ = apply(got, key("3"))
+
+		Expect(got.View()).ToNot(ContainSubstring("maven:stale"))
 	})
 
 	It("ignores enter when the feed is empty", func() {
@@ -278,13 +308,27 @@ var _ = Describe("TUI model", func() {
 		Expect(got.View()).To(ContainSubstring("cvej"))
 	})
 
-	It("switches tabs with tab and the number keys", func() {
+	It("switches tabs with tab, shift+tab and the number keys", func() {
 		got := loaded()
 		got, _ = apply(got, key("2"))
 		Expect(got.View()).To(ContainSubstring("select a finding"))
 
 		got, _ = apply(got, tea.KeyMsg{Type: tea.KeyTab})
-		Expect(got.View()).To(ContainSubstring("CVE-2021-44228"))
+		Expect(stripANSI(got.View())).To(ContainSubstring("▌ 3 Graph Explorer"))
+		got, _ = apply(got, tea.KeyMsg{Type: tea.KeyTab})
+		Expect(stripANSI(got.View())).To(ContainSubstring("▌ 4 Repositories"))
+		got, _ = apply(got, tea.KeyMsg{Type: tea.KeyTab})
+		Expect(got.View()).To(ContainSubstring("CVE-2021-44228"), "tab wraps round to the feed")
+
+		got, _ = apply(got, tea.KeyMsg{Type: tea.KeyShiftTab})
+		Expect(stripANSI(got.View())).To(ContainSubstring("▌ 4 Repositories"))
+	})
+
+	It("returns to the feed from details on esc", func() {
+		got := loaded()
+		got, _ = apply(got, tea.KeyMsg{Type: tea.KeyEnter})
+		got, _ = apply(got, tea.KeyMsg{Type: tea.KeyEsc})
+		Expect(stripANSI(got.View())).To(ContainSubstring("▌ 1 Live Feed"))
 	})
 
 	It("shows a backend failure instead of an empty list", func() {
@@ -553,9 +597,11 @@ var _ = Describe("Fitting the terminal", func() {
 	It("never draws a frame taller than the terminal, whatever the size", func() {
 		for _, size := range [][2]int{{110, 40}, {110, 24}, {80, 30}, {200, 60}, {70, 26}, {60, 20}, {40, 12}} {
 			m := loadedAt(manyHits(80), size[0], size[1])
-			graph, _ := apply(m, key("2"))
+			details, _ := apply(m, tea.KeyMsg{Type: tea.KeyEnter})
+			graph, _ := apply(details, key("3"))
+			repos, _ := apply(m, key("4"))
 
-			for _, view := range []tui.Model{m, graph} {
+			for _, view := range []tui.Model{m, details, graph, repos} {
 				lines := viewLines(view)
 				Expect(len(lines)).To(BeNumerically("<=", size[1]),
 					"%dx%d: a frame taller than the screen loses its top lines", size[0], size[1])
@@ -642,7 +688,7 @@ var _ = Describe("Fitting the terminal", func() {
 		m, _ = apply(m, tea.WindowSizeMsg{Width: 110, Height: 40})
 		m, cmd := apply(m, key("r"))
 		m = deliver(m, cmd)
-		m, cmd = apply(m, tea.KeyMsg{Type: tea.KeyEnter})
+		m, cmd = apply(m, key("b"))
 		m = deliver(m, cmd)
 
 		Expect(len(viewLines(m))).To(BeNumerically("<=", 40))

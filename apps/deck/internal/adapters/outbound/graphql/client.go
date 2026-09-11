@@ -52,8 +52,9 @@ const searchQuery = `query Search($term: String, $sort: SearchSort, $pageSize: I
     hits {
       score
       vulnerability {
-        cveId title description references publishedAt modifiedAt
+        cveId title description references publishedAt modifiedAt sources
         scores { version baseScore vector severity }
+        affectedPackages { package }
       }
     }
   }
@@ -67,6 +68,25 @@ const blastRadiusQuery = `query BlastRadius($cveId: String!, $maxDepth: Int) {
     repositories { fullName authorName url viaPackage depth direct path }
   }
 }`
+
+const vulnerabilityQuery = `query Vulnerability($cveId: String!) {
+  vulnerability(cveId: $cveId) {
+    cveId title description references publishedAt modifiedAt sources
+    scores { version baseScore vector severity }
+    affectedPackages { package versionRange }
+  }
+}`
+
+// Vulnerability fetches one finding in full through the gateway.
+func (c *Client) Vulnerability(ctx context.Context, id string) (model.Vulnerability, error) {
+	var out struct {
+		Vulnerability vulnerability `json:"vulnerability"`
+	}
+	if err := c.do(ctx, vulnerabilityQuery, map[string]any{"cveId": id}, &out); err != nil {
+		return model.Vulnerability{}, err
+	}
+	return out.Vulnerability.toModel(), nil
+}
 
 // Search returns one page of results through the gateway.
 func (c *Client) Search(ctx context.Context, query string, sort model.SearchSort, pageSize int, pageToken string) (model.SearchPage, error) {
@@ -206,13 +226,18 @@ func (c *Client) do(ctx context.Context, query string, variables map[string]any,
 // --- gateway wire shapes -> deck view models ---
 
 type vulnerability struct {
-	CVEID       string   `json:"cveId"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	References  []string `json:"references"`
-	PublishedAt string   `json:"publishedAt"`
-	ModifiedAt  string   `json:"modifiedAt"`
-	Scores      []struct {
+	CVEID            string   `json:"cveId"`
+	Title            string   `json:"title"`
+	Description      string   `json:"description"`
+	References       []string `json:"references"`
+	PublishedAt      string   `json:"publishedAt"`
+	ModifiedAt       string   `json:"modifiedAt"`
+	Sources          []string `json:"sources"`
+	AffectedPackages []struct {
+		Package      string `json:"package"`
+		VersionRange string `json:"versionRange"`
+	} `json:"affectedPackages"`
+	Scores []struct {
 		Version   string  `json:"version"`
 		BaseScore float64 `json:"baseScore"`
 		Vector    string  `json:"vector"`
@@ -230,14 +255,20 @@ func (v vulnerability) toModel() model.Vulnerability {
 			Severity:  s.Severity,
 		})
 	}
+	packages := make([]model.AffectedPackage, 0, len(v.AffectedPackages))
+	for _, p := range v.AffectedPackages {
+		packages = append(packages, model.AffectedPackage{Package: p.Package, VersionRange: p.VersionRange})
+	}
 	return model.Vulnerability{
-		CVEID:       v.CVEID,
-		Title:       v.Title,
-		Description: v.Description,
-		Scores:      scores,
-		References:  v.References,
-		PublishedAt: parseTime(v.PublishedAt),
-		ModifiedAt:  parseTime(v.ModifiedAt),
+		CVEID:            v.CVEID,
+		Title:            v.Title,
+		Description:      v.Description,
+		Scores:           scores,
+		References:       v.References,
+		PublishedAt:      parseTime(v.PublishedAt),
+		ModifiedAt:       parseTime(v.ModifiedAt),
+		Sources:          v.Sources,
+		AffectedPackages: packages,
 	}
 }
 
