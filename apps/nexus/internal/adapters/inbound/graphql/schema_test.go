@@ -19,14 +19,15 @@ import (
 
 // stubSearcher stands in for the search use case.
 type stubSearcher struct {
-	gotSort model.SearchSort
-	gotTerm string
-	result  model.SearchResult
-	err     error
+	gotKinds []model.FindingKind
+	gotSort  model.SearchSort
+	gotTerm  string
+	result   model.SearchResult
+	err      error
 }
 
-func (s *stubSearcher) Handle(_ context.Context, term string, sort model.SearchSort, _ int, _ string) (model.SearchResult, error) {
-	s.gotTerm, s.gotSort = term, sort
+func (s *stubSearcher) Handle(_ context.Context, term string, sort model.SearchSort, kinds []model.FindingKind, _ int, _ string) (model.SearchResult, error) {
+	s.gotTerm, s.gotSort, s.gotKinds = term, sort, kinds
 	if s.err != nil {
 		return model.SearchResult{}, s.err
 	}
@@ -87,6 +88,36 @@ var _ = Describe("GraphQL adapter", func() {
 
 		scores := vuln["scores"].([]any)
 		Expect(scores[0].(map[string]any)["severity"]).To(Equal("CRITICAL"))
+	})
+
+	It("passes the kinds asked for and returns every id and the kind of each hit", func() {
+		stub := &stubSearcher{result: model.SearchResult{Hits: []model.SearchHit{{Vulnerability: model.Vulnerability{
+			CVEID: "GHSA-fw8c-xr5c-95f9", Aliases: []string{"MAL-2026-2307"}, Kind: model.KindMalware,
+		}}}}}
+		schema, err := graphqladapter.NewSchema(stub, &stubBlast{})
+		Expect(err).ToNot(HaveOccurred())
+
+		out := post(graphqladapter.NewHandler(schema),
+			`{ search(term: "axios", kinds: [MALWARE, VULNERABILITY]) { hits { vulnerability { cveId aliases kind } } } }`)
+
+		Expect(out).ToNot(HaveKey("errors"))
+		Expect(stub.gotKinds).To(Equal([]model.FindingKind{model.KindMalware, model.KindVulnerability}))
+		vuln := out["data"].(map[string]any)["search"].(map[string]any)["hits"].([]any)[0].(map[string]any)["vulnerability"].(map[string]any)
+		Expect(vuln["aliases"]).To(Equal([]any{"MAL-2026-2307"}))
+		Expect(vuln["kind"]).To(Equal("MALWARE"))
+	})
+
+	It("asks for every kind when the query names none, and reports an unset kind as a vulnerability", func() {
+		stub := &stubSearcher{result: model.SearchResult{Hits: []model.SearchHit{{Vulnerability: model.Vulnerability{CVEID: "CVE-2021-44228"}}}}}
+		schema, err := graphqladapter.NewSchema(stub, &stubBlast{})
+		Expect(err).ToNot(HaveOccurred())
+
+		out := post(graphqladapter.NewHandler(schema), `{ search(term: "log4j") { hits { vulnerability { kind } } } }`)
+
+		Expect(out).ToNot(HaveKey("errors"))
+		Expect(stub.gotKinds).To(BeEmpty())
+		vuln := out["data"].(map[string]any)["search"].(map[string]any)["hits"].([]any)[0].(map[string]any)["vulnerability"].(map[string]any)
+		Expect(vuln["kind"]).To(Equal("VULNERABILITY"))
 	})
 
 	It("reports a GraphQL error when a relevance search has no term", func() {

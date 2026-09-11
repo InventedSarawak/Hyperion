@@ -24,7 +24,7 @@ func NewSearchVulnerabilities(intelligence ports.IntelligenceClient) *SearchVuln
 // Handle runs the search. An empty term is accepted only when sorting by
 // newest — "the latest findings" — because under relevance every record would
 // score the same and the result would be an arbitrary slice.
-func (q *SearchVulnerabilities) Handle(ctx context.Context, term string, sort model.SearchSort, pageSize int, pageToken string) (model.SearchResult, error) {
+func (q *SearchVulnerabilities) Handle(ctx context.Context, term string, sort model.SearchSort, kinds []model.FindingKind, pageSize int, pageToken string) (model.SearchResult, error) {
 	term = strings.TrimSpace(term)
 	if sort != model.SortNewest {
 		sort = model.SortRelevance
@@ -33,7 +33,7 @@ func (q *SearchVulnerabilities) Handle(ctx context.Context, term string, sort mo
 		return model.SearchResult{}, fmt.Errorf("search: term must not be empty when sorting by relevance")
 	}
 
-	result, err := q.intelligence.Search(ctx, term, sort, pageSize, pageToken)
+	result, err := q.intelligence.Search(ctx, term, sort, kinds, pageSize, pageToken)
 	if err != nil {
 		return model.SearchResult{}, fmt.Errorf("search %q: %w", term, err)
 	}

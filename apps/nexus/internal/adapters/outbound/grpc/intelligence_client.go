@@ -47,7 +47,7 @@ func Dial(addr string) (*Client, error) {
 func (c *Client) Close() error { return c.conn.Close() }
 
 // Search calls cortex and maps the response back into nexus view models.
-func (c *Client) Search(ctx context.Context, query string, sort model.SearchSort, pageSize int, pageToken string) (model.SearchResult, error) {
+func (c *Client) Search(ctx context.Context, query string, sort model.SearchSort, kinds []model.FindingKind, pageSize int, pageToken string) (model.SearchResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timout)
 	defer cancel()
 
@@ -57,6 +57,7 @@ func (c *Client) Search(ctx context.Context, query string, sort model.SearchSort
 	}
 	resp, err := c.stub.Search(ctx, &intelv1.SearchRequest{
 		Sort:      wireSort,
+		Kinds:     wireKinds(kinds),
 		Query:     query,
 		PageSize:  int32(pageSize),
 		PageToken: pageToken,
@@ -80,11 +81,34 @@ func (c *Client) Search(ctx context.Context, query string, sort model.SearchSort
 	}, nil
 }
 
+// wireKinds maps the kinds a search asks for onto the wire enum.
+func wireKinds(kinds []model.FindingKind) []commonv1.FindingKind {
+	out := make([]commonv1.FindingKind, 0, len(kinds))
+	for _, k := range kinds {
+		switch k {
+		case model.KindMalware:
+			out = append(out, commonv1.FindingKind_FINDING_KIND_MALWARE)
+		case model.KindVulnerability:
+			out = append(out, commonv1.FindingKind_FINDING_KIND_VULNERABILITY)
+		}
+	}
+	return out
+}
+
 // --- mapping: wire contract -> nexus view model ---
+
+func fromWireKind(k commonv1.FindingKind) model.FindingKind {
+	if k == commonv1.FindingKind_FINDING_KIND_MALWARE {
+		return model.KindMalware
+	}
+	return model.KindVulnerability
+}
 
 func toViewModel(v *commonv1.Vulnerability) model.Vulnerability {
 	return model.Vulnerability{
 		CVEID:       v.GetCveId(),
+		Aliases:     v.GetAliases(),
+		Kind:        fromWireKind(v.GetKind()),
 		Title:       v.GetTitle(),
 		Description: v.GetDescription(),
 		Scores:      toViewScores(v.GetScores()),

@@ -15,7 +15,7 @@ import (
 
 // Searcher is the use case this adapter drives (consumer-side interface).
 type Searcher interface {
-	Handle(ctx context.Context, term string, sort model.SearchSort, pageSize int, pageToken string) (model.SearchResult, error)
+	Handle(ctx context.Context, term string, sort model.SearchSort, kinds []model.FindingKind, pageSize int, pageToken string) (model.SearchResult, error)
 }
 
 // BlastRadiusResolver answers which repositories a vulnerability reaches.
@@ -90,8 +90,13 @@ var vulnerabilityType = graphql.NewObject(graphql.ObjectConfig{
 	Fields: graphql.Fields{
 		"cveId": &graphql.Field{
 			Type:        graphql.NewNonNull(graphql.String),
-			Description: "the CVE id, or the GHSA id for an advisory with no CVE",
+			Description: "the canonical id: the CVE, else the GHSA, else the MAL, else whatever id the finding has",
 		},
+		"aliases": &graphql.Field{
+			Type:        graphql.NewList(graphql.String),
+			Description: "the finding's other ids (GHSA, MAL, PYSEC, GO, …); any of them finds it",
+		},
+		"kind":        &graphql.Field{Type: findingKindEnum},
 		"title":       &graphql.Field{Type: graphql.String},
 		"description": &graphql.Field{Type: graphql.String},
 		"scores":      &graphql.Field{Type: graphql.NewList(cvssType)},
@@ -150,6 +155,20 @@ var searchHitType = graphql.NewObject(graphql.ObjectConfig{
 })
 
 // searchSortEnum orders search results.
+var findingKindEnum = graphql.NewEnum(graphql.EnumConfig{
+	Name: "FindingKind",
+	Values: graphql.EnumValueConfigMap{
+		"VULNERABILITY": &graphql.EnumValueConfig{
+			Value:       string(model.KindVulnerability),
+			Description: "A flaw in legitimate software: fixed by upgrading.",
+		},
+		"MALWARE": &graphql.EnumValueConfig{
+			Value:       string(model.KindMalware),
+			Description: "A package published to do harm: removed, and the machine that installed it treated as compromised.",
+		},
+	},
+})
+
 var searchSortEnum = graphql.NewEnum(graphql.EnumConfig{
 	Name: "SearchSort",
 	Values: graphql.EnumValueConfigMap{
@@ -245,8 +264,12 @@ func NewSchema(searcher Searcher, blast BlastRadiusResolver, opts ...Option) (gr
 					// Optional: an empty term with sort NEWEST is the live feed.
 					// Relaxing non-null to nullable does not break existing
 					// clients, which always sent a term.
-					"term":      &graphql.ArgumentConfig{Type: graphql.String},
-					"sort":      &graphql.ArgumentConfig{Type: searchSortEnum, DefaultValue: string(model.SortRelevance)},
+					"term": &graphql.ArgumentConfig{Type: graphql.String},
+					"sort": &graphql.ArgumentConfig{Type: searchSortEnum, DefaultValue: string(model.SortRelevance)},
+					"kinds": &graphql.ArgumentConfig{
+						Type:        graphql.NewList(graphql.NewNonNull(findingKindEnum)),
+						Description: "Only these kinds of finding; omitted means every kind. A term that is exactly a finding's id finds it regardless.",
+					},
 					"pageSize":  &graphql.ArgumentConfig{Type: graphql.Int},
 					"pageToken": &graphql.ArgumentConfig{Type: graphql.String},
 				},
@@ -255,8 +278,16 @@ func NewSchema(searcher Searcher, blast BlastRadiusResolver, opts ...Option) (gr
 					sort, _ := p.Args["sort"].(string)
 					pageSize, _ := p.Args["pageSize"].(int)
 					pageToken, _ := p.Args["pageToken"].(string)
+					var kinds []model.FindingKind
+					if list, ok := p.Args["kinds"].([]any); ok {
+						for _, k := range list {
+							if name, ok := k.(string); ok {
+								kinds = append(kinds, model.FindingKind(name))
+							}
+						}
+					}
 
-					result, err := searcher.Handle(p.Context, term, model.SearchSort(sort), pageSize, pageToken)
+					result, err := searcher.Handle(p.Context, term, model.SearchSort(sort), kinds, pageSize, pageToken)
 					if err != nil {
 						return nil, err
 					}
@@ -440,6 +471,8 @@ func vulnerabilityMap(v model.Vulnerability) map[string]any {
 	}
 	out := map[string]any{
 		"cveId":            v.CVEID,
+		"aliases":          v.Aliases,
+		"kind":             string(kindOrDefault(v.Kind)),
 		"title":            v.Title,
 		"description":      v.Description,
 		"scores":           scores,
@@ -454,6 +487,14 @@ func vulnerabilityMap(v model.Vulnerability) map[string]any {
 		out["modifiedAt"] = formatTime(v.ModifiedAt)
 	}
 	return out
+}
+
+// kindOrDefault reads an unset kind as an ordinary vulnerability.
+func kindOrDefault(k model.FindingKind) model.FindingKind {
+	if k == "" {
+		return model.KindVulnerability
+	}
+	return k
 }
 
 // formatTime renders a timestamp as RFC 3339 UTC, and a zero one as null.
