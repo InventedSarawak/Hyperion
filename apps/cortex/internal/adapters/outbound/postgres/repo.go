@@ -112,7 +112,7 @@ func (r *Repo) Upsert(ctx context.Context, v model.Vulnerability, replaces ...st
 	case err == nil:
 		return fmt.Errorf("postgres: upsert %s: %s: %w", v.CVEID, taken, ports.ErrConflict)
 	case !errors.Is(err, pgx.ErrNoRows):
-		return fmt.Errorf("postgres: upsert %s: check ids: %w", v.CVEID, err)
+		return fmt.Errorf("postgres: upsert %s: check ids: %w", v.CVEID, asConflict(err))
 	}
 
 	// The finding was first seen when its earliest key was.
@@ -121,18 +121,18 @@ func (r *Repo) Upsert(ctx context.Context, v model.Vulnerability, replaces ...st
 		if err := tx.QueryRow(ctx,
 			`SELECT min(first_seen_at) FROM vulnerabilities WHERE cve_id = ANY($1::text[]);`, retired,
 		).Scan(&firstSeen); err != nil {
-			return fmt.Errorf("postgres: upsert %s: read retired keys: %w", v.CVEID, err)
+			return fmt.Errorf("postgres: upsert %s: read retired keys: %w", v.CVEID, asConflict(err))
 		}
 		// Alerts point at a finding by id; keep them pointing at it.
 		if _, err := tx.Exec(ctx,
 			`UPDATE alerts SET cve_id = $1 WHERE cve_id = ANY($2::text[]);`, v.CVEID, retired,
 		); err != nil {
-			return fmt.Errorf("postgres: upsert %s: move alerts: %w", v.CVEID, err)
+			return fmt.Errorf("postgres: upsert %s: move alerts: %w", v.CVEID, asConflict(err))
 		}
 		if _, err := tx.Exec(ctx,
 			`DELETE FROM vulnerabilities WHERE cve_id = ANY($1::text[]);`, retired,
 		); err != nil {
-			return fmt.Errorf("postgres: upsert %s: retire old keys: %w", v.CVEID, err)
+			return fmt.Errorf("postgres: upsert %s: retire old keys: %w", v.CVEID, asConflict(err))
 		}
 	}
 
@@ -141,11 +141,11 @@ func (r *Repo) Upsert(ctx context.Context, v model.Vulnerability, replaces ...st
 		string(scores), string(refs), string(sources), string(packages),
 		nullableTime(v.PublishedAt), nullableTime(v.ModifiedAt), firstSeen,
 	); err != nil {
-		return fmt.Errorf("postgres: upsert %s: %w", v.CVEID, err)
+		return fmt.Errorf("postgres: upsert %s: %w", v.CVEID, asConflict(err))
 	}
 
 	if _, err := tx.Exec(ctx, `DELETE FROM finding_aliases WHERE cve_id = $1;`, v.CVEID); err != nil {
-		return fmt.Errorf("postgres: upsert %s: clear aliases: %w", v.CVEID, err)
+		return fmt.Errorf("postgres: upsert %s: clear aliases: %w", v.CVEID, asConflict(err))
 	}
 	if len(aliases) > 0 {
 		if _, err := tx.Exec(ctx,
@@ -161,12 +161,18 @@ func (r *Repo) Upsert(ctx context.Context, v model.Vulnerability, replaces ...st
 	return nil
 }
 
-// asConflict reports a unique violation — two writers claiming one id at the
-// same moment, past the check above — as the domain's conflict.
+// asConflict reports a lost race as the domain's conflict, which the caller
+// answers by reading again and merging: a unique violation (two writers
+// claiming one id at the same moment, past the check above), a deadlock
+// (Postgres aborts one of two writers waiting on each other's rows), or a
+// serialization failure. Anything else is a real failure and stays one.
 func asConflict(err error) error {
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-		return ports.ErrConflict
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23505", "40P01", "40001":
+			return fmt.Errorf("%w (%s)", ports.ErrConflict, pgErr.Message)
+		}
 	}
 	return err
 }

@@ -173,7 +173,7 @@ source is broken. Publishes nothing.
 **merges** the new observation into it, writes Postgres, re-indexes it in Elasticsearch,
 links it to its packages in Neo4j, and matches it against alert rules. Records are
 ingested on `CORTEX_INGEST_WORKERS` (default 8) parallel workers, sharded by id so one
-record's observations are always merged in order.
+record's observations are always merged in order. A write that loses a race — another worker filing the same finding under a different id, a deadlock, a serialization failure — is re-read and merged again, up to three attempts.
 
 **Merge rules** (how two feeds' views of one finding combine):
 
