@@ -36,6 +36,8 @@ func (g *recordingGraph) FindBlastRadius(_ context.Context, cveID string, depth,
 
 func (g *recordingGraph) Ready(context.Context) error { return nil }
 
+func (g *recordingGraph) RemoveRepository(context.Context, string) error { return nil }
+
 var _ = Describe("CalculateBlastRadius use case", func() {
 	ctx := context.Background()
 

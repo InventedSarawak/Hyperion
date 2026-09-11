@@ -33,6 +33,9 @@ type Config struct {
 	GRPCAddr         string
 	ServeGRPC        bool
 	ConsumeStdin     bool
+	// IngestWorkers is how many events are ingested concurrently. Each is
+	// I/O-bound, so this is what sets backfill throughput.
+	IngestWorkers int
 
 	Neo4jURI            string
 	Neo4jUsername       string
@@ -43,6 +46,12 @@ type Config struct {
 	RedisAddr         string
 	SubscriptionIndex string
 	AlertDedupeWindow time.Duration
+
+	// GitHubBaseURL and GitHubToken drive repository discovery for the
+	// watchlist. The token is optional but the anonymous budget (60/hour)
+	// runs out after a few lookups.
+	GitHubBaseURL string
+	GitHubToken   string
 
 	loader *config.Loader
 }
@@ -66,6 +75,7 @@ func Load() Config {
 		GRPCAddr:         l.String("GRPC_ADDR", DefaultGRPCAddr),
 		ServeGRPC:        l.Bool("SERVE_GRPC", true),
 		ConsumeStdin:     l.Bool("CONSUME_STDIN", false),
+		IngestWorkers:    l.Int("INGEST_WORKERS", 8),
 
 		Neo4jURI:      l.String("NEO4J_URI", DefaultNeo4jURI),
 		Neo4jUsername: l.String("NEO4J_USERNAME", DefaultNeo4jUsername),
@@ -82,6 +92,9 @@ func Load() Config {
 		// an hour is long enough to stop the repeats without hiding a genuinely
 		// new finding.
 		AlertDedupeWindow: l.Duration("ALERT_DEDUPE_WINDOW", time.Hour),
+
+		GitHubBaseURL: l.String("GITHUB_BASE_URL", "https://api.github.com"),
+		GitHubToken:   l.Secret("GITHUB_TOKEN"),
 	}
 }
 

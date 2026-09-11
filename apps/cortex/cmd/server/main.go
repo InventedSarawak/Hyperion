@@ -19,10 +19,12 @@ import (
 
 	alertingv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/alerting/v1"
 	intelv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/intelligence/v1"
+	watchlistv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/watchlist/v1"
 
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/inbound/consumer"
 	grpcadapter "github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/inbound/grpc"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/elasticsearch"
+	githubadapter "github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/github"
 	graphadapter "github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/neo4j"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/noopdedupe"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/noopgraph"
@@ -88,6 +90,11 @@ func main() {
 		}
 	}
 
+	// The watchlist: which repositories blast radius can reach.
+	manageWatchlist := commands.NewManageWatchlist(postgres.NewWatchlist(pool), graph)
+	listWatchlist := queries.NewListWatchlist(postgres.NewWatchlist(pool),
+		githubadapter.New(nil, cfg.GitHubBaseURL, cfg.GitHubToken))
+
 	ingest := commands.NewIngestSignal(repo, index, graph, match)
 	ingestDeps := commands.NewIngestDependency(graph)
 	search := queries.NewSearch(index)
@@ -99,7 +106,7 @@ func main() {
 	}
 
 	if cfg.ConsumeStdin {
-		runStdinConsumer(ctx, logger, ingest, repo)
+		runStdinConsumer(ctx, logger, ingest, repo, cfg.IngestWorkers)
 		return
 	}
 
@@ -107,7 +114,8 @@ func main() {
 		logger.Error("nothing to do: enable CORTEX_SERVE_GRPC or CORTEX_CONSUME_STDIN")
 		os.Exit(1)
 	}
-	serveGRPC(ctx, logger, cfg, search, ingestDeps, blast, manageSubs, listAlerting, repo)
+	serveGRPC(ctx, logger, cfg, search, ingestDeps, blast, manageSubs, listAlerting, repo,
+		grpcadapter.NewWatchlistServer(manageWatchlist, listWatchlist))
 }
 
 // buildDependencyGraph returns the Neo4j adapter when the server answers,
@@ -151,10 +159,10 @@ func buildSearchIndex(ctx context.Context, logger *slog.Logger, cfg config.Confi
 }
 
 // runStdinConsumer ingests protojson events piped in on stdin, then exits.
-func runStdinConsumer(ctx context.Context, logger *slog.Logger, ingest *commands.IngestSignal, repo *postgres.Repo) {
-	logger.Info("cortex ingesting SignalDiscovered events from stdin")
+func runStdinConsumer(ctx context.Context, logger *slog.Logger, ingest *commands.IngestSignal, repo *postgres.Repo, workers int) {
+	logger.Info("cortex ingesting SignalDiscovered events from stdin", "workers", workers)
 
-	n, err := consumer.NewConsumer(ingest).Run(ctx, os.Stdin)
+	n, err := consumer.NewConsumer(ingest, consumer.WithWorkers(workers)).Run(ctx, os.Stdin)
 	if err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("consumer error", "error", err)
 		os.Exit(1)
@@ -175,6 +183,7 @@ func serveGRPC(
 	manageSubs *commands.ManageSubscriptions,
 	listAlerting *queries.ListAlerting,
 	vulns *postgres.Repo,
+	watchlist *grpcadapter.WatchlistServer,
 ) {
 	listener, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
@@ -183,7 +192,8 @@ func serveGRPC(
 	}
 
 	server := grpc.NewServer()
-	intelv1.RegisterIntelligenceServiceServer(server, grpcadapter.NewServer(search, ingestDeps, blast))
+	intelv1.RegisterIntelligenceServiceServer(server, grpcadapter.NewServer(search, ingestDeps, blast, vulns))
+	watchlistv1.RegisterWatchlistServiceServer(server, watchlist)
 	alertingv1.RegisterAlertingServiceServer(server,
 		grpcadapter.NewAlertingServer(manageSubs, listAlerting, vulns))
 	reflection.Register(server) // enables grpcurl / grpc_cli exploration

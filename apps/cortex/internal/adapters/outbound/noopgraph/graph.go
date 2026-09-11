@@ -38,3 +38,6 @@ func (g *Graph) FindBlastRadius(context.Context, string, int, int) (model.BlastR
 
 // Ready reports that no backend is configured.
 func (g *Graph) Ready(context.Context) error { return ports.ErrGraphUnavailable }
+
+// RemoveRepository reports that there is no graph to remove from.
+func (g *Graph) RemoveRepository(context.Context, string) error { return ports.ErrGraphUnavailable }

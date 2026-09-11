@@ -320,3 +320,43 @@ func (g *Graph) LinkVulnerability(ctx context.Context, cveID string, packages []
 	}
 	return nil
 }
+
+// removeRepositoryCypher deletes a repository with every edge it owns — its
+// DEPENDS_ON, PUBLISHES and MAINTAINS relationships — and then its author, if
+// that author maintains nothing else. Libraries are left alone: advisories and
+// other repositories point at them. So are library-to-library edges learned
+// from this repository's manifest; "ajv depends on fast-uri" stays true
+// whether or not anyone tracks ajv, and dropping it would shorten every other
+// repository's transitive blast radius.
+//
+// Matching ignores case because GitHub does: "Vercel/Next.js" and
+// "vercel/next.js" are one repository.
+const removeRepositoryCypher = `
+MATCH (r:Repository)
+WHERE toLower(r.full_name) = toLower($full_name)
+OPTIONAL MATCH (a:Author)-[:MAINTAINS]->(r)
+DETACH DELETE r
+WITH DISTINCT a
+WHERE a IS NOT NULL AND NOT (a)-[:MAINTAINS]->()
+DELETE a`
+
+// RemoveRepository deletes a repository from the graph. Removing one that is
+// not there is not an error: a repository can be untracked before its first
+// scan ever wrote it.
+func (g *Graph) RemoveRepository(ctx context.Context, fullName string) error {
+	session := g.session(ctx, driver.AccessModeWrite)
+	defer session.Close(ctx)
+
+	_, err := session.ExecuteWrite(ctx, func(tx driver.ManagedTransaction) (any, error) {
+		result, err := tx.Run(ctx, removeRepositoryCypher, map[string]any{"full_name": fullName})
+		if err != nil {
+			return nil, err
+		}
+		_, err = result.Consume(ctx)
+		return nil, err
+	})
+	if err != nil {
+		return fmt.Errorf("neo4j: remove repository %s: %w", fullName, err)
+	}
+	return nil
+}

@@ -5,6 +5,7 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -16,6 +17,8 @@ import (
 
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/application/queries"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/model"
+	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/ports"
+	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/valueobject"
 )
 
 // Searcher is the use case this adapter drives (consumer-side interface).
@@ -33,19 +36,41 @@ type BlastRadiusCalculator interface {
 	Handle(ctx context.Context, cveID string, maxDepth, limit int) (model.BlastRadius, error)
 }
 
+// VulnerabilityReader loads one finding from the store of record.
+type VulnerabilityReader interface {
+	GetByCVE(ctx context.Context, cveID string) (model.Vulnerability, error)
+}
+
 // Server implements intelv1.IntelligenceServiceServer.
 type Server struct {
 	intelv1.UnimplementedIntelligenceServiceServer
 	search Searcher
 	deps   DependencyIngester
 	blast  BlastRadiusCalculator
+	vulns  VulnerabilityReader
 }
 
 // NewServer wires the gRPC adapter to cortex's use cases. The graph use cases
 // may be nil when no graph backend is configured; the RPCs that need them then
 // report Unavailable rather than answering wrongly.
-func NewServer(search Searcher, deps DependencyIngester, blast BlastRadiusCalculator) *Server {
-	return &Server{search: search, deps: deps, blast: blast}
+func NewServer(search Searcher, deps DependencyIngester, blast BlastRadiusCalculator, vulns VulnerabilityReader) *Server {
+	return &Server{search: search, deps: deps, blast: blast, vulns: vulns}
+}
+
+// GetVulnerability returns one finding in full.
+func (s *Server) GetVulnerability(ctx context.Context, req *intelv1.GetVulnerabilityRequest) (*intelv1.GetVulnerabilityResponse, error) {
+	id := valueobject.NormalizeCVEID(req.GetCveId())
+	if id == "" {
+		return nil, status.Error(codes.InvalidArgument, "get vulnerability: id must not be empty")
+	}
+	v, err := s.vulns.GetByCVE(ctx, id)
+	switch {
+	case errors.Is(err, ports.ErrNotFound):
+		return nil, status.Errorf(codes.NotFound, "no finding %s", id)
+	case err != nil:
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &intelv1.GetVulnerabilityResponse{Vulnerability: toProtoVulnerability(v)}, nil
 }
 
 // Search handles the RPC: proto request -> use case -> proto response.
@@ -91,6 +116,10 @@ func toProtoVulnerability(v model.Vulnerability) *commonv1.Vulnerability {
 		References:  v.References,
 		PublishedAt: toTimestamp(v.PublishedAt),
 		ModifiedAt:  toTimestamp(v.ModifiedAt),
+		// These never reached the wire before, so no client could say which
+		// libraries a finding affects or which feeds reported it.
+		AffectedPackages: toProtoPackageRefs(v.AffectedPackages),
+		Sources:          v.Sources,
 	}
 }
 

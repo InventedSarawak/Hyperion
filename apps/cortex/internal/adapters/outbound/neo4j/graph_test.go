@@ -400,6 +400,40 @@ var _ = Describe("Neo4j DependencyGraph (integration)", func() {
 			Expect(radius.Linked()).To(BeFalse())
 		})
 	})
+
+	Describe("removing a repository", func() {
+		It("removes it and its edges, keeps shared libraries, and drops an orphaned author", func() {
+			_, err := graph.UpsertRepositorySnapshot(ctx, snapshot("api", lib("net", "v0.17.0", true)))
+			Expect(err).ToNot(HaveOccurred())
+			_, err = graph.UpsertRepositorySnapshot(ctx, snapshot("web", lib("net", "v0.17.0", true)))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(graph.LinkVulnerability(ctx, cveID, []valueobject.PackageRef{libRef("net")})).To(Succeed())
+
+			// Case-insensitive, like GitHub.
+			Expect(graph.RemoveRepository(ctx, strings.ToUpper(prefix)+"/API")).To(Succeed())
+
+			radius, err := graph.FindBlastRadius(ctx, cveID, 3, 100)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(radius.Linked()).To(BeTrue(), "the library and its advisory link survive")
+			Expect(radius.Repositories).To(HaveLen(1))
+			Expect(radius.Repositories[0].Repository.Name).To(Equal("web"))
+
+			// The author still maintains web, so stays; once web goes too, so does the author.
+			Expect(graph.RemoveRepository(ctx, prefix+"/web")).To(Succeed())
+			session := driver.NewSession(ctx, sdk.SessionConfig{DatabaseName: databaseName()})
+			defer session.Close(ctx)
+			result, err := session.Run(ctx, "MATCH (a:Author {login: $login}) RETURN count(a) AS n", map[string]any{"login": prefix})
+			Expect(err).ToNot(HaveOccurred())
+			record, err := result.Single(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			n, _ := record.Get("n")
+			Expect(n).To(BeEquivalentTo(0))
+		})
+
+		It("treats removing a repository that was never written as done", func() {
+			Expect(graph.RemoveRepository(ctx, prefix+"/never-scanned")).To(Succeed())
+		})
+	})
 })
 
 func envOr(key, fallback string) string {

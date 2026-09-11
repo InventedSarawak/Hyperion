@@ -75,7 +75,7 @@ var _ = Describe("gRPC IngestDependencies", func() {
 	It("maps the wire request onto a domain snapshot", func() {
 		stub := &stubIngester{written: 1}
 
-		resp, err := grpcadapter.NewServer(nil, stub, nil).IngestDependencies(ctx, request())
+		resp, err := grpcadapter.NewServer(nil, stub, nil, nil).IngestDependencies(ctx, request())
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(resp.GetDependenciesWritten()).To(Equal(int32(1)))
@@ -95,7 +95,7 @@ var _ = Describe("gRPC IngestDependencies", func() {
 		req := request()
 		req.Author, req.Publishes, req.ObservedAt = nil, nil, nil
 
-		_, err := grpcadapter.NewServer(nil, stub, nil).IngestDependencies(ctx, req)
+		_, err := grpcadapter.NewServer(nil, stub, nil, nil).IngestDependencies(ctx, req)
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(stub.got.Author.IsZero()).To(BeTrue())
@@ -104,31 +104,31 @@ var _ = Describe("gRPC IngestDependencies", func() {
 	})
 
 	It("rejects a request with no repository", func() {
-		_, err := grpcadapter.NewServer(nil, &stubIngester{}, nil).
+		_, err := grpcadapter.NewServer(nil, &stubIngester{}, nil, nil).
 			IngestDependencies(ctx, &intelv1.IngestDependenciesRequest{})
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 	})
 
 	It("reports Unavailable when no graph is configured", func() {
-		_, err := grpcadapter.NewServer(nil, nil, nil).IngestDependencies(ctx, request())
+		_, err := grpcadapter.NewServer(nil, nil, nil, nil).IngestDependencies(ctx, request())
 		Expect(status.Code(err)).To(Equal(codes.Unavailable))
 	})
 
 	It("maps a missing graph backend to Unavailable, not Internal", func() {
 		stub := &stubIngester{err: ports.ErrGraphUnavailable}
-		_, err := grpcadapter.NewServer(nil, stub, nil).IngestDependencies(ctx, request())
+		_, err := grpcadapter.NewServer(nil, stub, nil, nil).IngestDependencies(ctx, request())
 		Expect(status.Code(err)).To(Equal(codes.Unavailable))
 	})
 
 	It("maps a domain validation failure to InvalidArgument", func() {
 		stub := &stubIngester{err: model.ErrMissingRepositoryIdentity}
-		_, err := grpcadapter.NewServer(nil, stub, nil).IngestDependencies(ctx, request())
+		_, err := grpcadapter.NewServer(nil, stub, nil, nil).IngestDependencies(ctx, request())
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 	})
 
 	It("maps an unexpected backend failure to Internal", func() {
 		stub := &stubIngester{err: errors.New("bolt: connection reset")}
-		_, err := grpcadapter.NewServer(nil, stub, nil).IngestDependencies(ctx, request())
+		_, err := grpcadapter.NewServer(nil, stub, nil, nil).IngestDependencies(ctx, request())
 		Expect(status.Code(err)).To(Equal(codes.Internal))
 	})
 })
@@ -150,7 +150,7 @@ var _ = Describe("gRPC GetBlastRadius", func() {
 			}},
 		}}
 
-		resp, err := grpcadapter.NewServer(nil, nil, stub).GetBlastRadius(ctx, &intelv1.GetBlastRadiusRequest{
+		resp, err := grpcadapter.NewServer(nil, nil, stub, nil).GetBlastRadius(ctx, &intelv1.GetBlastRadiusRequest{
 			CveId: "CVE-2021-44228", MaxDepth: 3, Limit: 50,
 		})
 
@@ -175,7 +175,7 @@ var _ = Describe("gRPC GetBlastRadius", func() {
 	It("returns an empty-but-successful response when nothing is exposed", func() {
 		stub := &stubBlast{result: model.BlastRadius{CVEID: "CVE-2021-44228"}}
 
-		resp, err := grpcadapter.NewServer(nil, nil, stub).GetBlastRadius(ctx, &intelv1.GetBlastRadiusRequest{
+		resp, err := grpcadapter.NewServer(nil, nil, stub, nil).GetBlastRadius(ctx, &intelv1.GetBlastRadiusRequest{
 			CveId: "CVE-2021-44228",
 		})
 
@@ -185,13 +185,13 @@ var _ = Describe("gRPC GetBlastRadius", func() {
 	})
 
 	It("rejects an empty CVE id", func() {
-		_, err := grpcadapter.NewServer(nil, nil, &stubBlast{}).
+		_, err := grpcadapter.NewServer(nil, nil, &stubBlast{}, nil).
 			GetBlastRadius(ctx, &intelv1.GetBlastRadiusRequest{CveId: "  "})
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 	})
 
 	It("reports Unavailable rather than an empty radius when no graph is configured", func() {
-		_, err := grpcadapter.NewServer(nil, nil, nil).
+		_, err := grpcadapter.NewServer(nil, nil, nil, nil).
 			GetBlastRadius(ctx, &intelv1.GetBlastRadiusRequest{CveId: "CVE-2021-44228"})
 		Expect(status.Code(err)).To(Equal(codes.Unavailable))
 	})

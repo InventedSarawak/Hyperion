@@ -46,6 +46,8 @@ func (m *memGraph) FindBlastRadius(context.Context, string, int, int) (model.Bla
 
 func (m *memGraph) Ready(context.Context) error { return nil }
 
+func (m *memGraph) RemoveRepository(context.Context, string) error { return nil }
+
 var _ = Describe("IngestDependency use case", func() {
 	ctx := context.Background()
 

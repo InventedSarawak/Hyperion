@@ -42,4 +42,6 @@ type DependencyGraph interface {
 
 	// Ready reports whether the backend is reachable and usable.
 	Ready(ctx context.Context) error
+
+	RepositoryRemover
 }
