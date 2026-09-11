@@ -186,3 +186,68 @@ var _ = Describe("Postgres affected packages (integration)", func() {
 		Expect(got.AffectedPackages).To(BeNil())
 	})
 })
+
+var _ = Describe("Postgres Repo scan (integration)", func() {
+	var (
+		ctx  = context.Background()
+		repo *postgres.Repo
+	)
+
+	BeforeEach(func() {
+		dsn := os.Getenv("CORTEX_TEST_DATABASE_URL")
+		if dsn == "" {
+			Skip("set CORTEX_TEST_DATABASE_URL to run Postgres integration tests")
+		}
+		schema := fmt.Sprintf("hyperion_scan_test_%d", time.Now().UnixNano())
+		admin, err := postgres.Connect(ctx, dsn)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = admin.Exec(ctx, "CREATE SCHEMA "+schema)
+		Expect(err).ToNot(HaveOccurred())
+		admin.Close()
+
+		pool, err := postgres.Connect(ctx, withSearchPath(dsn, schema))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(postgres.Migrate(ctx, pool)).To(Succeed())
+		DeferCleanup(func() {
+			pool.Close()
+			if cleanup, err := postgres.Connect(ctx, dsn); err == nil {
+				_, _ = cleanup.Exec(ctx, "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
+				cleanup.Close()
+			}
+		})
+		repo = postgres.NewRepo(pool)
+	})
+
+	It("walks every row once, in id order, across pages", func() {
+		for i := 0; i < 7; i++ {
+			Expect(repo.Upsert(ctx, model.Vulnerability{CVEID: fmt.Sprintf("CVE-2026-%04d", i)})).To(Succeed())
+		}
+
+		var seen []string
+		after := ""
+		for {
+			page, err := repo.Scan(ctx, after, 3)
+			Expect(err).ToNot(HaveOccurred())
+			if len(page) == 0 {
+				break
+			}
+			for _, v := range page {
+				seen = append(seen, v.CVEID)
+			}
+			after = page[len(page)-1].CVEID
+		}
+		Expect(seen).To(Equal([]string{"CVE-2026-0000", "CVE-2026-0001", "CVE-2026-0002",
+			"CVE-2026-0003", "CVE-2026-0004", "CVE-2026-0005", "CVE-2026-0006"}))
+	})
+
+	It("returns the full record, affected packages included", func() {
+		Expect(repo.Upsert(ctx, model.Vulnerability{CVEID: "CVE-1", Title: "flaw",
+			AffectedPackages: []valueobject.PackageRef{valueobject.NewPackageRef("npm", "next", "")}})).To(Succeed())
+
+		page, err := repo.Scan(ctx, "", 10)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(page).To(HaveLen(1))
+		Expect(page[0].Title).To(Equal("flaw"))
+		Expect(page[0].AffectedPackages[0].Key()).To(Equal("npm:next"))
+	})
+})

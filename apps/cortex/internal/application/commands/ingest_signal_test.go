@@ -3,6 +3,7 @@ package commands_test
 import (
 	"context"
 	"errors"
+	"sort"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -35,9 +36,30 @@ func (m *memRepo) GetByCVE(_ context.Context, cveID string) (model.Vulnerability
 
 func (m *memRepo) Count(_ context.Context) (int, error) { return len(m.store), nil }
 
+// Scan returns records in CVE-id order after afterCVE, like the real repo.
+func (m *memRepo) Scan(_ context.Context, afterCVE string, limit int) ([]model.Vulnerability, error) {
+	ids := make([]string, 0, len(m.store))
+	for id := range m.store {
+		if id > afterCVE {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	if len(ids) > limit {
+		ids = ids[:limit]
+	}
+	out := make([]model.Vulnerability, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, m.store[id])
+	}
+	return out, nil
+}
+
 // memIndex is an in-memory SearchIndex (outbound port) for tests.
 type memIndex struct {
 	indexed []model.Vulnerability
+	extra   []string
+	deleted []string
 }
 
 func (m *memIndex) Index(_ context.Context, v model.Vulnerability) error {
@@ -45,11 +67,26 @@ func (m *memIndex) Index(_ context.Context, v model.Vulnerability) error {
 	return nil
 }
 
-func (m *memIndex) Search(context.Context, string, int, int) ([]model.SearchHit, error) {
-	return nil, nil
+func (m *memIndex) Search(context.Context, model.SearchQuery) (model.SearchPage, error) {
+	return model.SearchPage{}, nil
 }
 
 func (m *memIndex) Ready(context.Context) error { return nil }
+
+// extra holds ids present in the index but never written by the code under
+// test — orphans, as far as a reindex is concerned.
+func (m *memIndex) IDs(context.Context) ([]string, error) {
+	ids := append([]string{}, m.extra...)
+	for _, v := range m.indexed {
+		ids = append(ids, v.CVEID)
+	}
+	return ids, nil
+}
+
+func (m *memIndex) Delete(_ context.Context, id string) error {
+	m.deleted = append(m.deleted, id)
+	return nil
+}
 
 var _ = Describe("IngestSignal use case", func() {
 	ctx := context.Background()

@@ -20,7 +20,7 @@ import (
 
 // Searcher is the use case this adapter drives (consumer-side interface).
 type Searcher interface {
-	Handle(ctx context.Context, query string, pageSize int, pageToken string) (queries.Result, error)
+	Handle(ctx context.Context, query string, sort model.SearchSort, pageSize int, pageToken string) (queries.Result, error)
 }
 
 // DependencyIngester records a repository's manifest in the dependency graph.
@@ -50,7 +50,8 @@ func NewServer(search Searcher, deps DependencyIngester, blast BlastRadiusCalcul
 
 // Search handles the RPC: proto request -> use case -> proto response.
 func (s *Server) Search(ctx context.Context, req *intelv1.SearchRequest) (*intelv1.SearchResponse, error) {
-	result, err := s.search.Handle(ctx, req.GetQuery(), int(req.GetPageSize()), req.GetPageToken())
+	result, err := s.search.Handle(ctx, req.GetQuery(), fromProtoSort(req.GetSort()),
+		int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -64,9 +65,19 @@ func (s *Server) Search(ctx context.Context, req *intelv1.SearchRequest) (*intel
 	}
 
 	return &intelv1.SearchResponse{
-		Results:       results,
-		NextPageToken: result.NextPageToken,
+		Results:           results,
+		NextPageToken:     result.NextPageToken,
+		TotalResults:      result.Total,
+		TotalIsLowerBound: result.TotalIsLowerBound,
 	}, nil
+}
+
+// fromProtoSort maps the wire enum; unspecified means relevance.
+func fromProtoSort(s intelv1.SearchSort) model.SearchSort {
+	if s == intelv1.SearchSort_SEARCH_SORT_NEWEST {
+		return model.SortNewest
+	}
+	return model.SortRelevance
 }
 
 // --- mapping: cortex domain -> wire contract ---

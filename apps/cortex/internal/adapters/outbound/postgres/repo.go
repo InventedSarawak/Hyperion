@@ -94,18 +94,26 @@ func (r *Repo) GetByCVE(ctx context.Context, cveID string) (model.Vulnerability,
 		return model.Vulnerability{}, fmt.Errorf("postgres: get %s: %w", cveID, err)
 	}
 
+	if err := decodeVulnerability(&v, scores, refs, srcs, pkgs, published, modified); err != nil {
+		return model.Vulnerability{}, err
+	}
+	return v, nil
+}
+
+// decodeVulnerability fills the JSON and nullable columns of a row into v.
+func decodeVulnerability(v *model.Vulnerability, scores, refs, srcs, pkgs []byte, published, modified *time.Time) error {
 	if err := json.Unmarshal(scores, &v.Scores); err != nil {
-		return model.Vulnerability{}, fmt.Errorf("postgres: unmarshal scores: %w", err)
+		return fmt.Errorf("postgres: unmarshal scores: %w", err)
 	}
 	if err := json.Unmarshal(refs, &v.References); err != nil {
-		return model.Vulnerability{}, fmt.Errorf("postgres: unmarshal references: %w", err)
+		return fmt.Errorf("postgres: unmarshal references: %w", err)
 	}
 	if err := json.Unmarshal(srcs, &v.Sources); err != nil {
-		return model.Vulnerability{}, fmt.Errorf("postgres: unmarshal sources: %w", err)
+		return fmt.Errorf("postgres: unmarshal sources: %w", err)
 	}
 	var stored []storedPackage
 	if err := json.Unmarshal(pkgs, &stored); err != nil {
-		return model.Vulnerability{}, fmt.Errorf("postgres: unmarshal affected packages: %w", err)
+		return fmt.Errorf("postgres: unmarshal affected packages: %w", err)
 	}
 	v.AffectedPackages = fromStoredPackages(stored)
 	if published != nil {
@@ -114,7 +122,44 @@ func (r *Repo) GetByCVE(ctx context.Context, cveID string) (model.Vulnerability,
 	if modified != nil {
 		v.ModifiedAt = *modified
 	}
-	return v, nil
+	return nil
+}
+
+const scanSQL = `
+SELECT cve_id, title, description, scores, reference_urls, sources, affected_packages, published_at, modified_at
+FROM vulnerabilities
+WHERE cve_id > $1
+ORDER BY cve_id
+LIMIT $2;`
+
+// Scan walks the table in CVE-id order, one page at a time.
+func (r *Repo) Scan(ctx context.Context, afterCVE string, limit int) ([]model.Vulnerability, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := r.pool.Query(ctx, scanSQL, afterCVE, limit)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: scan: %w", err)
+	}
+	defer rows.Close()
+
+	var out []model.Vulnerability
+	for rows.Next() {
+		var (
+			v                        model.Vulnerability
+			scores, refs, srcs, pkgs []byte
+			published, modified      *time.Time
+		)
+		if err := rows.Scan(&v.CVEID, &v.Title, &v.Description, &scores, &refs, &srcs, &pkgs,
+			&published, &modified); err != nil {
+			return nil, fmt.Errorf("postgres: scan row: %w", err)
+		}
+		if err := decodeVulnerability(&v, scores, refs, srcs, pkgs, published, modified); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }
 
 // Count returns the number of stored vulnerabilities.

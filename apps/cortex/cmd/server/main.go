@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"log/slog"
 	"net"
 	"os"
@@ -35,6 +36,10 @@ import (
 )
 
 func main() {
+	reindex := flag.Bool("reindex", false,
+		"rebuild the search index from Postgres, then exit (after a mapping change, or to repair drift)")
+	flag.Parse()
+
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
 
@@ -87,6 +92,11 @@ func main() {
 	ingestDeps := commands.NewIngestDependency(graph)
 	search := queries.NewSearch(index)
 	blast := queries.NewCalculateBlastRadius(graph, cfg.BlastRadiusMaxDepth)
+
+	if *reindex {
+		runReindex(ctx, logger, repo, index)
+		return
+	}
 
 	if cfg.ConsumeStdin {
 		runStdinConsumer(ctx, logger, ingest, repo)
@@ -218,4 +228,20 @@ func buildDedupeStore(ctx context.Context, logger *slog.Logger, cfg config.Confi
 	}
 	logger.Info("redis ready", "addr", cfg.RedisAddr)
 	return store, func() { _ = store.Close() }
+}
+
+// runReindex rebuilds the search index from Postgres and exits non-zero on
+// failure, so it is usable from a script.
+func runReindex(ctx context.Context, logger *slog.Logger, repo *postgres.Repo, index ports.SearchIndex) {
+	if _, disabled := index.(*noopindex.Index); disabled {
+		logger.Error("reindex needs Elasticsearch, and it is unreachable")
+		os.Exit(1)
+	}
+	logger.Info("rebuilding the search index from Postgres")
+	report, err := commands.NewReindexSearch(repo, index).Run(ctx)
+	if err != nil {
+		logger.Error("reindex failed", "written", report.Written, "removed", report.Removed, "error", err)
+		os.Exit(1)
+	}
+	logger.Info("reindex complete", "written", report.Written, "removed", report.Removed)
 }

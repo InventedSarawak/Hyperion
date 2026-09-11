@@ -65,7 +65,8 @@ var _ = Describe("Elasticsearch Index (integration)", func() {
 		})).To(Succeed())
 		refresh()
 
-		hits, err := index.Search(ctx, "log4j", 10, 0)
+		page, err := index.Search(ctx, model.SearchQuery{Text: "log4j", Sort: model.SortRelevance, Size: 10})
+		hits := page.Hits
 		Expect(err).ToNot(HaveOccurred())
 		Expect(hits).ToNot(BeEmpty())
 		Expect(hits[0].Vulnerability.CVEID).To(Equal("CVE-2021-44228"))
@@ -81,7 +82,8 @@ var _ = Describe("Elasticsearch Index (integration)", func() {
 		})).To(Succeed())
 		refresh()
 
-		hits, err := index.Search(ctx, "CVE-2023-12345", 10, 0)
+		page, err := index.Search(ctx, model.SearchQuery{Text: "CVE-2023-12345", Sort: model.SortRelevance, Size: 10})
+		hits := page.Hits
 		Expect(err).ToNot(HaveOccurred())
 		Expect(hits).ToNot(BeEmpty())
 		Expect(hits[0].Vulnerability.CVEID).To(Equal("CVE-2023-12345"))
@@ -89,7 +91,8 @@ var _ = Describe("Elasticsearch Index (integration)", func() {
 
 	It("returns no hits for a query that matches nothing", func() {
 		refresh()
-		hits, err := index.Search(ctx, "zzzznomatchzzzz", 10, 0)
+		page, err := index.Search(ctx, model.SearchQuery{Text: "zzzznomatchzzzz", Sort: model.SortRelevance, Size: 10})
+		hits := page.Hits
 		Expect(err).ToNot(HaveOccurred())
 		Expect(hits).To(BeEmpty())
 	})
@@ -101,7 +104,8 @@ var _ = Describe("Elasticsearch Index (integration)", func() {
 		Expect(index.Index(ctx, v)).To(Succeed())
 		refresh()
 
-		hits, err := index.Search(ctx, "CVE-DUP-1", 10, 0)
+		page, err := index.Search(ctx, model.SearchQuery{Text: "CVE-DUP-1", Sort: model.SortRelevance, Size: 10})
+		hits := page.Hits
 		Expect(err).ToNot(HaveOccurred())
 		Expect(hits).To(HaveLen(1))
 		Expect(hits[0].Vulnerability.Description).To(Equal("second version"))

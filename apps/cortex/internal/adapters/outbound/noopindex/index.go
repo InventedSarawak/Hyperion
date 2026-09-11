@@ -23,9 +23,15 @@ func New() *Index { return &Index{} }
 func (i *Index) Index(context.Context, model.Vulnerability) error { return nil }
 
 // Search always returns no hits.
-func (i *Index) Search(context.Context, string, int, int) ([]model.SearchHit, error) {
-	return nil, nil
+func (i *Index) Search(context.Context, model.SearchQuery) (model.SearchPage, error) {
+	return model.SearchPage{}, nil
 }
 
 // Ready always reports that no backend is configured.
 func (i *Index) Ready(context.Context) error { return ErrNoSearchBackend }
+
+// IDs reports an empty index.
+func (i *Index) IDs(context.Context) ([]string, error) { return nil, nil }
+
+// Delete does nothing.
+func (i *Index) Delete(context.Context, string) error { return nil }

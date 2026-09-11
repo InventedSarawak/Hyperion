@@ -21,14 +21,15 @@ import (
 // stubSearcher stands in for the search use case.
 type stubSearcher struct {
 	gotQuery string
+	gotSort  model.SearchSort
 	gotSize  int
 	gotToken string
 	result   queries.Result
 	err      error
 }
 
-func (s *stubSearcher) Handle(_ context.Context, q string, size int, token string) (queries.Result, error) {
-	s.gotQuery, s.gotSize, s.gotToken = q, size, token
+func (s *stubSearcher) Handle(_ context.Context, q string, sort model.SearchSort, size int, token string) (queries.Result, error) {
+	s.gotQuery, s.gotSort, s.gotSize, s.gotToken = q, sort, size, token
 	return s.result, s.err
 }
 
@@ -84,5 +85,29 @@ var _ = Describe("gRPC Server", func() {
 
 		Expect(err).To(HaveOccurred())
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+	})
+})
+
+var _ = Describe("gRPC Search sort and totals", func() {
+	ctx := context.Background()
+
+	It("maps NEWEST onto the domain sort, and returns the totals", func() {
+		stub := &stubSearcher{result: queries.Result{Total: 812, TotalIsLowerBound: false}}
+
+		resp, err := grpcadapter.NewServer(stub, nil, nil).Search(ctx, &intelv1.SearchRequest{
+			Sort: intelv1.SearchSort_SEARCH_SORT_NEWEST,
+		})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(stub.gotSort).To(Equal(model.SortNewest))
+		Expect(resp.GetTotalResults()).To(Equal(int64(812)))
+	})
+
+	It("treats an unspecified sort as relevance", func() {
+		stub := &stubSearcher{}
+		_, err := grpcadapter.NewServer(stub, nil, nil).Search(ctx, &intelv1.SearchRequest{Query: "log4j"})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(stub.gotSort).To(Equal(model.SortRelevance))
 	})
 })
