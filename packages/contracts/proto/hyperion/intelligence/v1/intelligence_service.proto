@@ -3,6 +3,7 @@ syntax = "proto3";
 package hyperion.intelligence.v1;
 
 import "google/protobuf/timestamp.proto";
+import "hyperion/common/v1/exposure.proto";
 import "hyperion/common/v1/package.proto";
 import "hyperion/common/v1/repository.proto";
 import "hyperion/common/v1/vulnerability.proto";
@@ -23,6 +24,10 @@ service IntelligenceService {
   // rather than the search index — the index drops detail it does not search
   // on, such as each affected package's version range.
   rpc GetVulnerability(GetVulnerabilityRequest) returns (GetVulnerabilityResponse);
+  // GetRepositoryExposure is blast radius the other way round: the findings a
+  // repository reaches through its dependencies, each judged by comparing the
+  // version it declares with the versions the advisory says are affected.
+  rpc GetRepositoryExposure(GetRepositoryExposureRequest) returns (GetRepositoryExposureResponse);
 }
 
 // SearchSort orders search results.
@@ -93,6 +98,9 @@ message ImpactedRepository {
   int32 depth = 4; // hops from the repository to the vulnerable library
   bool direct = 5; // true when the repository requires it in its own manifest
   repeated string path = 6; // the chain, nearest first, for display
+  string declared_version = 7; // what the manifest asks for, e.g. "^5.11.0"
+  string affected_versions = 8; // what the advisory says is affected, e.g. "< 5.14.3"
+  hyperion.common.v1.ExposureVerdict verdict = 9;
 }
 
 message GetBlastRadiusResponse {
@@ -110,4 +118,34 @@ message GetVulnerabilityRequest {
 
 message GetVulnerabilityResponse {
   hyperion.common.v1.Vulnerability vulnerability = 1;
+}
+
+message GetRepositoryExposureRequest {
+  string full_name = 1; // "owner/name"
+  int32 max_depth = 2; // DEPENDS_ON hops to traverse; 0 = server default
+  // Also return findings the declared versions rule out. Off by default:
+  // hiding them is what version matching is for.
+  bool include_unaffected = 3;
+}
+
+// RepositoryFinding is one finding a repository reaches through one library.
+message RepositoryFinding {
+  hyperion.common.v1.Vulnerability vulnerability = 1;
+  // The vulnerable library; its version is what the repository declares.
+  hyperion.common.v1.PackageRef via_package = 2;
+  string affected_versions = 3; // what the advisory says is affected
+  hyperion.common.v1.ExposureVerdict verdict = 4;
+  int32 depth = 5; // DEPENDS_ON hops from the repository to the library
+  bool direct = 6; // true when the repository's own manifest names it
+  repeated string path = 7; // the chain, nearest first, for display
+}
+
+message GetRepositoryExposureResponse {
+  string full_name = 1;
+  // Worst first: by verdict, then severity.
+  repeated RepositoryFinding findings = 2;
+  hyperion.common.v1.ExposureSummary summary = 3;
+  // False when the graph has no such repository — not scanned yet, or no
+  // manifest it could read — so an empty list means "unknown", not "safe".
+  bool scanned = 4;
 }

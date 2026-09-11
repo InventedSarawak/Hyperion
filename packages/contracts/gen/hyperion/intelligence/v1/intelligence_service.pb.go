@@ -466,15 +466,18 @@ func (x *GetBlastRadiusRequest) GetLimit() int32 {
 // ImpactedRepository is one repository the traversal reached, together with
 // the path that exposes it.
 type ImpactedRepository struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Repository    *v1.Repository         `protobuf:"bytes,1,opt,name=repository,proto3" json:"repository,omitempty"`
-	ViaPackage    *v1.PackageRef         `protobuf:"bytes,2,opt,name=via_package,json=viaPackage,proto3" json:"via_package,omitempty"` // the vulnerable library reached
-	Author        *v1.Author             `protobuf:"bytes,3,opt,name=author,proto3" json:"author,omitempty"`
-	Depth         int32                  `protobuf:"varint,4,opt,name=depth,proto3" json:"depth,omitempty"`   // hops from the repository to the vulnerable library
-	Direct        bool                   `protobuf:"varint,5,opt,name=direct,proto3" json:"direct,omitempty"` // true when the repository requires it in its own manifest
-	Path          []string               `protobuf:"bytes,6,rep,name=path,proto3" json:"path,omitempty"`      // the chain, nearest first, for display
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Repository       *v1.Repository         `protobuf:"bytes,1,opt,name=repository,proto3" json:"repository,omitempty"`
+	ViaPackage       *v1.PackageRef         `protobuf:"bytes,2,opt,name=via_package,json=viaPackage,proto3" json:"via_package,omitempty"` // the vulnerable library reached
+	Author           *v1.Author             `protobuf:"bytes,3,opt,name=author,proto3" json:"author,omitempty"`
+	Depth            int32                  `protobuf:"varint,4,opt,name=depth,proto3" json:"depth,omitempty"`                                              // hops from the repository to the vulnerable library
+	Direct           bool                   `protobuf:"varint,5,opt,name=direct,proto3" json:"direct,omitempty"`                                            // true when the repository requires it in its own manifest
+	Path             []string               `protobuf:"bytes,6,rep,name=path,proto3" json:"path,omitempty"`                                                 // the chain, nearest first, for display
+	DeclaredVersion  string                 `protobuf:"bytes,7,opt,name=declared_version,json=declaredVersion,proto3" json:"declared_version,omitempty"`    // what the manifest asks for, e.g. "^5.11.0"
+	AffectedVersions string                 `protobuf:"bytes,8,opt,name=affected_versions,json=affectedVersions,proto3" json:"affected_versions,omitempty"` // what the advisory says is affected, e.g. "< 5.14.3"
+	Verdict          v1.ExposureVerdict     `protobuf:"varint,9,opt,name=verdict,proto3,enum=hyperion.common.v1.ExposureVerdict" json:"verdict,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *ImpactedRepository) Reset() {
@@ -547,6 +550,27 @@ func (x *ImpactedRepository) GetPath() []string {
 		return x.Path
 	}
 	return nil
+}
+
+func (x *ImpactedRepository) GetDeclaredVersion() string {
+	if x != nil {
+		return x.DeclaredVersion
+	}
+	return ""
+}
+
+func (x *ImpactedRepository) GetAffectedVersions() string {
+	if x != nil {
+		return x.AffectedVersions
+	}
+	return ""
+}
+
+func (x *ImpactedRepository) GetVerdict() v1.ExposureVerdict {
+	if x != nil {
+		return x.Verdict
+	}
+	return v1.ExposureVerdict(0)
 }
 
 type GetBlastRadiusResponse struct {
@@ -707,11 +731,238 @@ func (x *GetVulnerabilityResponse) GetVulnerability() *v1.Vulnerability {
 	return nil
 }
 
+type GetRepositoryExposureRequest struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	FullName string                 `protobuf:"bytes,1,opt,name=full_name,json=fullName,proto3" json:"full_name,omitempty"`  // "owner/name"
+	MaxDepth int32                  `protobuf:"varint,2,opt,name=max_depth,json=maxDepth,proto3" json:"max_depth,omitempty"` // DEPENDS_ON hops to traverse; 0 = server default
+	// Also return findings the declared versions rule out. Off by default:
+	// hiding them is what version matching is for.
+	IncludeUnaffected bool `protobuf:"varint,3,opt,name=include_unaffected,json=includeUnaffected,proto3" json:"include_unaffected,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *GetRepositoryExposureRequest) Reset() {
+	*x = GetRepositoryExposureRequest{}
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetRepositoryExposureRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetRepositoryExposureRequest) ProtoMessage() {}
+
+func (x *GetRepositoryExposureRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetRepositoryExposureRequest.ProtoReflect.Descriptor instead.
+func (*GetRepositoryExposureRequest) Descriptor() ([]byte, []int) {
+	return file_hyperion_intelligence_v1_intelligence_service_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *GetRepositoryExposureRequest) GetFullName() string {
+	if x != nil {
+		return x.FullName
+	}
+	return ""
+}
+
+func (x *GetRepositoryExposureRequest) GetMaxDepth() int32 {
+	if x != nil {
+		return x.MaxDepth
+	}
+	return 0
+}
+
+func (x *GetRepositoryExposureRequest) GetIncludeUnaffected() bool {
+	if x != nil {
+		return x.IncludeUnaffected
+	}
+	return false
+}
+
+// RepositoryFinding is one finding a repository reaches through one library.
+type RepositoryFinding struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Vulnerability *v1.Vulnerability      `protobuf:"bytes,1,opt,name=vulnerability,proto3" json:"vulnerability,omitempty"`
+	// The vulnerable library; its version is what the repository declares.
+	ViaPackage       *v1.PackageRef     `protobuf:"bytes,2,opt,name=via_package,json=viaPackage,proto3" json:"via_package,omitempty"`
+	AffectedVersions string             `protobuf:"bytes,3,opt,name=affected_versions,json=affectedVersions,proto3" json:"affected_versions,omitempty"` // what the advisory says is affected
+	Verdict          v1.ExposureVerdict `protobuf:"varint,4,opt,name=verdict,proto3,enum=hyperion.common.v1.ExposureVerdict" json:"verdict,omitempty"`
+	Depth            int32              `protobuf:"varint,5,opt,name=depth,proto3" json:"depth,omitempty"`   // DEPENDS_ON hops from the repository to the library
+	Direct           bool               `protobuf:"varint,6,opt,name=direct,proto3" json:"direct,omitempty"` // true when the repository's own manifest names it
+	Path             []string           `protobuf:"bytes,7,rep,name=path,proto3" json:"path,omitempty"`      // the chain, nearest first, for display
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *RepositoryFinding) Reset() {
+	*x = RepositoryFinding{}
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RepositoryFinding) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RepositoryFinding) ProtoMessage() {}
+
+func (x *RepositoryFinding) ProtoReflect() protoreflect.Message {
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RepositoryFinding.ProtoReflect.Descriptor instead.
+func (*RepositoryFinding) Descriptor() ([]byte, []int) {
+	return file_hyperion_intelligence_v1_intelligence_service_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *RepositoryFinding) GetVulnerability() *v1.Vulnerability {
+	if x != nil {
+		return x.Vulnerability
+	}
+	return nil
+}
+
+func (x *RepositoryFinding) GetViaPackage() *v1.PackageRef {
+	if x != nil {
+		return x.ViaPackage
+	}
+	return nil
+}
+
+func (x *RepositoryFinding) GetAffectedVersions() string {
+	if x != nil {
+		return x.AffectedVersions
+	}
+	return ""
+}
+
+func (x *RepositoryFinding) GetVerdict() v1.ExposureVerdict {
+	if x != nil {
+		return x.Verdict
+	}
+	return v1.ExposureVerdict(0)
+}
+
+func (x *RepositoryFinding) GetDepth() int32 {
+	if x != nil {
+		return x.Depth
+	}
+	return 0
+}
+
+func (x *RepositoryFinding) GetDirect() bool {
+	if x != nil {
+		return x.Direct
+	}
+	return false
+}
+
+func (x *RepositoryFinding) GetPath() []string {
+	if x != nil {
+		return x.Path
+	}
+	return nil
+}
+
+type GetRepositoryExposureResponse struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	FullName string                 `protobuf:"bytes,1,opt,name=full_name,json=fullName,proto3" json:"full_name,omitempty"`
+	// Worst first: by verdict, then severity.
+	Findings []*RepositoryFinding `protobuf:"bytes,2,rep,name=findings,proto3" json:"findings,omitempty"`
+	Summary  *v1.ExposureSummary  `protobuf:"bytes,3,opt,name=summary,proto3" json:"summary,omitempty"`
+	// False when the graph has no such repository — not scanned yet, or no
+	// manifest it could read — so an empty list means "unknown", not "safe".
+	Scanned       bool `protobuf:"varint,4,opt,name=scanned,proto3" json:"scanned,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetRepositoryExposureResponse) Reset() {
+	*x = GetRepositoryExposureResponse{}
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetRepositoryExposureResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetRepositoryExposureResponse) ProtoMessage() {}
+
+func (x *GetRepositoryExposureResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetRepositoryExposureResponse.ProtoReflect.Descriptor instead.
+func (*GetRepositoryExposureResponse) Descriptor() ([]byte, []int) {
+	return file_hyperion_intelligence_v1_intelligence_service_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *GetRepositoryExposureResponse) GetFullName() string {
+	if x != nil {
+		return x.FullName
+	}
+	return ""
+}
+
+func (x *GetRepositoryExposureResponse) GetFindings() []*RepositoryFinding {
+	if x != nil {
+		return x.Findings
+	}
+	return nil
+}
+
+func (x *GetRepositoryExposureResponse) GetSummary() *v1.ExposureSummary {
+	if x != nil {
+		return x.Summary
+	}
+	return nil
+}
+
+func (x *GetRepositoryExposureResponse) GetScanned() bool {
+	if x != nil {
+		return x.Scanned
+	}
+	return false
+}
+
 var File_hyperion_intelligence_v1_intelligence_service_proto protoreflect.FileDescriptor
 
 const file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc = "" +
 	"\n" +
-	"3hyperion/intelligence/v1/intelligence_service.proto\x12\x18hyperion.intelligence.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a hyperion/common/v1/package.proto\x1a#hyperion/common/v1/repository.proto\x1a&hyperion/common/v1/vulnerability.proto\"\xd2\x01\n" +
+	"3hyperion/intelligence/v1/intelligence_service.proto\x12\x18hyperion.intelligence.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a!hyperion/common/v1/exposure.proto\x1a hyperion/common/v1/package.proto\x1a#hyperion/common/v1/repository.proto\x1a&hyperion/common/v1/vulnerability.proto\"\xd2\x01\n" +
 	"\rSearchRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12\x1b\n" +
 	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
@@ -741,7 +992,7 @@ const file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc = "" +
 	"\x15GetBlastRadiusRequest\x12\x15\n" +
 	"\x06cve_id\x18\x01 \x01(\tR\x05cveId\x12\x1b\n" +
 	"\tmax_depth\x18\x02 \x01(\x05R\bmaxDepth\x12\x14\n" +
-	"\x05limit\x18\x03 \x01(\x05R\x05limit\"\x8b\x02\n" +
+	"\x05limit\x18\x03 \x01(\x05R\x05limit\"\xa2\x03\n" +
 	"\x12ImpactedRepository\x12>\n" +
 	"\n" +
 	"repository\x18\x01 \x01(\v2\x1e.hyperion.common.v1.RepositoryR\n" +
@@ -751,7 +1002,10 @@ const file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc = "" +
 	"\x06author\x18\x03 \x01(\v2\x1a.hyperion.common.v1.AuthorR\x06author\x12\x14\n" +
 	"\x05depth\x18\x04 \x01(\x05R\x05depth\x12\x16\n" +
 	"\x06direct\x18\x05 \x01(\bR\x06direct\x12\x12\n" +
-	"\x04path\x18\x06 \x03(\tR\x04path\"\x81\x02\n" +
+	"\x04path\x18\x06 \x03(\tR\x04path\x12)\n" +
+	"\x10declared_version\x18\a \x01(\tR\x0fdeclaredVersion\x12+\n" +
+	"\x11affected_versions\x18\b \x01(\tR\x10affectedVersions\x12=\n" +
+	"\averdict\x18\t \x01(\x0e2#.hyperion.common.v1.ExposureVerdictR\averdict\"\x81\x02\n" +
 	"\x16GetBlastRadiusResponse\x12\x15\n" +
 	"\x06cve_id\x18\x01 \x01(\tR\x05cveId\x12O\n" +
 	"\x13vulnerable_packages\x18\x02 \x03(\v2\x1e.hyperion.common.v1.PackageRefR\x12vulnerablePackages\x12P\n" +
@@ -760,17 +1014,36 @@ const file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc = "" +
 	"\x17GetVulnerabilityRequest\x12\x15\n" +
 	"\x06cve_id\x18\x01 \x01(\tR\x05cveId\"c\n" +
 	"\x18GetVulnerabilityResponse\x12G\n" +
-	"\rvulnerability\x18\x01 \x01(\v2!.hyperion.common.v1.VulnerabilityR\rvulnerability*\\\n" +
+	"\rvulnerability\x18\x01 \x01(\v2!.hyperion.common.v1.VulnerabilityR\rvulnerability\"\x87\x01\n" +
+	"\x1cGetRepositoryExposureRequest\x12\x1b\n" +
+	"\tfull_name\x18\x01 \x01(\tR\bfullName\x12\x1b\n" +
+	"\tmax_depth\x18\x02 \x01(\x05R\bmaxDepth\x12-\n" +
+	"\x12include_unaffected\x18\x03 \x01(\bR\x11includeUnaffected\"\xcb\x02\n" +
+	"\x11RepositoryFinding\x12G\n" +
+	"\rvulnerability\x18\x01 \x01(\v2!.hyperion.common.v1.VulnerabilityR\rvulnerability\x12?\n" +
+	"\vvia_package\x18\x02 \x01(\v2\x1e.hyperion.common.v1.PackageRefR\n" +
+	"viaPackage\x12+\n" +
+	"\x11affected_versions\x18\x03 \x01(\tR\x10affectedVersions\x12=\n" +
+	"\averdict\x18\x04 \x01(\x0e2#.hyperion.common.v1.ExposureVerdictR\averdict\x12\x14\n" +
+	"\x05depth\x18\x05 \x01(\x05R\x05depth\x12\x16\n" +
+	"\x06direct\x18\x06 \x01(\bR\x06direct\x12\x12\n" +
+	"\x04path\x18\a \x03(\tR\x04path\"\xde\x01\n" +
+	"\x1dGetRepositoryExposureResponse\x12\x1b\n" +
+	"\tfull_name\x18\x01 \x01(\tR\bfullName\x12G\n" +
+	"\bfindings\x18\x02 \x03(\v2+.hyperion.intelligence.v1.RepositoryFindingR\bfindings\x12=\n" +
+	"\asummary\x18\x03 \x01(\v2#.hyperion.common.v1.ExposureSummaryR\asummary\x12\x18\n" +
+	"\ascanned\x18\x04 \x01(\bR\ascanned*\\\n" +
 	"\n" +
 	"SearchSort\x12\x1b\n" +
 	"\x17SEARCH_SORT_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15SEARCH_SORT_RELEVANCE\x10\x01\x12\x16\n" +
-	"\x12SEARCH_SORT_NEWEST\x10\x022\xe3\x03\n" +
+	"\x12SEARCH_SORT_NEWEST\x10\x022\xee\x04\n" +
 	"\x13IntelligenceService\x12[\n" +
 	"\x06Search\x12'.hyperion.intelligence.v1.SearchRequest\x1a(.hyperion.intelligence.v1.SearchResponse\x12\x7f\n" +
 	"\x12IngestDependencies\x123.hyperion.intelligence.v1.IngestDependenciesRequest\x1a4.hyperion.intelligence.v1.IngestDependenciesResponse\x12s\n" +
 	"\x0eGetBlastRadius\x12/.hyperion.intelligence.v1.GetBlastRadiusRequest\x1a0.hyperion.intelligence.v1.GetBlastRadiusResponse\x12y\n" +
-	"\x10GetVulnerability\x121.hyperion.intelligence.v1.GetVulnerabilityRequest\x1a2.hyperion.intelligence.v1.GetVulnerabilityResponseB\x9e\x02\n" +
+	"\x10GetVulnerability\x121.hyperion.intelligence.v1.GetVulnerabilityRequest\x1a2.hyperion.intelligence.v1.GetVulnerabilityResponse\x12\x88\x01\n" +
+	"\x15GetRepositoryExposure\x126.hyperion.intelligence.v1.GetRepositoryExposureRequest\x1a7.hyperion.intelligence.v1.GetRepositoryExposureResponseB\x9e\x02\n" +
 	"\x1ccom.hyperion.intelligence.v1B\x18IntelligenceServiceProtoP\x01Zbgithub.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/intelligence/v1;intelligencev1\xa2\x02\x03HIX\xaa\x02\x18Hyperion.Intelligence.V1\xca\x02\x18Hyperion\\Intelligence\\V1\xe2\x02$Hyperion\\Intelligence\\V1\\GPBMetadata\xea\x02\x1aHyperion::Intelligence::V1b\x06proto3"
 
 var (
@@ -786,56 +1059,69 @@ func file_hyperion_intelligence_v1_intelligence_service_proto_rawDescGZIP() []by
 }
 
 var file_hyperion_intelligence_v1_intelligence_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_hyperion_intelligence_v1_intelligence_service_proto_goTypes = []any{
-	(SearchSort)(0),                    // 0: hyperion.intelligence.v1.SearchSort
-	(*SearchRequest)(nil),              // 1: hyperion.intelligence.v1.SearchRequest
-	(*SearchResult)(nil),               // 2: hyperion.intelligence.v1.SearchResult
-	(*SearchResponse)(nil),             // 3: hyperion.intelligence.v1.SearchResponse
-	(*IngestDependenciesRequest)(nil),  // 4: hyperion.intelligence.v1.IngestDependenciesRequest
-	(*IngestDependenciesResponse)(nil), // 5: hyperion.intelligence.v1.IngestDependenciesResponse
-	(*GetBlastRadiusRequest)(nil),      // 6: hyperion.intelligence.v1.GetBlastRadiusRequest
-	(*ImpactedRepository)(nil),         // 7: hyperion.intelligence.v1.ImpactedRepository
-	(*GetBlastRadiusResponse)(nil),     // 8: hyperion.intelligence.v1.GetBlastRadiusResponse
-	(*GetVulnerabilityRequest)(nil),    // 9: hyperion.intelligence.v1.GetVulnerabilityRequest
-	(*GetVulnerabilityResponse)(nil),   // 10: hyperion.intelligence.v1.GetVulnerabilityResponse
-	(v1.FindingKind)(0),                // 11: hyperion.common.v1.FindingKind
-	(*v1.Vulnerability)(nil),           // 12: hyperion.common.v1.Vulnerability
-	(*v1.Repository)(nil),              // 13: hyperion.common.v1.Repository
-	(*v1.Dependency)(nil),              // 14: hyperion.common.v1.Dependency
-	(*v1.Author)(nil),                  // 15: hyperion.common.v1.Author
-	(*timestamppb.Timestamp)(nil),      // 16: google.protobuf.Timestamp
-	(*v1.PackageRef)(nil),              // 17: hyperion.common.v1.PackageRef
+	(SearchSort)(0),                       // 0: hyperion.intelligence.v1.SearchSort
+	(*SearchRequest)(nil),                 // 1: hyperion.intelligence.v1.SearchRequest
+	(*SearchResult)(nil),                  // 2: hyperion.intelligence.v1.SearchResult
+	(*SearchResponse)(nil),                // 3: hyperion.intelligence.v1.SearchResponse
+	(*IngestDependenciesRequest)(nil),     // 4: hyperion.intelligence.v1.IngestDependenciesRequest
+	(*IngestDependenciesResponse)(nil),    // 5: hyperion.intelligence.v1.IngestDependenciesResponse
+	(*GetBlastRadiusRequest)(nil),         // 6: hyperion.intelligence.v1.GetBlastRadiusRequest
+	(*ImpactedRepository)(nil),            // 7: hyperion.intelligence.v1.ImpactedRepository
+	(*GetBlastRadiusResponse)(nil),        // 8: hyperion.intelligence.v1.GetBlastRadiusResponse
+	(*GetVulnerabilityRequest)(nil),       // 9: hyperion.intelligence.v1.GetVulnerabilityRequest
+	(*GetVulnerabilityResponse)(nil),      // 10: hyperion.intelligence.v1.GetVulnerabilityResponse
+	(*GetRepositoryExposureRequest)(nil),  // 11: hyperion.intelligence.v1.GetRepositoryExposureRequest
+	(*RepositoryFinding)(nil),             // 12: hyperion.intelligence.v1.RepositoryFinding
+	(*GetRepositoryExposureResponse)(nil), // 13: hyperion.intelligence.v1.GetRepositoryExposureResponse
+	(v1.FindingKind)(0),                   // 14: hyperion.common.v1.FindingKind
+	(*v1.Vulnerability)(nil),              // 15: hyperion.common.v1.Vulnerability
+	(*v1.Repository)(nil),                 // 16: hyperion.common.v1.Repository
+	(*v1.Dependency)(nil),                 // 17: hyperion.common.v1.Dependency
+	(*v1.Author)(nil),                     // 18: hyperion.common.v1.Author
+	(*timestamppb.Timestamp)(nil),         // 19: google.protobuf.Timestamp
+	(*v1.PackageRef)(nil),                 // 20: hyperion.common.v1.PackageRef
+	(v1.ExposureVerdict)(0),               // 21: hyperion.common.v1.ExposureVerdict
+	(*v1.ExposureSummary)(nil),            // 22: hyperion.common.v1.ExposureSummary
 }
 var file_hyperion_intelligence_v1_intelligence_service_proto_depIdxs = []int32{
 	0,  // 0: hyperion.intelligence.v1.SearchRequest.sort:type_name -> hyperion.intelligence.v1.SearchSort
-	11, // 1: hyperion.intelligence.v1.SearchRequest.kinds:type_name -> hyperion.common.v1.FindingKind
-	12, // 2: hyperion.intelligence.v1.SearchResult.vulnerability:type_name -> hyperion.common.v1.Vulnerability
+	14, // 1: hyperion.intelligence.v1.SearchRequest.kinds:type_name -> hyperion.common.v1.FindingKind
+	15, // 2: hyperion.intelligence.v1.SearchResult.vulnerability:type_name -> hyperion.common.v1.Vulnerability
 	2,  // 3: hyperion.intelligence.v1.SearchResponse.results:type_name -> hyperion.intelligence.v1.SearchResult
-	13, // 4: hyperion.intelligence.v1.IngestDependenciesRequest.repository:type_name -> hyperion.common.v1.Repository
-	14, // 5: hyperion.intelligence.v1.IngestDependenciesRequest.dependencies:type_name -> hyperion.common.v1.Dependency
-	15, // 6: hyperion.intelligence.v1.IngestDependenciesRequest.author:type_name -> hyperion.common.v1.Author
-	16, // 7: hyperion.intelligence.v1.IngestDependenciesRequest.observed_at:type_name -> google.protobuf.Timestamp
-	17, // 8: hyperion.intelligence.v1.IngestDependenciesRequest.publishes:type_name -> hyperion.common.v1.PackageRef
-	13, // 9: hyperion.intelligence.v1.ImpactedRepository.repository:type_name -> hyperion.common.v1.Repository
-	17, // 10: hyperion.intelligence.v1.ImpactedRepository.via_package:type_name -> hyperion.common.v1.PackageRef
-	15, // 11: hyperion.intelligence.v1.ImpactedRepository.author:type_name -> hyperion.common.v1.Author
-	17, // 12: hyperion.intelligence.v1.GetBlastRadiusResponse.vulnerable_packages:type_name -> hyperion.common.v1.PackageRef
-	7,  // 13: hyperion.intelligence.v1.GetBlastRadiusResponse.repositories:type_name -> hyperion.intelligence.v1.ImpactedRepository
-	12, // 14: hyperion.intelligence.v1.GetVulnerabilityResponse.vulnerability:type_name -> hyperion.common.v1.Vulnerability
-	1,  // 15: hyperion.intelligence.v1.IntelligenceService.Search:input_type -> hyperion.intelligence.v1.SearchRequest
-	4,  // 16: hyperion.intelligence.v1.IntelligenceService.IngestDependencies:input_type -> hyperion.intelligence.v1.IngestDependenciesRequest
-	6,  // 17: hyperion.intelligence.v1.IntelligenceService.GetBlastRadius:input_type -> hyperion.intelligence.v1.GetBlastRadiusRequest
-	9,  // 18: hyperion.intelligence.v1.IntelligenceService.GetVulnerability:input_type -> hyperion.intelligence.v1.GetVulnerabilityRequest
-	3,  // 19: hyperion.intelligence.v1.IntelligenceService.Search:output_type -> hyperion.intelligence.v1.SearchResponse
-	5,  // 20: hyperion.intelligence.v1.IntelligenceService.IngestDependencies:output_type -> hyperion.intelligence.v1.IngestDependenciesResponse
-	8,  // 21: hyperion.intelligence.v1.IntelligenceService.GetBlastRadius:output_type -> hyperion.intelligence.v1.GetBlastRadiusResponse
-	10, // 22: hyperion.intelligence.v1.IntelligenceService.GetVulnerability:output_type -> hyperion.intelligence.v1.GetVulnerabilityResponse
-	19, // [19:23] is the sub-list for method output_type
-	15, // [15:19] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	16, // 4: hyperion.intelligence.v1.IngestDependenciesRequest.repository:type_name -> hyperion.common.v1.Repository
+	17, // 5: hyperion.intelligence.v1.IngestDependenciesRequest.dependencies:type_name -> hyperion.common.v1.Dependency
+	18, // 6: hyperion.intelligence.v1.IngestDependenciesRequest.author:type_name -> hyperion.common.v1.Author
+	19, // 7: hyperion.intelligence.v1.IngestDependenciesRequest.observed_at:type_name -> google.protobuf.Timestamp
+	20, // 8: hyperion.intelligence.v1.IngestDependenciesRequest.publishes:type_name -> hyperion.common.v1.PackageRef
+	16, // 9: hyperion.intelligence.v1.ImpactedRepository.repository:type_name -> hyperion.common.v1.Repository
+	20, // 10: hyperion.intelligence.v1.ImpactedRepository.via_package:type_name -> hyperion.common.v1.PackageRef
+	18, // 11: hyperion.intelligence.v1.ImpactedRepository.author:type_name -> hyperion.common.v1.Author
+	21, // 12: hyperion.intelligence.v1.ImpactedRepository.verdict:type_name -> hyperion.common.v1.ExposureVerdict
+	20, // 13: hyperion.intelligence.v1.GetBlastRadiusResponse.vulnerable_packages:type_name -> hyperion.common.v1.PackageRef
+	7,  // 14: hyperion.intelligence.v1.GetBlastRadiusResponse.repositories:type_name -> hyperion.intelligence.v1.ImpactedRepository
+	15, // 15: hyperion.intelligence.v1.GetVulnerabilityResponse.vulnerability:type_name -> hyperion.common.v1.Vulnerability
+	15, // 16: hyperion.intelligence.v1.RepositoryFinding.vulnerability:type_name -> hyperion.common.v1.Vulnerability
+	20, // 17: hyperion.intelligence.v1.RepositoryFinding.via_package:type_name -> hyperion.common.v1.PackageRef
+	21, // 18: hyperion.intelligence.v1.RepositoryFinding.verdict:type_name -> hyperion.common.v1.ExposureVerdict
+	12, // 19: hyperion.intelligence.v1.GetRepositoryExposureResponse.findings:type_name -> hyperion.intelligence.v1.RepositoryFinding
+	22, // 20: hyperion.intelligence.v1.GetRepositoryExposureResponse.summary:type_name -> hyperion.common.v1.ExposureSummary
+	1,  // 21: hyperion.intelligence.v1.IntelligenceService.Search:input_type -> hyperion.intelligence.v1.SearchRequest
+	4,  // 22: hyperion.intelligence.v1.IntelligenceService.IngestDependencies:input_type -> hyperion.intelligence.v1.IngestDependenciesRequest
+	6,  // 23: hyperion.intelligence.v1.IntelligenceService.GetBlastRadius:input_type -> hyperion.intelligence.v1.GetBlastRadiusRequest
+	9,  // 24: hyperion.intelligence.v1.IntelligenceService.GetVulnerability:input_type -> hyperion.intelligence.v1.GetVulnerabilityRequest
+	11, // 25: hyperion.intelligence.v1.IntelligenceService.GetRepositoryExposure:input_type -> hyperion.intelligence.v1.GetRepositoryExposureRequest
+	3,  // 26: hyperion.intelligence.v1.IntelligenceService.Search:output_type -> hyperion.intelligence.v1.SearchResponse
+	5,  // 27: hyperion.intelligence.v1.IntelligenceService.IngestDependencies:output_type -> hyperion.intelligence.v1.IngestDependenciesResponse
+	8,  // 28: hyperion.intelligence.v1.IntelligenceService.GetBlastRadius:output_type -> hyperion.intelligence.v1.GetBlastRadiusResponse
+	10, // 29: hyperion.intelligence.v1.IntelligenceService.GetVulnerability:output_type -> hyperion.intelligence.v1.GetVulnerabilityResponse
+	13, // 30: hyperion.intelligence.v1.IntelligenceService.GetRepositoryExposure:output_type -> hyperion.intelligence.v1.GetRepositoryExposureResponse
+	26, // [26:31] is the sub-list for method output_type
+	21, // [21:26] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_hyperion_intelligence_v1_intelligence_service_proto_init() }
@@ -849,7 +1135,7 @@ func file_hyperion_intelligence_v1_intelligence_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc), len(file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   10,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

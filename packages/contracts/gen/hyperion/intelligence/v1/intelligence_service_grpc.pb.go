@@ -19,10 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	IntelligenceService_Search_FullMethodName             = "/hyperion.intelligence.v1.IntelligenceService/Search"
-	IntelligenceService_IngestDependencies_FullMethodName = "/hyperion.intelligence.v1.IntelligenceService/IngestDependencies"
-	IntelligenceService_GetBlastRadius_FullMethodName     = "/hyperion.intelligence.v1.IntelligenceService/GetBlastRadius"
-	IntelligenceService_GetVulnerability_FullMethodName   = "/hyperion.intelligence.v1.IntelligenceService/GetVulnerability"
+	IntelligenceService_Search_FullMethodName                = "/hyperion.intelligence.v1.IntelligenceService/Search"
+	IntelligenceService_IngestDependencies_FullMethodName    = "/hyperion.intelligence.v1.IntelligenceService/IngestDependencies"
+	IntelligenceService_GetBlastRadius_FullMethodName        = "/hyperion.intelligence.v1.IntelligenceService/GetBlastRadius"
+	IntelligenceService_GetVulnerability_FullMethodName      = "/hyperion.intelligence.v1.IntelligenceService/GetVulnerability"
+	IntelligenceService_GetRepositoryExposure_FullMethodName = "/hyperion.intelligence.v1.IntelligenceService/GetRepositoryExposure"
 )
 
 // IntelligenceServiceClient is the client API for IntelligenceService service.
@@ -45,6 +46,10 @@ type IntelligenceServiceClient interface {
 	// rather than the search index — the index drops detail it does not search
 	// on, such as each affected package's version range.
 	GetVulnerability(ctx context.Context, in *GetVulnerabilityRequest, opts ...grpc.CallOption) (*GetVulnerabilityResponse, error)
+	// GetRepositoryExposure is blast radius the other way round: the findings a
+	// repository reaches through its dependencies, each judged by comparing the
+	// version it declares with the versions the advisory says are affected.
+	GetRepositoryExposure(ctx context.Context, in *GetRepositoryExposureRequest, opts ...grpc.CallOption) (*GetRepositoryExposureResponse, error)
 }
 
 type intelligenceServiceClient struct {
@@ -95,6 +100,16 @@ func (c *intelligenceServiceClient) GetVulnerability(ctx context.Context, in *Ge
 	return out, nil
 }
 
+func (c *intelligenceServiceClient) GetRepositoryExposure(ctx context.Context, in *GetRepositoryExposureRequest, opts ...grpc.CallOption) (*GetRepositoryExposureResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetRepositoryExposureResponse)
+	err := c.cc.Invoke(ctx, IntelligenceService_GetRepositoryExposure_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // IntelligenceServiceServer is the server API for IntelligenceService service.
 // All implementations must embed UnimplementedIntelligenceServiceServer
 // for forward compatibility.
@@ -115,6 +130,10 @@ type IntelligenceServiceServer interface {
 	// rather than the search index — the index drops detail it does not search
 	// on, such as each affected package's version range.
 	GetVulnerability(context.Context, *GetVulnerabilityRequest) (*GetVulnerabilityResponse, error)
+	// GetRepositoryExposure is blast radius the other way round: the findings a
+	// repository reaches through its dependencies, each judged by comparing the
+	// version it declares with the versions the advisory says are affected.
+	GetRepositoryExposure(context.Context, *GetRepositoryExposureRequest) (*GetRepositoryExposureResponse, error)
 	mustEmbedUnimplementedIntelligenceServiceServer()
 }
 
@@ -136,6 +155,9 @@ func (UnimplementedIntelligenceServiceServer) GetBlastRadius(context.Context, *G
 }
 func (UnimplementedIntelligenceServiceServer) GetVulnerability(context.Context, *GetVulnerabilityRequest) (*GetVulnerabilityResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetVulnerability not implemented")
+}
+func (UnimplementedIntelligenceServiceServer) GetRepositoryExposure(context.Context, *GetRepositoryExposureRequest) (*GetRepositoryExposureResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetRepositoryExposure not implemented")
 }
 func (UnimplementedIntelligenceServiceServer) mustEmbedUnimplementedIntelligenceServiceServer() {}
 func (UnimplementedIntelligenceServiceServer) testEmbeddedByValue()                             {}
@@ -230,6 +252,24 @@ func _IntelligenceService_GetVulnerability_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _IntelligenceService_GetRepositoryExposure_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetRepositoryExposureRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(IntelligenceServiceServer).GetRepositoryExposure(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: IntelligenceService_GetRepositoryExposure_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(IntelligenceServiceServer).GetRepositoryExposure(ctx, req.(*GetRepositoryExposureRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // IntelligenceService_ServiceDesc is the grpc.ServiceDesc for IntelligenceService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -252,6 +292,10 @@ var IntelligenceService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetVulnerability",
 			Handler:    _IntelligenceService_GetVulnerability_Handler,
+		},
+		{
+			MethodName: "GetRepositoryExposure",
+			Handler:    _IntelligenceService_GetRepositoryExposure_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

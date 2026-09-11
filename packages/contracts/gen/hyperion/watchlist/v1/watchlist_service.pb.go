@@ -7,6 +7,7 @@
 package watchlistv1
 
 import (
+	v1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/common/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
@@ -83,8 +84,10 @@ type TrackedRepository struct {
 	LastScanAt      *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=last_scan_at,json=lastScanAt,proto3" json:"last_scan_at,omitempty"` // last attempt, successful or not
 	LastError       string                 `protobuf:"bytes,6,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
 	DependencyCount int32                  `protobuf:"varint,7,opt,name=dependency_count,json=dependencyCount,proto3" json:"dependency_count,omitempty"` // edges the last successful scan wrote
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// The serious findings it may be exposed to, for flagging it in a list.
+	Exposure      *v1.ExposureSummary `protobuf:"bytes,8,opt,name=exposure,proto3" json:"exposure,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TrackedRepository) Reset() {
@@ -164,6 +167,13 @@ func (x *TrackedRepository) GetDependencyCount() int32 {
 		return x.DependencyCount
 	}
 	return 0
+}
+
+func (x *TrackedRepository) GetExposure() *v1.ExposureSummary {
+	if x != nil {
+		return x.Exposure
+	}
+	return nil
 }
 
 type DiscoveredRepository struct {
@@ -742,7 +752,7 @@ var File_hyperion_watchlist_v1_watchlist_service_proto protoreflect.FileDescript
 
 const file_hyperion_watchlist_v1_watchlist_service_proto_rawDesc = "" +
 	"\n" +
-	"-hyperion/watchlist/v1/watchlist_service.proto\x12\x15hyperion.watchlist.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xbc\x02\n" +
+	"-hyperion/watchlist/v1/watchlist_service.proto\x12\x15hyperion.watchlist.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a!hyperion/common/v1/exposure.proto\"\xfd\x02\n" +
 	"\x11TrackedRepository\x12\x1b\n" +
 	"\tfull_name\x18\x01 \x01(\tR\bfullName\x12\x10\n" +
 	"\x03url\x18\x02 \x01(\tR\x03url\x129\n" +
@@ -752,7 +762,8 @@ const file_hyperion_watchlist_v1_watchlist_service_proto_rawDesc = "" +
 	"lastScanAt\x12\x1d\n" +
 	"\n" +
 	"last_error\x18\x06 \x01(\tR\tlastError\x12)\n" +
-	"\x10dependency_count\x18\a \x01(\x05R\x0fdependencyCount\"\x8a\x02\n" +
+	"\x10dependency_count\x18\a \x01(\x05R\x0fdependencyCount\x12?\n" +
+	"\bexposure\x18\b \x01(\v2#.hyperion.common.v1.ExposureSummaryR\bexposure\"\x8a\x02\n" +
 	"\x14DiscoveredRepository\x12\x1b\n" +
 	"\tfull_name\x18\x01 \x01(\tR\bfullName\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x1a\n" +
@@ -832,31 +843,33 @@ var file_hyperion_watchlist_v1_watchlist_service_proto_goTypes = []any{
 	(*ReportScanRequest)(nil),            // 11: hyperion.watchlist.v1.ReportScanRequest
 	(*ReportScanResponse)(nil),           // 12: hyperion.watchlist.v1.ReportScanResponse
 	(*timestamppb.Timestamp)(nil),        // 13: google.protobuf.Timestamp
+	(*v1.ExposureSummary)(nil),           // 14: hyperion.common.v1.ExposureSummary
 }
 var file_hyperion_watchlist_v1_watchlist_service_proto_depIdxs = []int32{
 	0,  // 0: hyperion.watchlist.v1.TrackedRepository.status:type_name -> hyperion.watchlist.v1.ScanStatus
 	13, // 1: hyperion.watchlist.v1.TrackedRepository.added_at:type_name -> google.protobuf.Timestamp
 	13, // 2: hyperion.watchlist.v1.TrackedRepository.last_scan_at:type_name -> google.protobuf.Timestamp
-	13, // 3: hyperion.watchlist.v1.DiscoveredRepository.pushed_at:type_name -> google.protobuf.Timestamp
-	1,  // 4: hyperion.watchlist.v1.ListRepositoriesResponse.repositories:type_name -> hyperion.watchlist.v1.TrackedRepository
-	2,  // 5: hyperion.watchlist.v1.DiscoverRepositoriesResponse.repositories:type_name -> hyperion.watchlist.v1.DiscoveredRepository
-	1,  // 6: hyperion.watchlist.v1.TrackRepositoriesResponse.repositories:type_name -> hyperion.watchlist.v1.TrackedRepository
-	13, // 7: hyperion.watchlist.v1.ReportScanRequest.scanned_at:type_name -> google.protobuf.Timestamp
-	3,  // 8: hyperion.watchlist.v1.WatchlistService.ListRepositories:input_type -> hyperion.watchlist.v1.ListRepositoriesRequest
-	5,  // 9: hyperion.watchlist.v1.WatchlistService.DiscoverRepositories:input_type -> hyperion.watchlist.v1.DiscoverRepositoriesRequest
-	7,  // 10: hyperion.watchlist.v1.WatchlistService.TrackRepositories:input_type -> hyperion.watchlist.v1.TrackRepositoriesRequest
-	9,  // 11: hyperion.watchlist.v1.WatchlistService.UntrackRepository:input_type -> hyperion.watchlist.v1.UntrackRepositoryRequest
-	11, // 12: hyperion.watchlist.v1.WatchlistService.ReportScan:input_type -> hyperion.watchlist.v1.ReportScanRequest
-	4,  // 13: hyperion.watchlist.v1.WatchlistService.ListRepositories:output_type -> hyperion.watchlist.v1.ListRepositoriesResponse
-	6,  // 14: hyperion.watchlist.v1.WatchlistService.DiscoverRepositories:output_type -> hyperion.watchlist.v1.DiscoverRepositoriesResponse
-	8,  // 15: hyperion.watchlist.v1.WatchlistService.TrackRepositories:output_type -> hyperion.watchlist.v1.TrackRepositoriesResponse
-	10, // 16: hyperion.watchlist.v1.WatchlistService.UntrackRepository:output_type -> hyperion.watchlist.v1.UntrackRepositoryResponse
-	12, // 17: hyperion.watchlist.v1.WatchlistService.ReportScan:output_type -> hyperion.watchlist.v1.ReportScanResponse
-	13, // [13:18] is the sub-list for method output_type
-	8,  // [8:13] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	14, // 3: hyperion.watchlist.v1.TrackedRepository.exposure:type_name -> hyperion.common.v1.ExposureSummary
+	13, // 4: hyperion.watchlist.v1.DiscoveredRepository.pushed_at:type_name -> google.protobuf.Timestamp
+	1,  // 5: hyperion.watchlist.v1.ListRepositoriesResponse.repositories:type_name -> hyperion.watchlist.v1.TrackedRepository
+	2,  // 6: hyperion.watchlist.v1.DiscoverRepositoriesResponse.repositories:type_name -> hyperion.watchlist.v1.DiscoveredRepository
+	1,  // 7: hyperion.watchlist.v1.TrackRepositoriesResponse.repositories:type_name -> hyperion.watchlist.v1.TrackedRepository
+	13, // 8: hyperion.watchlist.v1.ReportScanRequest.scanned_at:type_name -> google.protobuf.Timestamp
+	3,  // 9: hyperion.watchlist.v1.WatchlistService.ListRepositories:input_type -> hyperion.watchlist.v1.ListRepositoriesRequest
+	5,  // 10: hyperion.watchlist.v1.WatchlistService.DiscoverRepositories:input_type -> hyperion.watchlist.v1.DiscoverRepositoriesRequest
+	7,  // 11: hyperion.watchlist.v1.WatchlistService.TrackRepositories:input_type -> hyperion.watchlist.v1.TrackRepositoriesRequest
+	9,  // 12: hyperion.watchlist.v1.WatchlistService.UntrackRepository:input_type -> hyperion.watchlist.v1.UntrackRepositoryRequest
+	11, // 13: hyperion.watchlist.v1.WatchlistService.ReportScan:input_type -> hyperion.watchlist.v1.ReportScanRequest
+	4,  // 14: hyperion.watchlist.v1.WatchlistService.ListRepositories:output_type -> hyperion.watchlist.v1.ListRepositoriesResponse
+	6,  // 15: hyperion.watchlist.v1.WatchlistService.DiscoverRepositories:output_type -> hyperion.watchlist.v1.DiscoverRepositoriesResponse
+	8,  // 16: hyperion.watchlist.v1.WatchlistService.TrackRepositories:output_type -> hyperion.watchlist.v1.TrackRepositoriesResponse
+	10, // 17: hyperion.watchlist.v1.WatchlistService.UntrackRepository:output_type -> hyperion.watchlist.v1.UntrackRepositoryResponse
+	12, // 18: hyperion.watchlist.v1.WatchlistService.ReportScan:output_type -> hyperion.watchlist.v1.ReportScanResponse
+	14, // [14:19] is the sub-list for method output_type
+	9,  // [9:14] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_hyperion_watchlist_v1_watchlist_service_proto_init() }

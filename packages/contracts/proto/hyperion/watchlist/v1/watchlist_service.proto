@@ -3,6 +3,7 @@ syntax = "proto3";
 package hyperion.watchlist.v1;
 
 import "google/protobuf/timestamp.proto";
+import "hyperion/common/v1/exposure.proto";
 
 // WatchlistService is the set of repositories Hyperion tracks: the other half
 // of blast radius. An advisory says which library is vulnerable; only a
@@ -44,6 +45,8 @@ message TrackedRepository {
   google.protobuf.Timestamp last_scan_at = 5; // last attempt, successful or not
   string last_error = 6;
   int32 dependency_count = 7; // edges the last successful scan wrote
+  // The serious findings it may be exposed to, for flagging it in a list.
+  hyperion.common.v1.ExposureSummary exposure = 8;
 }
 
 message DiscoveredRepository {
