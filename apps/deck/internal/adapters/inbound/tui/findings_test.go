@@ -168,3 +168,31 @@ var _ = Describe("Graph Explorer verdicts", func() {
 		Expect(out).To(ContainSubstring("· ruled out by version: declares ^5.11.0, affected < 5.0.8"))
 	})
 })
+
+// verdictExplorer answers every blast radius with one fixed result.
+type verdictExplorer struct{ radius model.BlastRadius }
+
+func (e *verdictExplorer) Handle(context.Context, string, int) (model.BlastRadius, error) {
+	return e.radius, nil
+}
+
+var _ = Describe("Graph Explorer summary", func() {
+	It("does not count a repository its versions rule out as exposed", func() {
+		explorer := &verdictExplorer{radius: model.BlastRadius{
+			CVEID:              "CVE-2024-56159",
+			VulnerablePackages: []string{"npm:astro"},
+			Repositories: []model.ImpactedRepository{{
+				FullName: "InventedSarawak/CacheMiss", ViaPackage: "npm:astro", Depth: 1, Direct: true,
+				DeclaredVersion: "^5.11.0", AffectedVersions: "< 5.0.8", Verdict: model.VerdictNotAffected,
+			}},
+		}}
+		m := tui.New(&stubSearch{feed: feedWith("CVE-2024-56159")}, explorer, tui.Options{Query: "cve", PageSize: 25})
+		m, _ = apply(m, tea.WindowSizeMsg{Width: 120, Height: 30})
+		m, cmd := apply(m, key("r"))
+		m = deliver(m, cmd)
+		m, cmd = apply(m, key("b"))
+		m = deliver(m, cmd)
+
+		Expect(stripANSI(m.View())).To(ContainSubstring("0 repositories exposed via 1 vulnerable package  ·  1 ruled out by version"))
+	})
+})

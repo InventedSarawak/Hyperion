@@ -245,8 +245,22 @@ func (m Model) graphView() string {
 			styleDim.Render(spinnerFrame(m.spinner)+" walking the dependency graph…"), m.width)
 	}
 
-	summary := fmt.Sprintf("%d repositories exposed via %d vulnerable package(s)",
-		len(m.radius.Repositories), len(m.radius.VulnerablePackages))
+	// Reaching a library is not the same as being exposed to its flaw: count
+	// the repositories whose declared versions rule it out separately.
+	exposed, ruledOut := 0, 0
+	for _, r := range m.radius.Repositories {
+		if r.Verdict == model.VerdictNotAffected {
+			ruledOut++
+		} else {
+			exposed++
+		}
+	}
+	pkgs := len(m.radius.VulnerablePackages)
+	summary := fmt.Sprintf("%d %s exposed via %d vulnerable %s",
+		exposed, plural(exposed, "repository", "repositories"), pkgs, plural(pkgs, "package", "packages"))
+	if ruledOut > 0 {
+		summary += fmt.Sprintf("  ·  %d ruled out by version", ruledOut)
+	}
 	switch {
 	case !m.radius.Linked():
 		summary = "this CVE is not linked to any package yet"

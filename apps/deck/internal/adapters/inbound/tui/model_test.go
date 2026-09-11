@@ -221,7 +221,7 @@ var _ = Describe("TUI model", func() {
 		out = got.View()
 		Expect(out).To(ContainSubstring("Graph Explorer"))
 		Expect(out).To(ContainSubstring("acme/api"))
-		Expect(out).To(ContainSubstring("1 repositories exposed"))
+		Expect(out).To(ContainSubstring("1 repository exposed via 1 vulnerable package"), "unjudged still counts as exposed")
 	})
 
 	It("goes straight to the blast radius on b", func() {
