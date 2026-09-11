@@ -157,8 +157,37 @@ var _ = Describe("Details tab", func() {
 		end, _ := apply(m, key("G"))
 		view := stripANSI(end.View())
 		Expect(view).To(ContainSubstring("FINAL-SENTENCE."))
-		Expect(view).To(MatchRegexp(`- first consequence\s*│\n│\s+- second consequence`), "list items keep their own lines")
+		Expect(view).To(MatchRegexp(`• first consequence\s*│\n│\s+• second consequence`), "list items keep their own lines")
 		Expect(len(viewLines(end))).To(BeNumerically("<=", height))
+	})
+
+	It("renders a Markdown description instead of showing its markup", func() {
+		md := nvdLike
+		md.Description = "### Impact\n\nThe **NO_PROXY** check is `bypassed`.\n\n- first\n- second\n\n" +
+			"See [the advisory](https://example.test/advisory)."
+		details.record = md
+
+		view := stripANSI(open(120, 60, md).View())
+		Expect(view).To(ContainSubstring("Impact"))
+		Expect(view).To(ContainSubstring("NO_PROXY"))
+		Expect(view).To(ContainSubstring("• first"))
+		Expect(view).To(ContainSubstring("• second"))
+		Expect(view).ToNot(ContainSubstring("**"))
+		Expect(view).ToNot(ContainSubstring("`"))
+	})
+
+	It("keeps a URL longer than the panel inside it", func() {
+		long := nvdLike
+		long.Description = "Details at https://example.test/" + strings.Repeat("x", 200) + "/END-OF-URL and after."
+		details.record = long
+
+		const width, height = 80, 60
+		m := open(width, height, long)
+		for _, line := range viewLines(m) {
+			Expect(runewidth.StringWidth(line)).To(BeNumerically("<=", width), "%q wraps", line)
+		}
+		// Word wrap may break the URL at a hyphen; none of it is lost.
+		Expect(stripANSI(m.View())).To(ContainSubstring("OF-URL and after."))
 	})
 
 	It("opens the blast radius from details on enter", func() {

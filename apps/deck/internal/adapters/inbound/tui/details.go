@@ -122,15 +122,9 @@ func (m Model) detailLines() []string {
 	section("Description")
 	if strings.TrimSpace(v.Description) == "" {
 		add(styleDim.Render("  no description"))
-	}
-	paras := paragraphs(v.Description)
-	for i, paragraph := range paras {
-		for _, line := range wrap(paragraph, width-2) {
-			add("  " + line)
-		}
-		// Consecutive list items stay together; anything else is spaced.
-		if i+1 < len(paras) && !(isListItem(paragraph) && isListItem(paras[i+1])) {
-			blank()
+	} else {
+		for _, line := range markdownLines(v.Description, width) {
+			add(line)
 		}
 	}
 
