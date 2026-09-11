@@ -142,6 +142,9 @@ func (c *Client) repository(ctx context.Context, owner, name string) (repository
 	var meta repositoryMeta
 	url := fmt.Sprintf("%s/repos/%s/%s", c.baseURL, owner, name)
 	if err := c.http.GetJSON(ctx, url, &meta); err != nil {
+		if errors.Is(err, sourcehttp.ErrNotFound) {
+			return repositoryMeta{}, repoNotFound{owner: owner, name: name}
+		}
 		return repositoryMeta{}, fmt.Errorf("github repo %s/%s: %w", owner, name, err)
 	}
 	return meta, nil
@@ -174,3 +177,16 @@ func (c *Client) manifestFile(ctx context.Context, owner, name, path string) ([]
 	}
 	return decoded, nil
 }
+
+// repoNotFound is GitHub's 404 for a repository, worded for whoever reads the
+// watchlist: this message is what the Repositories tab shows beside a failed
+// scan. GitHub answers 404 rather than 403 for a private repository the token
+// cannot read, so that possibility is named too.
+type repoNotFound struct{ owner, name string }
+
+func (e repoNotFound) Error() string {
+	return fmt.Sprintf("GitHub has no repository %s/%s — it may have been renamed or deleted, "+
+		"or it is private and the token cannot read it", e.owner, e.name)
+}
+
+func (e repoNotFound) Unwrap() error { return sourcehttp.ErrNotFound }

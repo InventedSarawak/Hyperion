@@ -152,7 +152,10 @@ var _ = Describe("GitHub repository adapter", func() {
 		_, err := githubrepo.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()), sourcehttp.WithRateLimit(time.Millisecond)).
 			Scan(ctx, "acme", "missing")
 
-		Expect(err).To(HaveOccurred())
+		Expect(err).To(MatchError(sourcehttp.ErrNotFound))
+		// This is what the Repositories tab shows beside the failed scan.
+		Expect(err.Error()).To(HavePrefix("GitHub has no repository acme/missing"))
+		Expect(err.Error()).ToNot(ContainSubstring("https://"))
 	})
 
 	It("falls back to the requested identity when the API omits it", func() {
