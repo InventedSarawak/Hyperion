@@ -14,24 +14,53 @@ import (
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/valueobject"
 )
 
-// memRepo is an in-memory VulnerabilityRepo (outbound port) for tests.
+// memRepo is an in-memory VulnerabilityRepo (outbound port) for tests. It
+// resolves aliases and retires replaced keys like the real repo.
 type memRepo struct {
-	store map[string]model.Vulnerability
+	store    map[string]model.Vulnerability
+	upserts  int
+	conflict int // fail this many upserts with ErrConflict first
 }
 
 func newMemRepo() *memRepo { return &memRepo{store: map[string]model.Vulnerability{}} }
 
-func (m *memRepo) Upsert(_ context.Context, v model.Vulnerability) error {
+func (m *memRepo) Upsert(_ context.Context, v model.Vulnerability, replaces ...string) error {
+	m.upserts++
+	if m.conflict > 0 {
+		m.conflict--
+		return ports.ErrConflict
+	}
+	for _, id := range replaces {
+		delete(m.store, id)
+	}
 	m.store[v.CVEID] = v
 	return nil
 }
 
-func (m *memRepo) GetByCVE(_ context.Context, cveID string) (model.Vulnerability, error) {
-	v, ok := m.store[cveID]
-	if !ok {
+func (m *memRepo) FindByIDs(_ context.Context, ids []string) ([]model.Vulnerability, error) {
+	want := map[string]bool{}
+	for _, id := range ids {
+		want[id] = true
+	}
+	var out []model.Vulnerability
+	for _, v := range m.store {
+		for _, id := range v.IDs() {
+			if want[id] {
+				out = append(out, v)
+				break
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CVEID < out[j].CVEID })
+	return out, nil
+}
+
+func (m *memRepo) GetByID(ctx context.Context, id string) (model.Vulnerability, error) {
+	found, _ := m.FindByIDs(ctx, []string{id})
+	if len(found) == 0 {
 		return model.Vulnerability{}, ports.ErrNotFound
 	}
-	return v, nil
+	return found[0], nil
 }
 
 func (m *memRepo) Count(_ context.Context) (int, error) { return len(m.store), nil }
@@ -99,7 +128,7 @@ var _ = Describe("IngestSignal use case", func() {
 		})
 		Expect(err).ToNot(HaveOccurred())
 
-		got, err := repo.GetByCVE(ctx, "CVE-2021-44228")
+		got, err := repo.GetByID(ctx, "CVE-2021-44228")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got.Sources).To(Equal([]string{"nvd"}))
 	})
@@ -119,7 +148,7 @@ var _ = Describe("IngestSignal use case", func() {
 		count, _ := repo.Count(ctx)
 		Expect(count).To(Equal(1))
 
-		got, _ := repo.GetByCVE(ctx, "CVE-1")
+		got, _ := repo.GetByID(ctx, "CVE-1")
 		Expect(got.Description).To(Equal("updated"))
 		Expect(got.Sources).To(ConsistOf("nvd", "cisa_kev"))
 	})
@@ -240,7 +269,7 @@ var _ = Describe("IngestSignal alerting", func() {
 		})).To(Succeed())
 		Expect(ingest.Handle(ctx, model.Vulnerability{CVEID: "CVE-1", Sources: []string{"nvd"}})).To(Succeed())
 
-		stored, err := repo.GetByCVE(ctx, "CVE-1")
+		stored, err := repo.GetByID(ctx, "CVE-1")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(stored.AffectedPackages).To(HaveLen(1))
 		Expect(alerter.seen).To(HaveLen(2))
@@ -256,5 +285,98 @@ var _ = Describe("IngestSignal alerting", func() {
 		Expect(err).ToNot(HaveOccurred())
 		count, _ := repo.Count(ctx)
 		Expect(count).To(Equal(1))
+	})
+})
+
+// rekeyGraph records the graph writes ingest makes. Methods it does not
+// override panic through the nil embedded interface.
+type rekeyGraph struct {
+	ports.DependencyGraph
+	linked  []string
+	removed []string
+}
+
+func (g *rekeyGraph) LinkVulnerability(_ context.Context, id string, _ []valueobject.PackageRef) error {
+	g.linked = append(g.linked, id)
+	return nil
+}
+
+func (g *rekeyGraph) RemoveVulnerabilities(_ context.Context, ids []string) error {
+	g.removed = append(g.removed, ids...)
+	return nil
+}
+
+var _ = Describe("IngestSignal identity", func() {
+	const (
+		cve  = "CVE-2021-44228"
+		ghsa = "GHSA-jfh8-c2jp-5v3q"
+	)
+	ctx := context.Background()
+
+	It("files a report under its CVE, findable by its GHSA", func() {
+		repo := newMemRepo()
+		Expect(commands.NewIngestSignal(repo, &memIndex{}, nil, nil).
+			Handle(ctx, model.Vulnerability{CVEID: ghsa, Aliases: []string{cve}})).To(Succeed())
+
+		got, err := repo.GetByID(ctx, ghsa)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got.CVEID).To(Equal(cve))
+	})
+
+	It("moves a finding filed under its GHSA onto its CVE once a report links them", func() {
+		repo, index, graph := newMemRepo(), &memIndex{}, &rekeyGraph{}
+		ingest := commands.NewIngestSignal(repo, index, graph, nil)
+		pkgs := []valueobject.PackageRef{valueobject.NewPackageRef("npm", "lodash", "< 4.17.21")}
+
+		Expect(ingest.Handle(ctx, model.Vulnerability{CVEID: ghsa, Title: "Log4Shell", Sources: []string{"github"}, AffectedPackages: pkgs})).To(Succeed())
+		Expect(ingest.Handle(ctx, model.Vulnerability{CVEID: cve, Aliases: []string{ghsa}, Sources: []string{"osv"}})).To(Succeed())
+
+		Expect(repo.store).To(HaveLen(1))
+		got := repo.store[cve]
+		Expect(got.Title).To(Equal("Log4Shell"), "nothing the old record knew is lost")
+		Expect(got.Sources).To(ConsistOf("github", "osv"))
+		Expect(got.AffectedPackages).To(HaveLen(1))
+		Expect(index.deleted).To(Equal([]string{ghsa}), "no second search hit under the old id")
+		Expect(graph.removed).To(Equal([]string{ghsa}))
+		Expect(graph.linked).To(Equal([]string{ghsa, cve}), "the new node keeps the old one's packages")
+	})
+
+	It("merges findings that were stored apart once a report shows they are one", func() {
+		repo := newMemRepo()
+		ingest := commands.NewIngestSignal(repo, &memIndex{}, nil, nil)
+		Expect(ingest.Handle(ctx, model.Vulnerability{CVEID: cve, Sources: []string{"nvd"}})).To(Succeed())
+		Expect(ingest.Handle(ctx, model.Vulnerability{CVEID: ghsa, Sources: []string{"github"}})).To(Succeed())
+		Expect(repo.store).To(HaveLen(2))
+
+		Expect(ingest.Handle(ctx, model.Vulnerability{CVEID: "PYSEC-2021-1", Aliases: []string{cve, ghsa}, Sources: []string{"osv"}})).To(Succeed())
+
+		Expect(repo.store).To(HaveLen(1))
+		Expect(repo.store[cve].Sources).To(ConsistOf("nvd", "github", "osv"))
+		Expect(repo.store[cve].Aliases).To(Equal([]string{ghsa, "PYSEC-2021-1"}))
+	})
+
+	It("keeps a finding flagged as malware when a later feed does not say so", func() {
+		repo := newMemRepo()
+		ingest := commands.NewIngestSignal(repo, &memIndex{}, nil, nil)
+		Expect(ingest.Handle(ctx, model.Vulnerability{CVEID: "GHSA-fw8c-xr5c-95f9", Kind: model.KindMalware})).To(Succeed())
+		Expect(ingest.Handle(ctx, model.Vulnerability{CVEID: "GHSA-fw8c-xr5c-95f9", Title: "axios"})).To(Succeed())
+
+		Expect(repo.store["GHSA-fw8c-xr5c-95f9"].IsMalware()).To(BeTrue())
+	})
+
+	It("retries a write that raced another worker", func() {
+		repo := newMemRepo()
+		repo.conflict = 1
+		Expect(commands.NewIngestSignal(repo, &memIndex{}, nil, nil).Handle(ctx, model.Vulnerability{CVEID: cve})).To(Succeed())
+		Expect(repo.upserts).To(Equal(2))
+		Expect(repo.store).To(HaveKey(cve))
+	})
+
+	It("gives up when the conflict does not clear", func() {
+		repo := newMemRepo()
+		repo.conflict = 100
+		err := commands.NewIngestSignal(repo, &memIndex{}, nil, nil).Handle(ctx, model.Vulnerability{CVEID: cve})
+		Expect(err).To(MatchError(ports.ErrConflict))
+		Expect(repo.upserts).To(Equal(3))
 	})
 })

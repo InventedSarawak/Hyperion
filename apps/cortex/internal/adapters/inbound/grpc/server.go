@@ -38,7 +38,7 @@ type BlastRadiusCalculator interface {
 
 // VulnerabilityReader loads one finding from the store of record.
 type VulnerabilityReader interface {
-	GetByCVE(ctx context.Context, cveID string) (model.Vulnerability, error)
+	GetByID(ctx context.Context, cveID string) (model.Vulnerability, error)
 }
 
 // Server implements intelv1.IntelligenceServiceServer.
@@ -63,7 +63,7 @@ func (s *Server) GetVulnerability(ctx context.Context, req *intelv1.GetVulnerabi
 	if id == "" {
 		return nil, status.Error(codes.InvalidArgument, "get vulnerability: id must not be empty")
 	}
-	v, err := s.vulns.GetByCVE(ctx, id)
+	v, err := s.vulns.GetByID(ctx, id)
 	switch {
 	case errors.Is(err, ports.ErrNotFound):
 		return nil, status.Errorf(codes.NotFound, "no finding %s", id)

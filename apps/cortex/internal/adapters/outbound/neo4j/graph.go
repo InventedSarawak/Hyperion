@@ -274,6 +274,38 @@ ON CREATE SET l.ecosystem = pkg.ecosystem, l.name = pkg.name
 MERGE (l)-[a:AFFECTED_BY]->(v)
 SET a.affected_version = pkg.version`
 
+const removeVulnerabilitiesCypher = `
+MATCH (v:Vulnerability) WHERE v.cve_id IN $ids
+DETACH DELETE v`
+
+// RemoveVulnerabilities deletes findings' nodes and every AFFECTED_BY edge to
+// them. Libraries stay: repositories still depend on them.
+func (g *Graph) RemoveVulnerabilities(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	params := make([]any, 0, len(ids))
+	for _, id := range ids {
+		params = append(params, id)
+	}
+
+	session := g.session(ctx, driver.AccessModeWrite)
+	defer session.Close(ctx)
+
+	_, err := session.ExecuteWrite(ctx, func(tx driver.ManagedTransaction) (any, error) {
+		result, err := tx.Run(ctx, removeVulnerabilitiesCypher, map[string]any{"ids": params})
+		if err != nil {
+			return nil, err
+		}
+		_, err = result.Consume(ctx)
+		return nil, err
+	})
+	if err != nil {
+		return fmt.Errorf("neo4j: remove vulnerabilities %v: %w", ids, err)
+	}
+	return nil
+}
+
 // LinkVulnerability records that a CVE affects the given libraries. An empty
 // package list is a no-op rather than an orphan Vulnerability node: most CVEs
 // never name a package, and materializing them all would bloat the graph with

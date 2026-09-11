@@ -111,7 +111,7 @@ var _ = Describe("ReindexSearch reconciliation", func() {
 })
 
 // lateRepo hides one record from Scan — as if it was written after the walk
-// had passed its position — while still answering GetByCVE for it.
+// had passed its position — while still answering GetByID for it.
 type lateRepo struct {
 	*memRepo
 	hidden string

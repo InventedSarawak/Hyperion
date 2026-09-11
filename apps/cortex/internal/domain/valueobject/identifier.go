@@ -123,12 +123,12 @@ func Canonical(ids ...string) (string, []string) {
 			aliases = append(aliases, id.Value)
 		}
 	}
-	sortIdentifiers(aliases)
+	SortIDs(aliases)
 	return parsed[best].Value, aliases
 }
 
-// sortIdentifiers orders ids by scheme rank, then value.
-func sortIdentifiers(ids []string) {
+// SortIDs orders ids by scheme rank, then value, in place.
+func SortIDs(ids []string) {
 	for i := 1; i < len(ids); i++ {
 		for j := i; j > 0; j-- {
 			a, _ := ParseIdentifier(ids[j-1])

@@ -40,6 +40,8 @@ func (m *memGraph) LinkVulnerability(_ context.Context, cveID string, pkgs []val
 	return nil
 }
 
+func (m *memGraph) RemoveVulnerabilities(context.Context, []string) error { return nil }
+
 func (m *memGraph) FindBlastRadius(context.Context, string, int, int) (model.BlastRadius, error) {
 	return model.BlastRadius{}, nil
 }

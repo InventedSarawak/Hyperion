@@ -36,6 +36,11 @@ type DependencyGraph interface {
 	// creating library nodes that no repository has referenced yet.
 	LinkVulnerability(ctx context.Context, cveID string, packages []valueobject.PackageRef) error
 
+	// RemoveVulnerabilities deletes findings' nodes and every edge to them.
+	// It is how a finding re-keyed onto a new canonical id (a GHSA that
+	// gained a CVE) stops appearing twice. Removing an absent node succeeds.
+	RemoveVulnerabilities(ctx context.Context, ids []string) error
+
 	// FindBlastRadius walks outwards from the libraries a CVE affects and
 	// returns the repositories exposed to it, within maxDepth DEPENDS_ON hops.
 	FindBlastRadius(ctx context.Context, cveID string, maxDepth, limit int) (model.BlastRadius, error)

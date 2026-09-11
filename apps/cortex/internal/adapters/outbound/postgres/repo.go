@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/model"
@@ -26,11 +27,20 @@ type Repo struct {
 // NewRepo wraps a pgx pool as a VulnerabilityRepo.
 func NewRepo(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
 
+// selectVulnerability reads rows with their aliases folded in.
+const selectVulnerability = `
+SELECT v.cve_id, v.kind, v.title, v.description, v.scores, v.reference_urls, v.sources,
+       v.affected_packages, v.published_at, v.modified_at,
+       COALESCE((SELECT array_agg(a.alias) FROM finding_aliases a WHERE a.cve_id = v.cve_id), '{}')
+FROM vulnerabilities v`
+
 const upsertSQL = `
 INSERT INTO vulnerabilities
-    (cve_id, title, description, scores, reference_urls, sources, affected_packages, published_at, modified_at, first_seen_at, last_seen_at)
-VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, now(), now())
+    (cve_id, kind, title, description, scores, reference_urls, sources, affected_packages,
+     published_at, modified_at, first_seen_at, last_seen_at)
+VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, COALESCE($11::timestamptz, now()), now())
 ON CONFLICT (cve_id) DO UPDATE SET
+    kind              = EXCLUDED.kind,
     title             = EXCLUDED.title,
     description       = EXCLUDED.description,
     scores            = EXCLUDED.scores,
@@ -39,11 +49,26 @@ ON CONFLICT (cve_id) DO UPDATE SET
     affected_packages = EXCLUDED.affected_packages,
     published_at      = EXCLUDED.published_at,
     modified_at       = EXCLUDED.modified_at,
+    first_seen_at     = LEAST(vulnerabilities.first_seen_at, EXCLUDED.first_seen_at),
     last_seen_at      = now();`
 
-// Upsert inserts or overwrites the row for v.CVEID. The application layer has
-// already merged with any existing record, so overwrite is the correct action.
-func (r *Repo) Upsert(ctx context.Context, v model.Vulnerability) error {
+// conflictSQL finds an id of the record being written that already names a
+// finding the write is not replacing: as another finding's alias ($1 is
+// every id, $2 the canonical one), or as another finding's key ($4 is the
+// aliases alone). $3 is the keys being replaced.
+const conflictSQL = `
+SELECT a.alias FROM finding_aliases a
+WHERE a.alias = ANY($1::text[]) AND a.cve_id <> $2 AND a.cve_id <> ALL($3::text[])
+UNION ALL
+SELECT v.cve_id FROM vulnerabilities v
+WHERE v.cve_id = ANY($4::text[]) AND v.cve_id <> ALL($3::text[])
+LIMIT 1;`
+
+// Upsert writes v under its canonical id and retires the keys it replaces,
+// all in one transaction, so a re-keyed finding is never missing or doubled.
+// The application layer has already merged every record involved, so
+// overwriting is the correct action.
+func (r *Repo) Upsert(ctx context.Context, v model.Vulnerability, replaces ...string) error {
 	scores, err := json.Marshal(v.Scores)
 	if err != nil {
 		return fmt.Errorf("postgres: marshal scores: %w", err)
@@ -61,43 +86,170 @@ func (r *Repo) Upsert(ctx context.Context, v model.Vulnerability) error {
 		return fmt.Errorf("postgres: marshal affected packages: %w", err)
 	}
 
-	_, err = r.pool.Exec(ctx, upsertSQL,
-		v.CVEID, v.Title, v.Description,
-		string(scores), string(refs), string(sources), string(packages),
-		nullableTime(v.PublishedAt), nullableTime(v.ModifiedAt),
-	)
+	// Never nil: pgx sends a nil slice as NULL, and "<> ALL(NULL)" is NULL,
+	// which would quietly let every conflict through.
+	aliases := append([]string{}, v.Aliases...)
+	retired := make([]string, 0, len(replaces))
+	for _, id := range replaces {
+		if id != v.CVEID {
+			retired = append(retired, id)
+		}
+	}
+	kind := v.Kind
+	if kind == "" {
+		kind = model.KindVulnerability
+	}
+
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
+		return fmt.Errorf("postgres: upsert %s: begin: %w", v.CVEID, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var taken string
+	err = tx.QueryRow(ctx, conflictSQL, append([]string{v.CVEID}, aliases...), v.CVEID, retired, aliases).Scan(&taken)
+	switch {
+	case err == nil:
+		return fmt.Errorf("postgres: upsert %s: %s: %w", v.CVEID, taken, ports.ErrConflict)
+	case !errors.Is(err, pgx.ErrNoRows):
+		return fmt.Errorf("postgres: upsert %s: check ids: %w", v.CVEID, err)
+	}
+
+	// The finding was first seen when its earliest key was.
+	var firstSeen *time.Time
+	if len(retired) > 0 {
+		if err := tx.QueryRow(ctx,
+			`SELECT min(first_seen_at) FROM vulnerabilities WHERE cve_id = ANY($1::text[]);`, retired,
+		).Scan(&firstSeen); err != nil {
+			return fmt.Errorf("postgres: upsert %s: read retired keys: %w", v.CVEID, err)
+		}
+		// Alerts point at a finding by id; keep them pointing at it.
+		if _, err := tx.Exec(ctx,
+			`UPDATE alerts SET cve_id = $1 WHERE cve_id = ANY($2::text[]);`, v.CVEID, retired,
+		); err != nil {
+			return fmt.Errorf("postgres: upsert %s: move alerts: %w", v.CVEID, err)
+		}
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM vulnerabilities WHERE cve_id = ANY($1::text[]);`, retired,
+		); err != nil {
+			return fmt.Errorf("postgres: upsert %s: retire old keys: %w", v.CVEID, err)
+		}
+	}
+
+	if _, err := tx.Exec(ctx, upsertSQL,
+		v.CVEID, string(kind), v.Title, v.Description,
+		string(scores), string(refs), string(sources), string(packages),
+		nullableTime(v.PublishedAt), nullableTime(v.ModifiedAt), firstSeen,
+	); err != nil {
 		return fmt.Errorf("postgres: upsert %s: %w", v.CVEID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `DELETE FROM finding_aliases WHERE cve_id = $1;`, v.CVEID); err != nil {
+		return fmt.Errorf("postgres: upsert %s: clear aliases: %w", v.CVEID, err)
+	}
+	if len(aliases) > 0 {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO finding_aliases (alias, cve_id) SELECT unnest($1::text[]), $2;`, aliases, v.CVEID,
+		); err != nil {
+			return fmt.Errorf("postgres: upsert %s: write aliases: %w", v.CVEID, asConflict(err))
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("postgres: upsert %s: commit: %w", v.CVEID, asConflict(err))
 	}
 	return nil
 }
 
-const getByCVESQL = `
-SELECT cve_id, title, description, scores, reference_urls, sources, affected_packages, published_at, modified_at
-FROM vulnerabilities
-WHERE cve_id = $1;`
-
-// GetByCVE loads one vulnerability, or ports.ErrNotFound.
-func (r *Repo) GetByCVE(ctx context.Context, cveID string) (model.Vulnerability, error) {
-	var (
-		v                        model.Vulnerability
-		scores, refs, srcs, pkgs []byte
-		published, modified      *time.Time
-	)
-	err := r.pool.QueryRow(ctx, getByCVESQL, cveID).Scan(
-		&v.CVEID, &v.Title, &v.Description, &scores, &refs, &srcs, &pkgs, &published, &modified,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return model.Vulnerability{}, ports.ErrNotFound
+// asConflict reports a unique violation — two writers claiming one id at the
+// same moment, past the check above — as the domain's conflict.
+func asConflict(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return ports.ErrConflict
 	}
+	return err
+}
+
+// findByIDsSQL resolves ids through both keys and aliases. Written as a join
+// on a union rather than an OR so each side is an index lookup.
+const findByIDsSQL = `
+WITH hits AS (
+    SELECT unnest($1::text[]) AS cve_id
+    UNION
+    SELECT cve_id FROM finding_aliases WHERE alias = ANY($1::text[])
+)` + selectVulnerability + `
+JOIN hits h ON h.cve_id = v.cve_id
+ORDER BY v.cve_id;`
+
+// FindByIDs loads every finding known by any of ids.
+func (r *Repo) FindByIDs(ctx context.Context, ids []string) ([]model.Vulnerability, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := r.pool.Query(ctx, findByIDsSQL, ids)
 	if err != nil {
-		return model.Vulnerability{}, fmt.Errorf("postgres: get %s: %w", cveID, err)
+		return nil, fmt.Errorf("postgres: find %v: %w", ids, err)
 	}
+	return collectVulnerabilities(rows)
+}
 
-	if err := decodeVulnerability(&v, scores, refs, srcs, pkgs, published, modified); err != nil {
+// GetByID loads the finding known by id, or ports.ErrNotFound.
+func (r *Repo) GetByID(ctx context.Context, id string) (model.Vulnerability, error) {
+	found, err := r.FindByIDs(ctx, []string{id})
+	if err != nil {
 		return model.Vulnerability{}, err
 	}
-	return v, nil
+	if len(found) == 0 {
+		return model.Vulnerability{}, ports.ErrNotFound
+	}
+	return found[0], nil
+}
+
+const scanSQL = selectVulnerability + `
+WHERE v.cve_id > $1
+ORDER BY v.cve_id
+LIMIT $2;`
+
+// Scan walks the table in canonical-id order, one page at a time.
+func (r *Repo) Scan(ctx context.Context, afterCVE string, limit int) ([]model.Vulnerability, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := r.pool.Query(ctx, scanSQL, afterCVE, limit)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: scan: %w", err)
+	}
+	return collectVulnerabilities(rows)
+}
+
+// collectVulnerabilities decodes every row of a selectVulnerability query.
+func collectVulnerabilities(rows pgx.Rows) ([]model.Vulnerability, error) {
+	defer rows.Close()
+	var out []model.Vulnerability
+	for rows.Next() {
+		var (
+			v                        model.Vulnerability
+			kind                     string
+			scores, refs, srcs, pkgs []byte
+			published, modified      *time.Time
+			aliases                  []string
+		)
+		if err := rows.Scan(&v.CVEID, &kind, &v.Title, &v.Description, &scores, &refs, &srcs, &pkgs,
+			&published, &modified, &aliases); err != nil {
+			return nil, fmt.Errorf("postgres: scan row: %w", err)
+		}
+		v.Kind = model.FindingKind(kind)
+		if len(aliases) > 0 {
+			valueobject.SortIDs(aliases)
+			v.Aliases = aliases
+		}
+		if err := decodeVulnerability(&v, scores, refs, srcs, pkgs, published, modified); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }
 
 // decodeVulnerability fills the JSON and nullable columns of a row into v.
@@ -123,43 +275,6 @@ func decodeVulnerability(v *model.Vulnerability, scores, refs, srcs, pkgs []byte
 		v.ModifiedAt = *modified
 	}
 	return nil
-}
-
-const scanSQL = `
-SELECT cve_id, title, description, scores, reference_urls, sources, affected_packages, published_at, modified_at
-FROM vulnerabilities
-WHERE cve_id > $1
-ORDER BY cve_id
-LIMIT $2;`
-
-// Scan walks the table in CVE-id order, one page at a time.
-func (r *Repo) Scan(ctx context.Context, afterCVE string, limit int) ([]model.Vulnerability, error) {
-	if limit <= 0 {
-		limit = 500
-	}
-	rows, err := r.pool.Query(ctx, scanSQL, afterCVE, limit)
-	if err != nil {
-		return nil, fmt.Errorf("postgres: scan: %w", err)
-	}
-	defer rows.Close()
-
-	var out []model.Vulnerability
-	for rows.Next() {
-		var (
-			v                        model.Vulnerability
-			scores, refs, srcs, pkgs []byte
-			published, modified      *time.Time
-		)
-		if err := rows.Scan(&v.CVEID, &v.Title, &v.Description, &scores, &refs, &srcs, &pkgs,
-			&published, &modified); err != nil {
-			return nil, fmt.Errorf("postgres: scan row: %w", err)
-		}
-		if err := decodeVulnerability(&v, scores, refs, srcs, pkgs, published, modified); err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	return out, rows.Err()
 }
 
 // Count returns the number of stored vulnerabilities.

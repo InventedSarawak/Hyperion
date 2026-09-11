@@ -71,7 +71,7 @@ var _ = Describe("Postgres Repo (integration)", func() {
 		}
 		Expect(repo.Upsert(ctx, in)).To(Succeed())
 
-		got, err := repo.GetByCVE(ctx, "CVE-2021-44228")
+		got, err := repo.GetByID(ctx, "CVE-2021-44228")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got.Description).To(Equal("log4shell"))
 		Expect(got.Scores).To(HaveLen(1))
@@ -81,7 +81,7 @@ var _ = Describe("Postgres Repo (integration)", func() {
 	})
 
 	It("returns ErrNotFound for an unknown CVE", func() {
-		_, err := repo.GetByCVE(ctx, "CVE-0000-0000")
+		_, err := repo.GetByID(ctx, "CVE-0000-0000")
 		Expect(err).To(MatchError(ports.ErrNotFound))
 	})
 
@@ -93,7 +93,7 @@ var _ = Describe("Postgres Repo (integration)", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(n).To(Equal(1))
 
-		got, _ := repo.GetByCVE(ctx, "CVE-1")
+		got, _ := repo.GetByID(ctx, "CVE-1")
 		Expect(got.Description).To(Equal("new"))
 	})
 })
@@ -151,7 +151,7 @@ var _ = Describe("Postgres affected packages (integration)", func() {
 			},
 		})).To(Succeed())
 
-		got, err := repo.GetByCVE(ctx, "CVE-2021-44228")
+		got, err := repo.GetByID(ctx, "CVE-2021-44228")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got.AffectedPackages).To(HaveLen(2))
 		Expect(got.AffectedPackages[0].Key()).To(Equal("maven:org.apache.logging.log4j:log4j-core"))
@@ -167,13 +167,13 @@ var _ = Describe("Postgres affected packages (integration)", func() {
 			AffectedPackages: []valueobject.PackageRef{valueobject.NewPackageRef("npm", "lodash", "< 4.17.21")},
 		})).To(Succeed())
 
-		stored, err := repo.GetByCVE(ctx, "CVE-2021-23337")
+		stored, err := repo.GetByID(ctx, "CVE-2021-23337")
 		Expect(err).ToNot(HaveOccurred())
 
 		merged := stored.Merge(model.Vulnerability{CVEID: "CVE-2021-23337", Description: "from nvd"})
 		Expect(repo.Upsert(ctx, merged)).To(Succeed())
 
-		got, err := repo.GetByCVE(ctx, "CVE-2021-23337")
+		got, err := repo.GetByID(ctx, "CVE-2021-23337")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got.Description).To(Equal("from nvd"))
 		Expect(got.AffectedPackages).To(HaveLen(1))
@@ -181,7 +181,7 @@ var _ = Describe("Postgres affected packages (integration)", func() {
 
 	It("stores an empty list rather than null for a CVE with no packages", func() {
 		Expect(repo.Upsert(ctx, model.Vulnerability{CVEID: "CVE-2000-0001"})).To(Succeed())
-		got, err := repo.GetByCVE(ctx, "CVE-2000-0001")
+		got, err := repo.GetByID(ctx, "CVE-2000-0001")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got.AffectedPackages).To(BeNil())
 	})

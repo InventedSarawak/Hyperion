@@ -31,6 +31,11 @@ func (g *Graph) LinkVulnerability(context.Context, string, []valueobject.Package
 	return ports.ErrGraphUnavailable
 }
 
+// RemoveVulnerabilities reports that there is no graph to remove from.
+func (g *Graph) RemoveVulnerabilities(context.Context, []string) error {
+	return ports.ErrGraphUnavailable
+}
+
 // FindBlastRadius reports that the question cannot be answered.
 func (g *Graph) FindBlastRadius(context.Context, string, int, int) (model.BlastRadius, error) {
 	return model.BlastRadius{}, ports.ErrGraphUnavailable

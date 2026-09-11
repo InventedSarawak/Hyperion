@@ -29,7 +29,7 @@ type AlertingReader interface {
 // VulnerabilityLookup resolves the record an alert points at, so a listing can
 // show what actually happened rather than a bare CVE id.
 type VulnerabilityLookup interface {
-	GetByCVE(ctx context.Context, cveID string) (model.Vulnerability, error)
+	GetByID(ctx context.Context, cveID string) (model.Vulnerability, error)
 }
 
 // AlertingServer implements alertingv1.AlertingServiceServer.
@@ -139,7 +139,7 @@ func (s *AlertingServer) lookup(ctx context.Context, cveID string) *commonv1.Vul
 	if s.vulns == nil {
 		return nil
 	}
-	v, err := s.vulns.GetByCVE(ctx, cveID)
+	v, err := s.vulns.GetByID(ctx, cveID)
 	if err != nil {
 		return nil
 	}

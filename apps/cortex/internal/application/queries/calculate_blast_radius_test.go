@@ -29,6 +29,8 @@ func (g *recordingGraph) LinkVulnerability(context.Context, string, []valueobjec
 	return nil
 }
 
+func (g *recordingGraph) RemoveVulnerabilities(context.Context, []string) error { return nil }
+
 func (g *recordingGraph) FindBlastRadius(_ context.Context, cveID string, depth, limit int) (model.BlastRadius, error) {
 	g.cveID, g.depth, g.limit = cveID, depth, limit
 	return g.result, nil

@@ -88,7 +88,7 @@ func (c *ReindexSearch) removeOrphans(ctx context.Context, written map[string]st
 		if _, ok := written[id]; ok {
 			continue
 		}
-		_, err := c.repo.GetByCVE(ctx, id)
+		_, err := c.repo.GetByID(ctx, id)
 		switch {
 		case err == nil:
 			continue // arrived during the reindex; it belongs
