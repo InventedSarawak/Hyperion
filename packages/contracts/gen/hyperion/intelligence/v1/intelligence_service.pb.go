@@ -23,11 +23,66 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// SearchSort orders search results.
+type SearchSort int32
+
+const (
+	SearchSort_SEARCH_SORT_UNSPECIFIED SearchSort = 0 // treated as RELEVANCE
+	// Best match first. Equal scores fall back to newest, then CVE id, so the
+	// order — and therefore paging — is stable across requests.
+	SearchSort_SEARCH_SORT_RELEVANCE SearchSort = 1
+	// Most recently published first. The only sort that accepts an empty
+	// query: "the newest findings" is a bounded, paged read, not an index scan.
+	SearchSort_SEARCH_SORT_NEWEST SearchSort = 2
+)
+
+// Enum value maps for SearchSort.
+var (
+	SearchSort_name = map[int32]string{
+		0: "SEARCH_SORT_UNSPECIFIED",
+		1: "SEARCH_SORT_RELEVANCE",
+		2: "SEARCH_SORT_NEWEST",
+	}
+	SearchSort_value = map[string]int32{
+		"SEARCH_SORT_UNSPECIFIED": 0,
+		"SEARCH_SORT_RELEVANCE":   1,
+		"SEARCH_SORT_NEWEST":      2,
+	}
+)
+
+func (x SearchSort) Enum() *SearchSort {
+	p := new(SearchSort)
+	*p = x
+	return p
+}
+
+func (x SearchSort) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SearchSort) Descriptor() protoreflect.EnumDescriptor {
+	return file_hyperion_intelligence_v1_intelligence_service_proto_enumTypes[0].Descriptor()
+}
+
+func (SearchSort) Type() protoreflect.EnumType {
+	return &file_hyperion_intelligence_v1_intelligence_service_proto_enumTypes[0]
+}
+
+func (x SearchSort) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SearchSort.Descriptor instead.
+func (SearchSort) EnumDescriptor() ([]byte, []int) {
+	return file_hyperion_intelligence_v1_intelligence_service_proto_rawDescGZIP(), []int{0}
+}
+
 type SearchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Query         string                 `protobuf:"bytes,1,opt,name=query,proto3" json:"query,omitempty"` // free-text, e.g. "log4j"
+	Query         string                 `protobuf:"bytes,1,opt,name=query,proto3" json:"query,omitempty"` // free-text, e.g. "log4j"; may be empty with SEARCH_SORT_NEWEST
 	PageSize      int32                  `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
 	PageToken     string                 `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	Sort          SearchSort             `protobuf:"varint,4,opt,name=sort,proto3,enum=hyperion.intelligence.v1.SearchSort" json:"sort,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -81,6 +136,13 @@ func (x *SearchRequest) GetPageToken() string {
 		return x.PageToken
 	}
 	return ""
+}
+
+func (x *SearchRequest) GetSort() SearchSort {
+	if x != nil {
+		return x.Sort
+	}
+	return SearchSort_SEARCH_SORT_UNSPECIFIED
 }
 
 type SearchResult struct {
@@ -138,9 +200,14 @@ func (x *SearchResult) GetScore() float64 {
 type SearchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Results       []*SearchResult        `protobuf:"bytes,1,rep,name=results,proto3" json:"results,omitempty"`
-	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	NextPageToken string                 `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"` // empty when there are no more results
+	// How many results the query matches in total, so a client can say
+	// "50 of 812". Elasticsearch stops counting at 10,000; beyond that this is a
+	// floor and total_is_lower_bound is set.
+	TotalResults      int64 `protobuf:"varint,3,opt,name=total_results,json=totalResults,proto3" json:"total_results,omitempty"`
+	TotalIsLowerBound bool  `protobuf:"varint,4,opt,name=total_is_lower_bound,json=totalIsLowerBound,proto3" json:"total_is_lower_bound,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *SearchResponse) Reset() {
@@ -185,6 +252,20 @@ func (x *SearchResponse) GetNextPageToken() string {
 		return x.NextPageToken
 	}
 	return ""
+}
+
+func (x *SearchResponse) GetTotalResults() int64 {
+	if x != nil {
+		return x.TotalResults
+	}
+	return 0
+}
+
+func (x *SearchResponse) GetTotalIsLowerBound() bool {
+	if x != nil {
+		return x.TotalIsLowerBound
+	}
+	return false
 }
 
 type IngestDependenciesRequest struct {
@@ -532,18 +613,21 @@ var File_hyperion_intelligence_v1_intelligence_service_proto protoreflect.FileDe
 
 const file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc = "" +
 	"\n" +
-	"3hyperion/intelligence/v1/intelligence_service.proto\x12\x18hyperion.intelligence.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a hyperion/common/v1/package.proto\x1a#hyperion/common/v1/repository.proto\x1a&hyperion/common/v1/vulnerability.proto\"a\n" +
+	"3hyperion/intelligence/v1/intelligence_service.proto\x12\x18hyperion.intelligence.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a hyperion/common/v1/package.proto\x1a#hyperion/common/v1/repository.proto\x1a&hyperion/common/v1/vulnerability.proto\"\x9b\x01\n" +
 	"\rSearchRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12\x1b\n" +
 	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
-	"page_token\x18\x03 \x01(\tR\tpageToken\"m\n" +
+	"page_token\x18\x03 \x01(\tR\tpageToken\x128\n" +
+	"\x04sort\x18\x04 \x01(\x0e2$.hyperion.intelligence.v1.SearchSortR\x04sort\"m\n" +
 	"\fSearchResult\x12G\n" +
 	"\rvulnerability\x18\x01 \x01(\v2!.hyperion.common.v1.VulnerabilityR\rvulnerability\x12\x14\n" +
-	"\x05score\x18\x02 \x01(\x01R\x05score\"z\n" +
+	"\x05score\x18\x02 \x01(\x01R\x05score\"\xd0\x01\n" +
 	"\x0eSearchResponse\x12@\n" +
 	"\aresults\x18\x01 \x03(\v2&.hyperion.intelligence.v1.SearchResultR\aresults\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xce\x02\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\x12#\n" +
+	"\rtotal_results\x18\x03 \x01(\x03R\ftotalResults\x12/\n" +
+	"\x14total_is_lower_bound\x18\x04 \x01(\bR\x11totalIsLowerBound\"\xce\x02\n" +
 	"\x19IngestDependenciesRequest\x12>\n" +
 	"\n" +
 	"repository\x18\x01 \x01(\v2\x1e.hyperion.common.v1.RepositoryR\n" +
@@ -573,7 +657,12 @@ const file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc = "" +
 	"\x06cve_id\x18\x01 \x01(\tR\x05cveId\x12O\n" +
 	"\x13vulnerable_packages\x18\x02 \x03(\v2\x1e.hyperion.common.v1.PackageRefR\x12vulnerablePackages\x12P\n" +
 	"\frepositories\x18\x03 \x03(\v2,.hyperion.intelligence.v1.ImpactedRepositoryR\frepositories\x12-\n" +
-	"\x12total_repositories\x18\x04 \x01(\x05R\x11totalRepositories2\xe8\x02\n" +
+	"\x12total_repositories\x18\x04 \x01(\x05R\x11totalRepositories*\\\n" +
+	"\n" +
+	"SearchSort\x12\x1b\n" +
+	"\x17SEARCH_SORT_UNSPECIFIED\x10\x00\x12\x19\n" +
+	"\x15SEARCH_SORT_RELEVANCE\x10\x01\x12\x16\n" +
+	"\x12SEARCH_SORT_NEWEST\x10\x022\xe8\x02\n" +
 	"\x13IntelligenceService\x12[\n" +
 	"\x06Search\x12'.hyperion.intelligence.v1.SearchRequest\x1a(.hyperion.intelligence.v1.SearchResponse\x12\x7f\n" +
 	"\x12IngestDependencies\x123.hyperion.intelligence.v1.IngestDependenciesRequest\x1a4.hyperion.intelligence.v1.IngestDependenciesResponse\x12s\n" +
@@ -592,47 +681,50 @@ func file_hyperion_intelligence_v1_intelligence_service_proto_rawDescGZIP() []by
 	return file_hyperion_intelligence_v1_intelligence_service_proto_rawDescData
 }
 
+var file_hyperion_intelligence_v1_intelligence_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_hyperion_intelligence_v1_intelligence_service_proto_goTypes = []any{
-	(*SearchRequest)(nil),              // 0: hyperion.intelligence.v1.SearchRequest
-	(*SearchResult)(nil),               // 1: hyperion.intelligence.v1.SearchResult
-	(*SearchResponse)(nil),             // 2: hyperion.intelligence.v1.SearchResponse
-	(*IngestDependenciesRequest)(nil),  // 3: hyperion.intelligence.v1.IngestDependenciesRequest
-	(*IngestDependenciesResponse)(nil), // 4: hyperion.intelligence.v1.IngestDependenciesResponse
-	(*GetBlastRadiusRequest)(nil),      // 5: hyperion.intelligence.v1.GetBlastRadiusRequest
-	(*ImpactedRepository)(nil),         // 6: hyperion.intelligence.v1.ImpactedRepository
-	(*GetBlastRadiusResponse)(nil),     // 7: hyperion.intelligence.v1.GetBlastRadiusResponse
-	(*v1.Vulnerability)(nil),           // 8: hyperion.common.v1.Vulnerability
-	(*v1.Repository)(nil),              // 9: hyperion.common.v1.Repository
-	(*v1.Dependency)(nil),              // 10: hyperion.common.v1.Dependency
-	(*v1.Author)(nil),                  // 11: hyperion.common.v1.Author
-	(*timestamppb.Timestamp)(nil),      // 12: google.protobuf.Timestamp
-	(*v1.PackageRef)(nil),              // 13: hyperion.common.v1.PackageRef
+	(SearchSort)(0),                    // 0: hyperion.intelligence.v1.SearchSort
+	(*SearchRequest)(nil),              // 1: hyperion.intelligence.v1.SearchRequest
+	(*SearchResult)(nil),               // 2: hyperion.intelligence.v1.SearchResult
+	(*SearchResponse)(nil),             // 3: hyperion.intelligence.v1.SearchResponse
+	(*IngestDependenciesRequest)(nil),  // 4: hyperion.intelligence.v1.IngestDependenciesRequest
+	(*IngestDependenciesResponse)(nil), // 5: hyperion.intelligence.v1.IngestDependenciesResponse
+	(*GetBlastRadiusRequest)(nil),      // 6: hyperion.intelligence.v1.GetBlastRadiusRequest
+	(*ImpactedRepository)(nil),         // 7: hyperion.intelligence.v1.ImpactedRepository
+	(*GetBlastRadiusResponse)(nil),     // 8: hyperion.intelligence.v1.GetBlastRadiusResponse
+	(*v1.Vulnerability)(nil),           // 9: hyperion.common.v1.Vulnerability
+	(*v1.Repository)(nil),              // 10: hyperion.common.v1.Repository
+	(*v1.Dependency)(nil),              // 11: hyperion.common.v1.Dependency
+	(*v1.Author)(nil),                  // 12: hyperion.common.v1.Author
+	(*timestamppb.Timestamp)(nil),      // 13: google.protobuf.Timestamp
+	(*v1.PackageRef)(nil),              // 14: hyperion.common.v1.PackageRef
 }
 var file_hyperion_intelligence_v1_intelligence_service_proto_depIdxs = []int32{
-	8,  // 0: hyperion.intelligence.v1.SearchResult.vulnerability:type_name -> hyperion.common.v1.Vulnerability
-	1,  // 1: hyperion.intelligence.v1.SearchResponse.results:type_name -> hyperion.intelligence.v1.SearchResult
-	9,  // 2: hyperion.intelligence.v1.IngestDependenciesRequest.repository:type_name -> hyperion.common.v1.Repository
-	10, // 3: hyperion.intelligence.v1.IngestDependenciesRequest.dependencies:type_name -> hyperion.common.v1.Dependency
-	11, // 4: hyperion.intelligence.v1.IngestDependenciesRequest.author:type_name -> hyperion.common.v1.Author
-	12, // 5: hyperion.intelligence.v1.IngestDependenciesRequest.observed_at:type_name -> google.protobuf.Timestamp
-	13, // 6: hyperion.intelligence.v1.IngestDependenciesRequest.publishes:type_name -> hyperion.common.v1.PackageRef
-	9,  // 7: hyperion.intelligence.v1.ImpactedRepository.repository:type_name -> hyperion.common.v1.Repository
-	13, // 8: hyperion.intelligence.v1.ImpactedRepository.via_package:type_name -> hyperion.common.v1.PackageRef
-	11, // 9: hyperion.intelligence.v1.ImpactedRepository.author:type_name -> hyperion.common.v1.Author
-	13, // 10: hyperion.intelligence.v1.GetBlastRadiusResponse.vulnerable_packages:type_name -> hyperion.common.v1.PackageRef
-	6,  // 11: hyperion.intelligence.v1.GetBlastRadiusResponse.repositories:type_name -> hyperion.intelligence.v1.ImpactedRepository
-	0,  // 12: hyperion.intelligence.v1.IntelligenceService.Search:input_type -> hyperion.intelligence.v1.SearchRequest
-	3,  // 13: hyperion.intelligence.v1.IntelligenceService.IngestDependencies:input_type -> hyperion.intelligence.v1.IngestDependenciesRequest
-	5,  // 14: hyperion.intelligence.v1.IntelligenceService.GetBlastRadius:input_type -> hyperion.intelligence.v1.GetBlastRadiusRequest
-	2,  // 15: hyperion.intelligence.v1.IntelligenceService.Search:output_type -> hyperion.intelligence.v1.SearchResponse
-	4,  // 16: hyperion.intelligence.v1.IntelligenceService.IngestDependencies:output_type -> hyperion.intelligence.v1.IngestDependenciesResponse
-	7,  // 17: hyperion.intelligence.v1.IntelligenceService.GetBlastRadius:output_type -> hyperion.intelligence.v1.GetBlastRadiusResponse
-	15, // [15:18] is the sub-list for method output_type
-	12, // [12:15] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	0,  // 0: hyperion.intelligence.v1.SearchRequest.sort:type_name -> hyperion.intelligence.v1.SearchSort
+	9,  // 1: hyperion.intelligence.v1.SearchResult.vulnerability:type_name -> hyperion.common.v1.Vulnerability
+	2,  // 2: hyperion.intelligence.v1.SearchResponse.results:type_name -> hyperion.intelligence.v1.SearchResult
+	10, // 3: hyperion.intelligence.v1.IngestDependenciesRequest.repository:type_name -> hyperion.common.v1.Repository
+	11, // 4: hyperion.intelligence.v1.IngestDependenciesRequest.dependencies:type_name -> hyperion.common.v1.Dependency
+	12, // 5: hyperion.intelligence.v1.IngestDependenciesRequest.author:type_name -> hyperion.common.v1.Author
+	13, // 6: hyperion.intelligence.v1.IngestDependenciesRequest.observed_at:type_name -> google.protobuf.Timestamp
+	14, // 7: hyperion.intelligence.v1.IngestDependenciesRequest.publishes:type_name -> hyperion.common.v1.PackageRef
+	10, // 8: hyperion.intelligence.v1.ImpactedRepository.repository:type_name -> hyperion.common.v1.Repository
+	14, // 9: hyperion.intelligence.v1.ImpactedRepository.via_package:type_name -> hyperion.common.v1.PackageRef
+	12, // 10: hyperion.intelligence.v1.ImpactedRepository.author:type_name -> hyperion.common.v1.Author
+	14, // 11: hyperion.intelligence.v1.GetBlastRadiusResponse.vulnerable_packages:type_name -> hyperion.common.v1.PackageRef
+	7,  // 12: hyperion.intelligence.v1.GetBlastRadiusResponse.repositories:type_name -> hyperion.intelligence.v1.ImpactedRepository
+	1,  // 13: hyperion.intelligence.v1.IntelligenceService.Search:input_type -> hyperion.intelligence.v1.SearchRequest
+	4,  // 14: hyperion.intelligence.v1.IntelligenceService.IngestDependencies:input_type -> hyperion.intelligence.v1.IngestDependenciesRequest
+	6,  // 15: hyperion.intelligence.v1.IntelligenceService.GetBlastRadius:input_type -> hyperion.intelligence.v1.GetBlastRadiusRequest
+	3,  // 16: hyperion.intelligence.v1.IntelligenceService.Search:output_type -> hyperion.intelligence.v1.SearchResponse
+	5,  // 17: hyperion.intelligence.v1.IntelligenceService.IngestDependencies:output_type -> hyperion.intelligence.v1.IngestDependenciesResponse
+	8,  // 18: hyperion.intelligence.v1.IntelligenceService.GetBlastRadius:output_type -> hyperion.intelligence.v1.GetBlastRadiusResponse
+	16, // [16:19] is the sub-list for method output_type
+	13, // [13:16] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_hyperion_intelligence_v1_intelligence_service_proto_init() }
@@ -645,13 +737,14 @@ func file_hyperion_intelligence_v1_intelligence_service_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc), len(file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_hyperion_intelligence_v1_intelligence_service_proto_goTypes,
 		DependencyIndexes: file_hyperion_intelligence_v1_intelligence_service_proto_depIdxs,
+		EnumInfos:         file_hyperion_intelligence_v1_intelligence_service_proto_enumTypes,
 		MessageInfos:      file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes,
 	}.Build()
 	File_hyperion_intelligence_v1_intelligence_service_proto = out.File
