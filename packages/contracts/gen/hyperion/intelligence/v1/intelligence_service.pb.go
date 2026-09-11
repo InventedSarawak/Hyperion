@@ -609,6 +609,94 @@ func (x *GetBlastRadiusResponse) GetTotalRepositories() int32 {
 	return 0
 }
 
+type GetVulnerabilityRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CveId         string                 `protobuf:"bytes,1,opt,name=cve_id,json=cveId,proto3" json:"cve_id,omitempty"` // a CVE id, or a GHSA id for advisories with no CVE
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetVulnerabilityRequest) Reset() {
+	*x = GetVulnerabilityRequest{}
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetVulnerabilityRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetVulnerabilityRequest) ProtoMessage() {}
+
+func (x *GetVulnerabilityRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetVulnerabilityRequest.ProtoReflect.Descriptor instead.
+func (*GetVulnerabilityRequest) Descriptor() ([]byte, []int) {
+	return file_hyperion_intelligence_v1_intelligence_service_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *GetVulnerabilityRequest) GetCveId() string {
+	if x != nil {
+		return x.CveId
+	}
+	return ""
+}
+
+type GetVulnerabilityResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Vulnerability *v1.Vulnerability      `protobuf:"bytes,1,opt,name=vulnerability,proto3" json:"vulnerability,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetVulnerabilityResponse) Reset() {
+	*x = GetVulnerabilityResponse{}
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetVulnerabilityResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetVulnerabilityResponse) ProtoMessage() {}
+
+func (x *GetVulnerabilityResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetVulnerabilityResponse.ProtoReflect.Descriptor instead.
+func (*GetVulnerabilityResponse) Descriptor() ([]byte, []int) {
+	return file_hyperion_intelligence_v1_intelligence_service_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *GetVulnerabilityResponse) GetVulnerability() *v1.Vulnerability {
+	if x != nil {
+		return x.Vulnerability
+	}
+	return nil
+}
+
 var File_hyperion_intelligence_v1_intelligence_service_proto protoreflect.FileDescriptor
 
 const file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc = "" +
@@ -657,16 +745,21 @@ const file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc = "" +
 	"\x06cve_id\x18\x01 \x01(\tR\x05cveId\x12O\n" +
 	"\x13vulnerable_packages\x18\x02 \x03(\v2\x1e.hyperion.common.v1.PackageRefR\x12vulnerablePackages\x12P\n" +
 	"\frepositories\x18\x03 \x03(\v2,.hyperion.intelligence.v1.ImpactedRepositoryR\frepositories\x12-\n" +
-	"\x12total_repositories\x18\x04 \x01(\x05R\x11totalRepositories*\\\n" +
+	"\x12total_repositories\x18\x04 \x01(\x05R\x11totalRepositories\"0\n" +
+	"\x17GetVulnerabilityRequest\x12\x15\n" +
+	"\x06cve_id\x18\x01 \x01(\tR\x05cveId\"c\n" +
+	"\x18GetVulnerabilityResponse\x12G\n" +
+	"\rvulnerability\x18\x01 \x01(\v2!.hyperion.common.v1.VulnerabilityR\rvulnerability*\\\n" +
 	"\n" +
 	"SearchSort\x12\x1b\n" +
 	"\x17SEARCH_SORT_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15SEARCH_SORT_RELEVANCE\x10\x01\x12\x16\n" +
-	"\x12SEARCH_SORT_NEWEST\x10\x022\xe8\x02\n" +
+	"\x12SEARCH_SORT_NEWEST\x10\x022\xe3\x03\n" +
 	"\x13IntelligenceService\x12[\n" +
 	"\x06Search\x12'.hyperion.intelligence.v1.SearchRequest\x1a(.hyperion.intelligence.v1.SearchResponse\x12\x7f\n" +
 	"\x12IngestDependencies\x123.hyperion.intelligence.v1.IngestDependenciesRequest\x1a4.hyperion.intelligence.v1.IngestDependenciesResponse\x12s\n" +
-	"\x0eGetBlastRadius\x12/.hyperion.intelligence.v1.GetBlastRadiusRequest\x1a0.hyperion.intelligence.v1.GetBlastRadiusResponseB\x9e\x02\n" +
+	"\x0eGetBlastRadius\x12/.hyperion.intelligence.v1.GetBlastRadiusRequest\x1a0.hyperion.intelligence.v1.GetBlastRadiusResponse\x12y\n" +
+	"\x10GetVulnerability\x121.hyperion.intelligence.v1.GetVulnerabilityRequest\x1a2.hyperion.intelligence.v1.GetVulnerabilityResponseB\x9e\x02\n" +
 	"\x1ccom.hyperion.intelligence.v1B\x18IntelligenceServiceProtoP\x01Zbgithub.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/intelligence/v1;intelligencev1\xa2\x02\x03HIX\xaa\x02\x18Hyperion.Intelligence.V1\xca\x02\x18Hyperion\\Intelligence\\V1\xe2\x02$Hyperion\\Intelligence\\V1\\GPBMetadata\xea\x02\x1aHyperion::Intelligence::V1b\x06proto3"
 
 var (
@@ -682,7 +775,7 @@ func file_hyperion_intelligence_v1_intelligence_service_proto_rawDescGZIP() []by
 }
 
 var file_hyperion_intelligence_v1_intelligence_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_hyperion_intelligence_v1_intelligence_service_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_hyperion_intelligence_v1_intelligence_service_proto_goTypes = []any{
 	(SearchSort)(0),                    // 0: hyperion.intelligence.v1.SearchSort
 	(*SearchRequest)(nil),              // 1: hyperion.intelligence.v1.SearchRequest
@@ -693,38 +786,43 @@ var file_hyperion_intelligence_v1_intelligence_service_proto_goTypes = []any{
 	(*GetBlastRadiusRequest)(nil),      // 6: hyperion.intelligence.v1.GetBlastRadiusRequest
 	(*ImpactedRepository)(nil),         // 7: hyperion.intelligence.v1.ImpactedRepository
 	(*GetBlastRadiusResponse)(nil),     // 8: hyperion.intelligence.v1.GetBlastRadiusResponse
-	(*v1.Vulnerability)(nil),           // 9: hyperion.common.v1.Vulnerability
-	(*v1.Repository)(nil),              // 10: hyperion.common.v1.Repository
-	(*v1.Dependency)(nil),              // 11: hyperion.common.v1.Dependency
-	(*v1.Author)(nil),                  // 12: hyperion.common.v1.Author
-	(*timestamppb.Timestamp)(nil),      // 13: google.protobuf.Timestamp
-	(*v1.PackageRef)(nil),              // 14: hyperion.common.v1.PackageRef
+	(*GetVulnerabilityRequest)(nil),    // 9: hyperion.intelligence.v1.GetVulnerabilityRequest
+	(*GetVulnerabilityResponse)(nil),   // 10: hyperion.intelligence.v1.GetVulnerabilityResponse
+	(*v1.Vulnerability)(nil),           // 11: hyperion.common.v1.Vulnerability
+	(*v1.Repository)(nil),              // 12: hyperion.common.v1.Repository
+	(*v1.Dependency)(nil),              // 13: hyperion.common.v1.Dependency
+	(*v1.Author)(nil),                  // 14: hyperion.common.v1.Author
+	(*timestamppb.Timestamp)(nil),      // 15: google.protobuf.Timestamp
+	(*v1.PackageRef)(nil),              // 16: hyperion.common.v1.PackageRef
 }
 var file_hyperion_intelligence_v1_intelligence_service_proto_depIdxs = []int32{
 	0,  // 0: hyperion.intelligence.v1.SearchRequest.sort:type_name -> hyperion.intelligence.v1.SearchSort
-	9,  // 1: hyperion.intelligence.v1.SearchResult.vulnerability:type_name -> hyperion.common.v1.Vulnerability
+	11, // 1: hyperion.intelligence.v1.SearchResult.vulnerability:type_name -> hyperion.common.v1.Vulnerability
 	2,  // 2: hyperion.intelligence.v1.SearchResponse.results:type_name -> hyperion.intelligence.v1.SearchResult
-	10, // 3: hyperion.intelligence.v1.IngestDependenciesRequest.repository:type_name -> hyperion.common.v1.Repository
-	11, // 4: hyperion.intelligence.v1.IngestDependenciesRequest.dependencies:type_name -> hyperion.common.v1.Dependency
-	12, // 5: hyperion.intelligence.v1.IngestDependenciesRequest.author:type_name -> hyperion.common.v1.Author
-	13, // 6: hyperion.intelligence.v1.IngestDependenciesRequest.observed_at:type_name -> google.protobuf.Timestamp
-	14, // 7: hyperion.intelligence.v1.IngestDependenciesRequest.publishes:type_name -> hyperion.common.v1.PackageRef
-	10, // 8: hyperion.intelligence.v1.ImpactedRepository.repository:type_name -> hyperion.common.v1.Repository
-	14, // 9: hyperion.intelligence.v1.ImpactedRepository.via_package:type_name -> hyperion.common.v1.PackageRef
-	12, // 10: hyperion.intelligence.v1.ImpactedRepository.author:type_name -> hyperion.common.v1.Author
-	14, // 11: hyperion.intelligence.v1.GetBlastRadiusResponse.vulnerable_packages:type_name -> hyperion.common.v1.PackageRef
+	12, // 3: hyperion.intelligence.v1.IngestDependenciesRequest.repository:type_name -> hyperion.common.v1.Repository
+	13, // 4: hyperion.intelligence.v1.IngestDependenciesRequest.dependencies:type_name -> hyperion.common.v1.Dependency
+	14, // 5: hyperion.intelligence.v1.IngestDependenciesRequest.author:type_name -> hyperion.common.v1.Author
+	15, // 6: hyperion.intelligence.v1.IngestDependenciesRequest.observed_at:type_name -> google.protobuf.Timestamp
+	16, // 7: hyperion.intelligence.v1.IngestDependenciesRequest.publishes:type_name -> hyperion.common.v1.PackageRef
+	12, // 8: hyperion.intelligence.v1.ImpactedRepository.repository:type_name -> hyperion.common.v1.Repository
+	16, // 9: hyperion.intelligence.v1.ImpactedRepository.via_package:type_name -> hyperion.common.v1.PackageRef
+	14, // 10: hyperion.intelligence.v1.ImpactedRepository.author:type_name -> hyperion.common.v1.Author
+	16, // 11: hyperion.intelligence.v1.GetBlastRadiusResponse.vulnerable_packages:type_name -> hyperion.common.v1.PackageRef
 	7,  // 12: hyperion.intelligence.v1.GetBlastRadiusResponse.repositories:type_name -> hyperion.intelligence.v1.ImpactedRepository
-	1,  // 13: hyperion.intelligence.v1.IntelligenceService.Search:input_type -> hyperion.intelligence.v1.SearchRequest
-	4,  // 14: hyperion.intelligence.v1.IntelligenceService.IngestDependencies:input_type -> hyperion.intelligence.v1.IngestDependenciesRequest
-	6,  // 15: hyperion.intelligence.v1.IntelligenceService.GetBlastRadius:input_type -> hyperion.intelligence.v1.GetBlastRadiusRequest
-	3,  // 16: hyperion.intelligence.v1.IntelligenceService.Search:output_type -> hyperion.intelligence.v1.SearchResponse
-	5,  // 17: hyperion.intelligence.v1.IntelligenceService.IngestDependencies:output_type -> hyperion.intelligence.v1.IngestDependenciesResponse
-	8,  // 18: hyperion.intelligence.v1.IntelligenceService.GetBlastRadius:output_type -> hyperion.intelligence.v1.GetBlastRadiusResponse
-	16, // [16:19] is the sub-list for method output_type
-	13, // [13:16] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	11, // 13: hyperion.intelligence.v1.GetVulnerabilityResponse.vulnerability:type_name -> hyperion.common.v1.Vulnerability
+	1,  // 14: hyperion.intelligence.v1.IntelligenceService.Search:input_type -> hyperion.intelligence.v1.SearchRequest
+	4,  // 15: hyperion.intelligence.v1.IntelligenceService.IngestDependencies:input_type -> hyperion.intelligence.v1.IngestDependenciesRequest
+	6,  // 16: hyperion.intelligence.v1.IntelligenceService.GetBlastRadius:input_type -> hyperion.intelligence.v1.GetBlastRadiusRequest
+	9,  // 17: hyperion.intelligence.v1.IntelligenceService.GetVulnerability:input_type -> hyperion.intelligence.v1.GetVulnerabilityRequest
+	3,  // 18: hyperion.intelligence.v1.IntelligenceService.Search:output_type -> hyperion.intelligence.v1.SearchResponse
+	5,  // 19: hyperion.intelligence.v1.IntelligenceService.IngestDependencies:output_type -> hyperion.intelligence.v1.IngestDependenciesResponse
+	8,  // 20: hyperion.intelligence.v1.IntelligenceService.GetBlastRadius:output_type -> hyperion.intelligence.v1.GetBlastRadiusResponse
+	10, // 21: hyperion.intelligence.v1.IntelligenceService.GetVulnerability:output_type -> hyperion.intelligence.v1.GetVulnerabilityResponse
+	18, // [18:22] is the sub-list for method output_type
+	14, // [14:18] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_hyperion_intelligence_v1_intelligence_service_proto_init() }
@@ -738,7 +836,7 @@ func file_hyperion_intelligence_v1_intelligence_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc), len(file_hyperion_intelligence_v1_intelligence_service_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   8,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -19,6 +19,10 @@ service IntelligenceService {
   // GetBlastRadius answers "who is exposed to this CVE?" by walking the
   // dependency graph outwards from the libraries the advisory names.
   rpc GetBlastRadius(GetBlastRadiusRequest) returns (GetBlastRadiusResponse);
+  // GetVulnerability returns one finding in full, from the store of record
+  // rather than the search index — the index drops detail it does not search
+  // on, such as each affected package's version range.
+  rpc GetVulnerability(GetVulnerabilityRequest) returns (GetVulnerabilityResponse);
 }
 
 // SearchSort orders search results.
@@ -95,4 +99,12 @@ message GetBlastRadiusResponse {
   repeated hyperion.common.v1.PackageRef vulnerable_packages = 2;
   repeated ImpactedRepository repositories = 3;
   int32 total_repositories = 4;
+}
+
+message GetVulnerabilityRequest {
+  string cve_id = 1; // a CVE id, or a GHSA id for advisories with no CVE
+}
+
+message GetVulnerabilityResponse {
+  hyperion.common.v1.Vulnerability vulnerability = 1;
 }

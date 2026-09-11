@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+package hyperion.watchlist.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// WatchlistService is the set of repositories Hyperion tracks: the other half
+// of blast radius. An advisory says which library is vulnerable; only a
+// tracked repository's manifest says who depends on it.
+//
+// cortex owns the list, clients (deck, and the console later) edit it through
+// the gateway, and siphon's scanner reads it to decide what to scan — so
+// adding a repository is an action in the product, not an edit to a config
+// file followed by a restart.
+service WatchlistService {
+  // ListRepositories returns every tracked repository with its scan state.
+  rpc ListRepositories(ListRepositoriesRequest) returns (ListRepositoriesResponse);
+  // DiscoverRepositories lists a GitHub user's or organization's
+  // repositories, marking the ones already tracked, so they can be picked
+  // rather than typed.
+  rpc DiscoverRepositories(DiscoverRepositoriesRequest) returns (DiscoverRepositoriesResponse);
+  // TrackRepositories adds repositories as pending; the scanner picks them
+  // up on its next pass. Tracking one that is already tracked re-queues it.
+  rpc TrackRepositories(TrackRepositoriesRequest) returns (TrackRepositoriesResponse);
+  // UntrackRepository stops tracking a repository and removes it, and the
+  // dependency edges its manifest contributed, from the graph.
+  rpc UntrackRepository(UntrackRepositoryRequest) returns (UntrackRepositoryResponse);
+  // ReportScan records how one scan went. The scanner calls it.
+  rpc ReportScan(ReportScanRequest) returns (ReportScanResponse);
+}
+
+enum ScanStatus {
+  SCAN_STATUS_UNSPECIFIED = 0;
+  SCAN_STATUS_PENDING = 1; // tracked, not scanned yet (or re-queued)
+  SCAN_STATUS_SCANNED = 2; // last scan succeeded
+  SCAN_STATUS_FAILED = 3; // last scan failed; see last_error
+}
+
+message TrackedRepository {
+  string full_name = 1; // "owner/name"
+  string url = 2;
+  ScanStatus status = 3;
+  google.protobuf.Timestamp added_at = 4;
+  google.protobuf.Timestamp last_scan_at = 5; // last attempt, successful or not
+  string last_error = 6;
+  int32 dependency_count = 7; // edges the last successful scan wrote
+}
+
+message DiscoveredRepository {
+  string full_name = 1;
+  string description = 2;
+  string language = 3;
+  int32 stars = 4;
+  google.protobuf.Timestamp pushed_at = 5;
+  bool fork = 6; // a fork's manifest mostly describes upstream
+  bool archived = 7;
+  bool tracked = 8; // already on the watchlist
+}
+
+message ListRepositoriesRequest {}
+
+message ListRepositoriesResponse {
+  repeated TrackedRepository repositories = 1;
+}
+
+message DiscoverRepositoriesRequest {
+  string owner = 1; // a GitHub user or organization login
+  int32 limit = 2; // 0 = server default
+}
+
+message DiscoverRepositoriesResponse {
+  string owner = 1;
+  repeated DiscoveredRepository repositories = 2;
+}
+
+message TrackRepositoriesRequest {
+  repeated string full_names = 1; // "owner/name"
+}
+
+message TrackRepositoriesResponse {
+  repeated TrackedRepository repositories = 1;
+}
+
+message UntrackRepositoryRequest {
+  string full_name = 1;
+}
+
+message UntrackRepositoryResponse {
+  bool removed = 1; // false when it was not tracked
+}
+
+message ReportScanRequest {
+  string full_name = 1;
+  bool succeeded = 2;
+  string error = 3; // why it failed, when it did
+  int32 dependency_count = 4;
+  google.protobuf.Timestamp scanned_at = 5;
+}
+
+message ReportScanResponse {}
