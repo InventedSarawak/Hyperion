@@ -116,17 +116,18 @@ signals a day; exploit-db, OSINT and package-feed publish a handful a _week_.
 - **Mitigated (2026-09-11):** history no longer depends on the lookback at all —
   `task backfill` loads it directly (NVD published-date windows + OSV exports).
 
-### 🟡 A GHSA-keyed advisory splits in two when it later gets a CVE
+### 🟢 A re-keyed finding can alert a subscription once more
 
-Records are keyed on their CVE, falling back to the GitHub advisory id for advisories
-with none (malware, and advisories GitHub publishes before MITRE assigns a CVE).
+Findings are filed under a canonical id (CVE, else GHSA, else MAL) with every other id
+as an alias; when a report links a GHSA-keyed record to its new CVE, the two merge and
+the record moves to the CVE (see CURRENT-FUNCTIONALITIES 1.3).
 
-- **Why:** without the fallback those findings were dropped outright — the axios
-  compromise (`GHSA-fw8c-xr5c-95f9`) never had a CVE and never will.
-- **Cost:** when an advisory first seen as `GHSA-…` is later assigned a CVE, the next
-  observation lands on a second record under the CVE. Both are searchable and both
-  link to the same packages, but they do not merge, and a subscription can alert twice.
-- **Fix in v3:** keep an alias table (`GHSA → CVE`) and merge on assignment.
+- **Resolved (2026-09-12):** the old split — one advisory as two records, `GHSA-…` and
+  `CVE-…` — is gone; existing alerts are moved to the new id in the same transaction.
+- **Cost that remains:** an alert's id is derived from the subscription and the finding
+  id, so after a re-key the same subscription can be alerted once more under the CVE.
+- **Fix:** derive the alert id from the subscription and the finding's first-stored id,
+  or dedupe on every id the finding carries.
 
 ### 🟡 Descriptions and scores are last-writer-wins
 
@@ -139,17 +140,18 @@ the score set the newest non-empty observation wins, whichever feed it came from
 - **Fix:** keep one description and score set per source and choose by source priority
   at read time.
 
-### 🟡 Unreviewed malicious packages are skipped
+### 🟡 Malware is ingested in full but only hidden, not triaged
 
-OSV's malicious-package dataset (`MAL-…`) is only ingested when GitHub has reviewed an
-entry and given it a GHSA id.
+OSV's malicious-package dataset (`MAL-…`) is ingested whole, as findings of kind
+`malware`. deck leaves them out of the feed unless `m` is pressed; searching for an
+exact id finds one either way.
 
-- **Why:** npm alone has ~200,000 `MAL-` records — typosquats almost nobody installs —
-  and ingesting them would bury every search and alert.
-- **Cost:** a compromised package GitHub has not yet reviewed is invisible, even if one
-  of your repositories depends on it.
-- **Fix in v3:** ingest `MAL-` records only for packages that some tracked repository
-  actually depends on — the graph can answer that before the record is stored.
+- **Why:** a compromised package is the most urgent thing a dependency can be, and a
+  `MAL-` id is often the only record it ever gets — skipping them made that invisible.
+- **Cost:** npm alone has ~220,000 `MAL-` records, nearly all typosquats nobody installs.
+  They cost storage and index space, and a subscription with a broad rule can match them.
+- **Fix in v3:** rank malware by whether a tracked repository depends on the package —
+  the graph can answer that — and alert only on those.
 
 ### 🟢 A backfill can raise alerts for old findings
 

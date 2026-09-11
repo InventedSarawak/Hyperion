@@ -101,19 +101,28 @@ so a backfill can raise alerts for old findings if a subscription matches them.
 
 ### 1.3 Record identity
 
-**What it does.** Decides which id a record is stored under, so the same finding from
-different feeds lands on one record:
+**What it does.** Keeps every id a finding is known by, and files it under one of them so
+the same finding from different feeds lands on one record.
 
-1. its **CVE id**, when it has one (from the record or its aliases);
-2. otherwise its **GitHub advisory id** (`GHSA-…`) — this is how the axios compromise
-   (`GHSA-fw8c-xr5c-95f9`, no CVE) is kept;
-3. otherwise it is **skipped** — mostly OSV's raw malicious-package list (`MAL-…`
-   without a GHSA id), hundreds of thousands of typosquats that would bury every search.
+| Scheme                  | Issued by                    | Covers                                   |
+| :---------------------- | :--------------------------- | :--------------------------------------- |
+| `CVE-…`                 | CVE numbering authorities    | flaws in legitimate software, on request |
+| `GHSA-…`                | GitHub                       | every GitHub advisory, including malware |
+| `MAL-…`                 | OpenSSF malicious-packages   | malicious packages (never get a CVE)     |
+| `PYSEC-…`, `GO-…`, etc. | ecosystem advisory databases | their own ecosystem                      |
 
-Withdrawn OSV records are skipped too.
+The **canonical id** is the CVE, else the GHSA, else the MAL, else whatever id the finding
+has; every other id is kept as an **alias**, and any of them finds the record. When a report
+first links two ids — GitHub filed an advisory under its GHSA before a CVE existed, then OSV
+reports the two together — the records **merge** and the finding moves to its CVE, taking its
+first-seen time, alerts, search document and graph links with it.
 
-**Limit.** A GHSA-keyed advisory that later receives a CVE becomes a second record under
-the CVE; the two are not merged.
+Every finding also has a **kind**: `vulnerability` or `malware`. A finding is malware if any
+feed says so or it carries a `MAL-` id, and it stays malware. OSV's malicious-package list is
+ingested in full (it is the only record most malware ever gets); deck leaves it out of the
+feed unless asked for (see 4.1).
+
+Withdrawn OSV records are skipped.
 
 ### 1.4 Watchlist scanner (repositories)
 
@@ -175,6 +184,8 @@ record's observations are always merged in order.
 | scores            | the newest non-empty set wins                                  |
 | references        | unioned, de-duplicated                                         |
 | sources           | unioned — which feeds reported it                              |
+| ids               | unioned; the canonical id is re-chosen from the union (1.3)    |
+| kind              | malware if any feed says so, and it stays malware              |
 | affected packages | unioned by package; the first version range seen is kept       |
 | dates             | the newest non-empty wins                                      |
 
@@ -185,10 +196,11 @@ description instead.
 
 **What it does.** Full-text search over id, title, description and affected package
 names, with typo tolerance ("log4shel"), partial words ("log4j" → "Log4j2"), exact-id
-lookups, and a flat bonus for records that _affect_ the library you named — so "next"
+lookups by **any** of a finding's ids in any case (`ghsa-jfh8-…`, `mal-2026-2307`), and a flat bonus for records that _affect_ the library you named — so "next"
 ranks Next.js advisories above text that merely contains the word.
 
-Two orders: **best match** (ties broken newest-first) and **newest**. No term means the
+Results can be limited to kinds of finding (`kinds: [VULNERABILITY]`); a term that is exactly
+a finding's id finds it whatever its kind. Two orders: **best match** (ties broken newest-first) and **newest**. No term means the
 live feed, newest first. Results page 25–200 at a time; totals are exact up to 10,000.
 
 **How to use.** deck's feed (`/` to search, `s` to switch order), GraphQL `search`, or
@@ -202,7 +214,8 @@ gRPC `IntelligenceService/Search`.
 including each affected package's **version range**, which search results leave out.
 
 **How to use.** deck's Details tab, GraphQL `vulnerability(cveId:)`, or gRPC
-`IntelligenceService/GetVulnerability`. Accepts CVE and GHSA ids.
+`IntelligenceService/GetVulnerability`. Accepts any of a finding's ids — CVE, GHSA, MAL,
+PYSEC, GO, … — and returns it under its canonical id with the rest as aliases.
 
 ### 2.4 Dependency graph and blast radius
 
@@ -222,7 +235,8 @@ dependency is direct.
 A finding with no package linkage returns "unknown", never "zero repositories" — the
 distinction between _not affected_ and _never checked_ is the point.
 
-**How to use.** deck's Graph Explorer, GraphQL `blastRadius`, `task blast -- CVE-…`.
+**How to use.** deck's Graph Explorer, GraphQL `blastRadius`, `task blast -- CVE-…`. Any of a
+finding's ids works (`GHSA-…`, `MAL-…`); the walk starts from its canonical id.
 
 **Limits.** Transitive edges exist only for libraries published by a repository you
 track; a dependency of a library nobody tracks looks one hop deep, so reach can be
@@ -305,12 +319,15 @@ It goes through nexus by default (`DECK_TRANSPORT=grpc` talks to cortex directly
 
 The latest findings, newest first, refreshed every `DECK_REFRESH_INTERVAL` (30s). Each row
 is **id · severity · headline**, where the headline is the title or, for records with none
-(everything from NVD), the description.
+(everything from NVD), the description. A malicious package shows **MALWARE** in place of a
+severity. Malware is left out of the feed until `m` brings it in; searching for its exact
+id (`MAL-…`, `GHSA-…`) finds it either way.
 
 | Key                         | Does                                                              |
 | :-------------------------- | :---------------------------------------------------------------- |
 | `/`                         | search (every key is text until `enter` / `esc`)                  |
 | `s`                         | switch a search between best match and newest                     |
+| `m`                         | include malware in the feed, or leave it out again                |
 | `↑↓` `jk` `g G` `pgup pgdn` | move; reaching the end loads the next page                        |
 | `n`                         | load the next page now                                            |
 | `enter`                     | open the finding in **Details** (blast radius starts loading too) |
@@ -319,8 +336,9 @@ is **id · severity · headline**, where the headline is the title or, for recor
 
 ### 4.2 Details (2)
 
-Everything known about the open finding: id and rating, title, published and modified
-dates, which feeds reported it, every CVSS score with its vector, affected packages with
+Everything known about the open finding: id and rating, title, a warning if it is a
+malicious package, its other ids (aliases), published and modified dates, which feeds
+reported it, every CVSS score with its vector, affected packages with
 version ranges, the full description re-flowed to the terminal, and every reference. It
 shows the search result immediately and swaps in the full record when it arrives.
 
