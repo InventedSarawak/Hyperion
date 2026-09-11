@@ -339,7 +339,7 @@ id (`MAL-…`, `GHSA-…`) finds it either way.
 Everything known about the open finding: id and rating, title, a warning if it is a
 malicious package, its other ids (aliases), published and modified dates, which feeds
 reported it, every CVSS score with its vector, affected packages with
-version ranges, the full description re-flowed to the terminal, and every reference. It
+version ranges, the full description rendered from Markdown (headings, lists, code blocks and links, as GitHub advisories write them; plain NVD text re-flowed to the terminal), and every reference. It
 shows the search result immediately and swaps in the full record when it arrives.
 
 `↑↓` scroll · `enter` or `b` blast radius · `esc` back · `r` reload.
