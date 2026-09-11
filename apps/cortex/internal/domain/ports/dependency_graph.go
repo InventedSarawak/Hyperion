@@ -45,6 +45,17 @@ type DependencyGraph interface {
 	// returns the repositories exposed to it, within maxDepth DEPENDS_ON hops.
 	FindBlastRadius(ctx context.Context, cveID string, maxDepth, limit int) (model.BlastRadius, error)
 
+	// FindRepositoryExposures walks from repositories through their
+	// dependencies, up to maxDepth hops, to the findings affecting what they
+	// reach: blast radius read the other way round. fullNames limits the walk
+	// to those repositories (compared case-insensitively); empty means all.
+	// Each row's Package carries the version the nearest manifest declares;
+	// judging it is the caller's job.
+	FindRepositoryExposures(ctx context.Context, fullNames []string, maxDepth int) ([]model.Exposure, error)
+
+	// HasRepository reports whether a repository is in the graph at all.
+	HasRepository(ctx context.Context, fullName string) (bool, error)
+
 	// Ready reports whether the backend is reachable and usable.
 	Ready(ctx context.Context) error
 

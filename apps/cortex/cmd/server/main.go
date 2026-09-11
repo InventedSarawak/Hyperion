@@ -99,6 +99,8 @@ func main() {
 	ingestDeps := commands.NewIngestDependency(graph)
 	search := queries.NewSearch(index)
 	blast := queries.NewCalculateBlastRadius(graph, cfg.BlastRadiusMaxDepth).WithResolver(repo)
+	exposure := queries.NewRepositoryExposure(graph, repo, cfg.BlastRadiusMaxDepth)
+	listWatchlist.WithExposure(exposure)
 
 	if *reindex {
 		runReindex(ctx, logger, repo, index)
@@ -115,7 +117,7 @@ func main() {
 		os.Exit(1)
 	}
 	serveGRPC(ctx, logger, cfg, search, ingestDeps, blast, manageSubs, listAlerting, repo,
-		grpcadapter.NewWatchlistServer(manageWatchlist, listWatchlist))
+		grpcadapter.NewWatchlistServer(manageWatchlist, listWatchlist), exposure)
 }
 
 // buildDependencyGraph returns the Neo4j adapter when the server answers,
@@ -184,6 +186,7 @@ func serveGRPC(
 	listAlerting *queries.ListAlerting,
 	vulns *postgres.Repo,
 	watchlist *grpcadapter.WatchlistServer,
+	exposure *queries.RepositoryExposure,
 ) {
 	listener, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
@@ -192,7 +195,7 @@ func serveGRPC(
 	}
 
 	server := grpc.NewServer()
-	intelv1.RegisterIntelligenceServiceServer(server, grpcadapter.NewServer(search, ingestDeps, blast, vulns))
+	intelv1.RegisterIntelligenceServiceServer(server, grpcadapter.NewServer(search, ingestDeps, blast, vulns).WithRepositoryExposure(exposure))
 	watchlistv1.RegisterWatchlistServiceServer(server, watchlist)
 	alertingv1.RegisterAlertingServiceServer(server,
 		grpcadapter.NewAlertingServer(manageSubs, listAlerting, vulns))

@@ -11,6 +11,12 @@ type ImpactedRepository struct {
 	Depth      int                    // DEPENDS_ON hops from the repository to it
 	Direct     bool                   // true when the repository's own manifest names it
 	Path       []string               // the chain, nearest first, for display
+	// DeclaredVersion is what the manifest nearest the library asks for,
+	// AffectedVersions what the advisory says is affected, and Verdict the
+	// judgement of one against the other.
+	DeclaredVersion  string
+	AffectedVersions string
+	Verdict          valueobject.ExposureVerdict
 }
 
 // BlastRadius answers "who is exposed to this CVE?". VulnerablePackages is

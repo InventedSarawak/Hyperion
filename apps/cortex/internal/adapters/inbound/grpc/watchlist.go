@@ -136,6 +136,7 @@ func toProtoTracked(repos []model.TrackedRepository) []*watchlistv1.TrackedRepos
 			LastScanAt:      toTimestamp(r.LastScanAt),
 			LastError:       r.LastError,
 			DependencyCount: int32(r.DependencyCount),
+			Exposure:        toProtoSummary(r.Exposure),
 		})
 	}
 	return out

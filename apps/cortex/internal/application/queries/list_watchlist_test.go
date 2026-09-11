@@ -64,3 +64,45 @@ var _ = Describe("ListWatchlist", func() {
 		Expect(repos).To(HaveLen(1))
 	})
 })
+
+type stubSummaries struct {
+	m   map[string]model.ExposureSummary
+	err error
+}
+
+func (s stubSummaries) Summaries(context.Context) (map[string]model.ExposureSummary, error) {
+	return s.m, s.err
+}
+
+var _ = Describe("ListWatchlist flags", func() {
+	ctx := context.Background()
+	tracked := func() stubWatchlist {
+		return stubWatchlist{repos: []model.TrackedRepository{
+			{Owner: "InventedSarawak", Name: "CacheMiss", Status: model.ScanScanned, DependencyCount: 27},
+			{Owner: "InventedSarawak", Name: "Clean", Status: model.ScanScanned, DependencyCount: 5},
+			{Owner: "InventedSarawak", Name: "Waiting", Status: model.ScanPending},
+			{Owner: "InventedSarawak", Name: "PythonOnly", Status: model.ScanScanned, DependencyCount: 0},
+		}}
+	}
+
+	It("flags each scanned repository, and leaves the rest not computed rather than clean", func() {
+		sums := stubSummaries{m: map[string]model.ExposureSummary{
+			"inventedsarawak/cachemiss": {Computed: true, CriticalAffected: 1, Total: 3},
+		}}
+		got, err := queries.NewListWatchlist(tracked(), nil).WithExposure(sums).Repositories(ctx)
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got[0].Exposure.CriticalAffected).To(Equal(1))
+		Expect(got[1].Exposure).To(Equal(model.ExposureSummary{Computed: true}), "scanned, nothing reachable")
+		Expect(got[2].Exposure.Computed).To(BeFalse(), "not scanned yet")
+		Expect(got[3].Exposure.Computed).To(BeFalse(), "no dependencies read, so nothing was judged")
+	})
+
+	It("still lists the repositories when the flags cannot be computed", func() {
+		got, err := queries.NewListWatchlist(tracked(), nil).WithExposure(stubSummaries{err: ports.ErrGraphUnavailable}).Repositories(ctx)
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got).To(HaveLen(4))
+		Expect(got[0].Exposure.Computed).To(BeFalse())
+	})
+})

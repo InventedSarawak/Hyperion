@@ -35,6 +35,9 @@ type TrackedRepository struct {
 	LastScanAt      time.Time // last attempt, successful or not
 	LastError       string
 	DependencyCount int
+	// Exposure flags the serious findings it may be exposed to; filled in
+	// when the list is read, never stored.
+	Exposure ExposureSummary
 }
 
 // FullName is the repository's identity, e.g. "vercel/next.js".

@@ -30,11 +30,11 @@ ORDER BY ecosystem, name`
 // wins: ordering before collect() and taking the head is the Cypher idiom for
 // "best per group".
 const impactedRepositoriesCypher = `
-MATCH (lib:Library)-[:AFFECTED_BY]->(:Vulnerability {cve_id: $cve_id})
+MATCH (lib:Library)-[a:AFFECTED_BY]->(:Vulnerability {cve_id: $cve_id})
 MATCH path = (repo:Repository)-[:DEPENDS_ON*1..%d]->(lib)
-WITH repo, lib, path, length(path) AS depth
+WITH repo, lib, a, path, length(path) AS depth
 ORDER BY depth ASC
-WITH repo, lib, head(collect({path: path, depth: depth})) AS best
+WITH repo, lib, a, head(collect({path: path, depth: depth})) AS best
 OPTIONAL MATCH (author:Author)-[:MAINTAINS]->(repo)
 RETURN repo.owner          AS owner,
        repo.name           AS name,
@@ -47,7 +47,9 @@ RETURN repo.owner          AS owner,
        lib.name            AS library,
        best.depth          AS depth,
        (best.depth = 1 AND coalesce(relationships(best.path)[0].direct, false)) AS direct,
-       [n IN nodes(best.path) | coalesce(n.full_name, n.key)] AS path
+       [n IN nodes(best.path) | coalesce(n.full_name, n.key)] AS path,
+       last(relationships(best.path)).version AS declared,
+       a.affected_version  AS affected
 ORDER BY depth ASC, owner ASC, name ASC
 LIMIT $limit`
 
@@ -125,9 +127,11 @@ func (g *Graph) FindBlastRadius(ctx context.Context, cveID string, maxDepth, lim
 					Ecosystem: valueobject.ParseEcosystem(asString(row, "ecosystem")),
 					Name:      asString(row, "library"),
 				},
-				Depth:  int(asInt(row, "depth")),
-				Direct: asBool(row, "direct"),
-				Path:   asStrings(row, "path"),
+				Depth:            int(asInt(row, "depth")),
+				Direct:           asBool(row, "direct"),
+				Path:             asStrings(row, "path"),
+				DeclaredVersion:  asString(row, "declared"),
+				AffectedVersions: asString(row, "affected"),
 			})
 		}
 		return radius, nil

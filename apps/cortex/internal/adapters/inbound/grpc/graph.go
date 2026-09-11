@@ -11,6 +11,7 @@ import (
 	commonv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/common/v1"
 	intelv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/intelligence/v1"
 
+	"github.com/inventedsarawak/hyperion/apps/cortex/internal/application/queries"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/model"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/ports"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/valueobject"
@@ -49,12 +50,15 @@ func (s *Server) GetBlastRadius(ctx context.Context, req *intelv1.GetBlastRadius
 	impacted := make([]*intelv1.ImpactedRepository, 0, len(radius.Repositories))
 	for _, r := range radius.Repositories {
 		impacted = append(impacted, &intelv1.ImpactedRepository{
-			Repository: toProtoRepository(r.Repository),
-			ViaPackage: toProtoPackageRef(r.ViaPackage),
-			Author:     toProtoAuthor(r.Author),
-			Depth:      int32(r.Depth),
-			Direct:     r.Direct,
-			Path:       r.Path,
+			Repository:       toProtoRepository(r.Repository),
+			ViaPackage:       toProtoPackageRef(r.ViaPackage),
+			Author:           toProtoAuthor(r.Author),
+			Depth:            int32(r.Depth),
+			Direct:           r.Direct,
+			Path:             r.Path,
+			DeclaredVersion:  r.DeclaredVersion,
+			AffectedVersions: r.AffectedVersions,
+			Verdict:          toProtoVerdict(r.Verdict),
 		})
 	}
 
@@ -64,6 +68,65 @@ func (s *Server) GetBlastRadius(ctx context.Context, req *intelv1.GetBlastRadius
 		Repositories:       impacted,
 		TotalRepositories:  int32(radius.TotalRepositories()),
 	}, nil
+}
+
+// GetRepositoryExposure answers "which vulnerabilities does this repository have?".
+func (s *Server) GetRepositoryExposure(ctx context.Context, req *intelv1.GetRepositoryExposureRequest) (*intelv1.GetRepositoryExposureResponse, error) {
+	if s.exposure == nil {
+		return nil, status.Error(codes.Unavailable, ports.ErrGraphUnavailable.Error())
+	}
+	exp, err := s.exposure.Handle(ctx, req.GetFullName(), int(req.GetMaxDepth()), req.GetIncludeUnaffected())
+	switch {
+	case errors.Is(err, queries.ErrNeedRepository):
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	case err != nil:
+		return nil, mapGraphError(err)
+	}
+
+	findings := make([]*intelv1.RepositoryFinding, 0, len(exp.Findings))
+	for _, e := range exp.Findings {
+		findings = append(findings, &intelv1.RepositoryFinding{
+			Vulnerability:    toProtoVulnerability(e.Finding),
+			ViaPackage:       toProtoPackageRef(e.Package),
+			AffectedVersions: e.AffectedVersions,
+			Verdict:          toProtoVerdict(e.Verdict),
+			Depth:            int32(e.Depth),
+			Direct:           e.Direct,
+			Path:             e.Path,
+		})
+	}
+	return &intelv1.GetRepositoryExposureResponse{
+		FullName: exp.FullName,
+		Findings: findings,
+		Summary:  toProtoSummary(exp.Summary),
+		Scanned:  exp.Scanned,
+	}, nil
+}
+
+func toProtoVerdict(v valueobject.ExposureVerdict) commonv1.ExposureVerdict {
+	switch v {
+	case valueobject.ExposureAffected:
+		return commonv1.ExposureVerdict_EXPOSURE_VERDICT_AFFECTED
+	case valueobject.ExposurePossible:
+		return commonv1.ExposureVerdict_EXPOSURE_VERDICT_POSSIBLY_AFFECTED
+	case valueobject.ExposureNotAffected:
+		return commonv1.ExposureVerdict_EXPOSURE_VERDICT_NOT_AFFECTED
+	case valueobject.ExposureUnknown:
+		return commonv1.ExposureVerdict_EXPOSURE_VERDICT_UNKNOWN
+	default:
+		return commonv1.ExposureVerdict_EXPOSURE_VERDICT_UNSPECIFIED
+	}
+}
+
+func toProtoSummary(s model.ExposureSummary) *commonv1.ExposureSummary {
+	return &commonv1.ExposureSummary{
+		Computed:         s.Computed,
+		CriticalAffected: int32(s.CriticalAffected),
+		CriticalPossible: int32(s.CriticalPossible),
+		HighAffected:     int32(s.HighAffected),
+		HighPossible:     int32(s.HighPossible),
+		Total:            int32(s.Total),
+	}
 }
 
 // mapGraphError translates a domain failure into the right gRPC status. A

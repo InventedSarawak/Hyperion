@@ -3,6 +3,7 @@ package queries
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/model"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/ports"
@@ -91,5 +92,21 @@ func (q *CalculateBlastRadius) Handle(ctx context.Context, cveID string, maxDept
 		return model.BlastRadius{}, fmt.Errorf("blast radius %s: %w", cveID, err)
 	}
 	radius.CVEID = cveID
+	// A repository that depends on the library is not necessarily exposed:
+	// judge the version it declares against the affected range, and list the
+	// exposed first.
+	for i := range radius.Repositories {
+		r := &radius.Repositories[i]
+		r.Verdict = valueobject.JudgeExposure(r.ViaPackage.Ecosystem, r.DeclaredVersion, r.AffectedVersions)
+	}
+	slices.SortStableFunc(radius.Repositories, func(a, b model.ImpactedRepository) int {
+		switch {
+		case a.Verdict.Worse(b.Verdict):
+			return -1
+		case b.Verdict.Worse(a.Verdict):
+			return 1
+		}
+		return 0
+	})
 	return radius, nil
 }

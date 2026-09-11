@@ -36,6 +36,11 @@ type BlastRadiusCalculator interface {
 	Handle(ctx context.Context, cveID string, maxDepth, limit int) (model.BlastRadius, error)
 }
 
+// RepositoryExposureReader lists the findings one repository reaches.
+type RepositoryExposureReader interface {
+	Handle(ctx context.Context, fullName string, maxDepth int, includeUnaffected bool) (model.RepositoryExposure, error)
+}
+
 // VulnerabilityReader loads one finding from the store of record.
 type VulnerabilityReader interface {
 	GetByID(ctx context.Context, cveID string) (model.Vulnerability, error)
@@ -44,10 +49,11 @@ type VulnerabilityReader interface {
 // Server implements intelv1.IntelligenceServiceServer.
 type Server struct {
 	intelv1.UnimplementedIntelligenceServiceServer
-	search Searcher
-	deps   DependencyIngester
-	blast  BlastRadiusCalculator
-	vulns  VulnerabilityReader
+	search   Searcher
+	deps     DependencyIngester
+	blast    BlastRadiusCalculator
+	vulns    VulnerabilityReader
+	exposure RepositoryExposureReader
 }
 
 // NewServer wires the gRPC adapter to cortex's use cases. The graph use cases
@@ -55,6 +61,12 @@ type Server struct {
 // report Unavailable rather than answering wrongly.
 func NewServer(search Searcher, deps DependencyIngester, blast BlastRadiusCalculator, vulns VulnerabilityReader) *Server {
 	return &Server{search: search, deps: deps, blast: blast, vulns: vulns}
+}
+
+// WithRepositoryExposure serves GetRepositoryExposure.
+func (s *Server) WithRepositoryExposure(r RepositoryExposureReader) *Server {
+	s.exposure = r
+	return s
 }
 
 // GetVulnerability returns one finding in full.

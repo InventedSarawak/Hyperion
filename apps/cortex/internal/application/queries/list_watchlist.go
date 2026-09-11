@@ -21,6 +21,20 @@ const (
 type ListWatchlist struct {
 	watchlist ports.Watchlist
 	catalog   ports.RepositoryCatalog
+	exposure  ExposureSummarizer
+}
+
+// ExposureSummarizer flags repositories by the serious findings they may be
+// exposed to (consumer-side interface, implemented by RepositoryExposure).
+type ExposureSummarizer interface {
+	Summaries(ctx context.Context) (map[string]model.ExposureSummary, error)
+}
+
+// WithExposure flags each listed repository. Without it — or when the graph
+// cannot be asked — every flag reads "not computed".
+func (q *ListWatchlist) WithExposure(s ExposureSummarizer) *ListWatchlist {
+	q.exposure = s
+	return q
 }
 
 // NewListWatchlist wires the use case. The catalog may be nil, in which case
@@ -29,9 +43,32 @@ func NewListWatchlist(watchlist ports.Watchlist, catalog ports.RepositoryCatalog
 	return &ListWatchlist{watchlist: watchlist, catalog: catalog}
 }
 
-// Repositories returns every tracked repository.
+// Repositories returns every tracked repository, flagged.
+//
+// A flag failing to compute never fails the list: the watchlist is how
+// repositories are managed, and the graph being down must not hide it.
 func (q *ListWatchlist) Repositories(ctx context.Context) ([]model.TrackedRepository, error) {
-	return q.watchlist.List(ctx)
+	repos, err := q.watchlist.List(ctx)
+	if err != nil || q.exposure == nil {
+		return repos, err
+	}
+	summaries, err := q.exposure.Summaries(ctx)
+	if err != nil {
+		return repos, nil
+	}
+	for i := range repos {
+		// A repository with no dependencies read has nothing to judge, and
+		// "no findings" would read as "clean".
+		if repos[i].Status != model.ScanScanned || repos[i].DependencyCount == 0 {
+			continue
+		}
+		if s, ok := summaries[strings.ToLower(repos[i].FullName())]; ok {
+			repos[i].Exposure = s
+		} else {
+			repos[i].Exposure = model.ExposureSummary{Computed: true}
+		}
+	}
+	return repos, nil
 }
 
 // Discover lists an owner's repositories on the forge and marks the ones

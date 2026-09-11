@@ -29,6 +29,12 @@ func (g *recordingGraph) LinkVulnerability(context.Context, string, []valueobjec
 	return nil
 }
 
+func (g *recordingGraph) FindRepositoryExposures(context.Context, []string, int) ([]model.Exposure, error) {
+	return nil, nil
+}
+
+func (g *recordingGraph) HasRepository(context.Context, string) (bool, error) { return false, nil }
+
 func (g *recordingGraph) RemoveVulnerabilities(context.Context, []string) error { return nil }
 
 func (g *recordingGraph) FindBlastRadius(_ context.Context, cveID string, depth, limit int) (model.BlastRadius, error) {
@@ -52,6 +58,24 @@ func (s stubResolver) GetByID(_ context.Context, id string) (model.Vulnerability
 
 var _ = Describe("CalculateBlastRadius use case", func() {
 	ctx := context.Background()
+
+	It("judges each repository's declared version, listing the exposed first", func() {
+		graph := &recordingGraph{result: model.BlastRadius{Repositories: []model.ImpactedRepository{
+			{Repository: model.Repository{Owner: "InventedSarawak", Name: "CacheMiss"},
+				ViaPackage:      valueobject.PackageRef{Ecosystem: valueobject.EcosystemNPM, Name: "astro"},
+				DeclaredVersion: "^5.11.0", AffectedVersions: "< 5.0.8"},
+			{Repository: model.Repository{Owner: "snyk-labs", Name: "nodejs-goof"},
+				ViaPackage:      valueobject.PackageRef{Ecosystem: valueobject.EcosystemNPM, Name: "lodash"},
+				DeclaredVersion: "4.17.4", AffectedVersions: "< 4.17.12"},
+		}}}
+
+		radius, err := queries.NewCalculateBlastRadius(graph, 0).Handle(ctx, "CVE-2024-56159", 0, 0)
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(radius.Repositories[0].Repository.Name).To(Equal("nodejs-goof"))
+		Expect(radius.Repositories[0].Verdict).To(Equal(valueobject.ExposureAffected))
+		Expect(radius.Repositories[1].Verdict).To(Equal(valueobject.ExposureNotAffected))
+	})
 
 	It("walks from the canonical id whichever of the finding's ids was asked for", func() {
 		graph := &recordingGraph{}

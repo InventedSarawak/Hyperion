@@ -41,6 +41,16 @@ func (g *Graph) FindBlastRadius(context.Context, string, int, int) (model.BlastR
 	return model.BlastRadius{}, ports.ErrGraphUnavailable
 }
 
+// FindRepositoryExposures reports that the question cannot be answered.
+func (g *Graph) FindRepositoryExposures(context.Context, []string, int) ([]model.Exposure, error) {
+	return nil, ports.ErrGraphUnavailable
+}
+
+// HasRepository reports that the question cannot be answered.
+func (g *Graph) HasRepository(context.Context, string) (bool, error) {
+	return false, ports.ErrGraphUnavailable
+}
+
 // Ready reports that no backend is configured.
 func (g *Graph) Ready(context.Context) error { return ports.ErrGraphUnavailable }
 
