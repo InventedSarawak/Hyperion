@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/graphql-go/graphql"
 
@@ -22,6 +23,41 @@ type BlastRadiusResolver interface {
 	Handle(ctx context.Context, cveID string, maxDepth, limit int) (model.BlastRadius, error)
 }
 
+// VulnerabilityResolver returns one finding in full.
+type VulnerabilityResolver interface {
+	Handle(ctx context.Context, id string) (model.Vulnerability, error)
+}
+
+// WatchlistResolver reads and edits the repositories cortex tracks.
+type WatchlistResolver interface {
+	Tracked(ctx context.Context) ([]model.TrackedRepository, error)
+	Discover(ctx context.Context, owner string, limit int) ([]model.DiscoveredRepository, error)
+	Track(ctx context.Context, fullNames []string) ([]model.TrackedRepository, error)
+	Untrack(ctx context.Context, fullName string) (bool, error)
+}
+
+// Option adds optional resolvers to the schema.
+type Option func(*resolvers)
+
+type resolvers struct {
+	vulnerability VulnerabilityResolver
+	watchlist     WatchlistResolver
+}
+
+// WithVulnerability serves the `vulnerability` query.
+func WithVulnerability(r VulnerabilityResolver) Option {
+	return func(rs *resolvers) { rs.vulnerability = r }
+}
+
+// WithWatchlist serves the watchlist queries and mutations.
+func WithWatchlist(r WatchlistResolver) Option {
+	return func(rs *resolvers) { rs.watchlist = r }
+}
+
+// errUnavailable is returned by a field whose resolver was not configured.
+// The field stays in the schema either way, so clients see one stable shape.
+var errUnavailable = fmt.Errorf("not available on this gateway")
+
 // cvssType mirrors model.CVSS.
 var cvssType = graphql.NewObject(graphql.ObjectConfig{
 	Name: "Cvss",
@@ -33,17 +69,75 @@ var cvssType = graphql.NewObject(graphql.ObjectConfig{
 	},
 })
 
+// affectedPackageType mirrors model.AffectedPackage.
+var affectedPackageType = graphql.NewObject(graphql.ObjectConfig{
+	Name: "AffectedPackage",
+	Fields: graphql.Fields{
+		"package": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "ecosystem:name, e.g. \"npm:next\"",
+		},
+		"versionRange": &graphql.Field{
+			Type:        graphql.String,
+			Description: "affected versions as the feed wrote them, e.g. \">= 13.0.0, < 14.2.25\"",
+		},
+	},
+})
+
 // vulnerabilityType mirrors model.Vulnerability.
 var vulnerabilityType = graphql.NewObject(graphql.ObjectConfig{
 	Name: "Vulnerability",
 	Fields: graphql.Fields{
-		"cveId":       &graphql.Field{Type: graphql.NewNonNull(graphql.String)},
+		"cveId": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "the CVE id, or the GHSA id for an advisory with no CVE",
+		},
 		"title":       &graphql.Field{Type: graphql.String},
 		"description": &graphql.Field{Type: graphql.String},
 		"scores":      &graphql.Field{Type: graphql.NewList(cvssType)},
 		"references":  &graphql.Field{Type: graphql.NewList(graphql.String)},
 		"publishedAt": &graphql.Field{Type: graphql.String},
 		"modifiedAt":  &graphql.Field{Type: graphql.String},
+		"sources": &graphql.Field{
+			Type:        graphql.NewList(graphql.String),
+			Description: "feeds that reported it, e.g. \"nvd\", \"github_advisory\"",
+		},
+		"affectedPackages": &graphql.Field{Type: graphql.NewList(affectedPackageType)},
+	},
+})
+
+// trackedRepositoryType mirrors model.TrackedRepository.
+var trackedRepositoryType = graphql.NewObject(graphql.ObjectConfig{
+	Name: "TrackedRepository",
+	Fields: graphql.Fields{
+		"fullName": &graphql.Field{Type: graphql.NewNonNull(graphql.String)},
+		"url":      &graphql.Field{Type: graphql.String},
+		"status": &graphql.Field{
+			Type:        graphql.String,
+			Description: "pending, scanned or failed",
+		},
+		"addedAt":         &graphql.Field{Type: graphql.String},
+		"lastScanAt":      &graphql.Field{Type: graphql.String},
+		"lastError":       &graphql.Field{Type: graphql.String},
+		"dependencyCount": &graphql.Field{Type: graphql.Int},
+	},
+})
+
+// discoveredRepositoryType mirrors model.DiscoveredRepository.
+var discoveredRepositoryType = graphql.NewObject(graphql.ObjectConfig{
+	Name: "DiscoveredRepository",
+	Fields: graphql.Fields{
+		"fullName":    &graphql.Field{Type: graphql.NewNonNull(graphql.String)},
+		"description": &graphql.Field{Type: graphql.String},
+		"language":    &graphql.Field{Type: graphql.String},
+		"stars":       &graphql.Field{Type: graphql.Int},
+		"pushedAt":    &graphql.Field{Type: graphql.String},
+		"fork":        &graphql.Field{Type: graphql.Boolean},
+		"archived":    &graphql.Field{Type: graphql.Boolean},
+		"tracked": &graphql.Field{
+			Type:        graphql.Boolean,
+			Description: "already on the watchlist",
+		},
 	},
 })
 
@@ -135,7 +229,12 @@ var blastRadiusType = graphql.NewObject(graphql.ObjectConfig{
 })
 
 // NewSchema builds the GraphQL schema, wiring each query to its use case.
-func NewSchema(searcher Searcher, blast BlastRadiusResolver) (graphql.Schema, error) {
+func NewSchema(searcher Searcher, blast BlastRadiusResolver, opts ...Option) (graphql.Schema, error) {
+	var rs resolvers
+	for _, opt := range opts {
+		opt(&rs)
+	}
+
 	query := graphql.NewObject(graphql.ObjectConfig{
 		Name: "Query",
 		Fields: graphql.Fields{
@@ -184,10 +283,123 @@ func NewSchema(searcher Searcher, blast BlastRadiusResolver) (graphql.Schema, er
 					return blastRadiusMap(radius), nil
 				},
 			},
+			"vulnerability": &graphql.Field{
+				Type: vulnerabilityType,
+				Description: "One finding in full, from the store of record — including each " +
+					"affected package's version range, which search results omit.",
+				Args: graphql.FieldConfigArgument{
+					"cveId": &graphql.ArgumentConfig{Type: graphql.NewNonNull(graphql.String)},
+				},
+				Resolve: func(p graphql.ResolveParams) (any, error) {
+					if rs.vulnerability == nil {
+						return nil, errUnavailable
+					}
+					id, _ := p.Args["cveId"].(string)
+					v, err := rs.vulnerability.Handle(p.Context, id)
+					if err != nil {
+						return nil, err
+					}
+					return vulnerabilityMap(v), nil
+				},
+			},
+			"trackedRepositories": &graphql.Field{
+				Type:        graphql.NewList(trackedRepositoryType),
+				Description: "Every repository on the watchlist, with how its last scan went.",
+				Resolve: func(p graphql.ResolveParams) (any, error) {
+					if rs.watchlist == nil {
+						return nil, errUnavailable
+					}
+					repos, err := rs.watchlist.Tracked(p.Context)
+					if err != nil {
+						return nil, err
+					}
+					return trackedMaps(repos), nil
+				},
+			},
+			"discoverRepositories": &graphql.Field{
+				Type:        graphql.NewList(discoveredRepositoryType),
+				Description: "A GitHub user's or organization's repositories, most recently pushed first.",
+				Args: graphql.FieldConfigArgument{
+					"owner": &graphql.ArgumentConfig{Type: graphql.NewNonNull(graphql.String)},
+					"limit": &graphql.ArgumentConfig{Type: graphql.Int},
+				},
+				Resolve: func(p graphql.ResolveParams) (any, error) {
+					if rs.watchlist == nil {
+						return nil, errUnavailable
+					}
+					owner, _ := p.Args["owner"].(string)
+					limit, _ := p.Args["limit"].(int)
+					found, err := rs.watchlist.Discover(p.Context, owner, limit)
+					if err != nil {
+						return nil, err
+					}
+					out := make([]map[string]any, 0, len(found))
+					for _, r := range found {
+						out = append(out, map[string]any{
+							"fullName":    r.FullName,
+							"description": r.Description,
+							"language":    r.Language,
+							"stars":       r.Stars,
+							"pushedAt":    formatTime(r.PushedAt),
+							"fork":        r.Fork,
+							"archived":    r.Archived,
+							"tracked":     r.Tracked,
+						})
+					}
+					return out, nil
+				},
+			},
 		},
 	})
 
-	schema, err := graphql.NewSchema(graphql.SchemaConfig{Query: query})
+	mutation := graphql.NewObject(graphql.ObjectConfig{
+		Name: "Mutation",
+		Fields: graphql.Fields{
+			"trackRepositories": &graphql.Field{
+				Type: graphql.NewList(trackedRepositoryType),
+				Description: "Add repositories to the watchlist; the scanner reads them on its next pass. " +
+					"Tracking one already tracked re-queues it for a scan.",
+				Args: graphql.FieldConfigArgument{
+					"fullNames": &graphql.ArgumentConfig{
+						Type: graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(graphql.String))),
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (any, error) {
+					if rs.watchlist == nil {
+						return nil, errUnavailable
+					}
+					raw, _ := p.Args["fullNames"].([]any)
+					names := make([]string, 0, len(raw))
+					for _, n := range raw {
+						if s, ok := n.(string); ok {
+							names = append(names, s)
+						}
+					}
+					repos, err := rs.watchlist.Track(p.Context, names)
+					if err != nil {
+						return nil, err
+					}
+					return trackedMaps(repos), nil
+				},
+			},
+			"untrackRepository": &graphql.Field{
+				Type:        graphql.Boolean,
+				Description: "Stop tracking a repository and remove it from the dependency graph.",
+				Args: graphql.FieldConfigArgument{
+					"fullName": &graphql.ArgumentConfig{Type: graphql.NewNonNull(graphql.String)},
+				},
+				Resolve: func(p graphql.ResolveParams) (any, error) {
+					if rs.watchlist == nil {
+						return nil, errUnavailable
+					}
+					fullName, _ := p.Args["fullName"].(string)
+					return rs.watchlist.Untrack(p.Context, fullName)
+				},
+			},
+		},
+	})
+
+	schema, err := graphql.NewSchema(graphql.SchemaConfig{Query: query, Mutation: mutation})
 	if err != nil {
 		return graphql.Schema{}, fmt.Errorf("graphql: build schema: %w", err)
 	}
@@ -222,18 +434,48 @@ func vulnerabilityMap(v model.Vulnerability) map[string]any {
 			"severity":  s.Severity,
 		})
 	}
+	packages := make([]map[string]any, 0, len(v.AffectedPackages))
+	for _, p := range v.AffectedPackages {
+		packages = append(packages, map[string]any{"package": p.Package, "versionRange": p.VersionRange})
+	}
 	out := map[string]any{
-		"cveId":       v.CVEID,
-		"title":       v.Title,
-		"description": v.Description,
-		"scores":      scores,
-		"references":  v.References,
+		"cveId":            v.CVEID,
+		"title":            v.Title,
+		"description":      v.Description,
+		"scores":           scores,
+		"references":       v.References,
+		"sources":          v.Sources,
+		"affectedPackages": packages,
 	}
 	if !v.PublishedAt.IsZero() {
-		out["publishedAt"] = v.PublishedAt.UTC().Format("2006-01-02T15:04:05Z")
+		out["publishedAt"] = formatTime(v.PublishedAt)
 	}
 	if !v.ModifiedAt.IsZero() {
-		out["modifiedAt"] = v.ModifiedAt.UTC().Format("2006-01-02T15:04:05Z")
+		out["modifiedAt"] = formatTime(v.ModifiedAt)
+	}
+	return out
+}
+
+// formatTime renders a timestamp as RFC 3339 UTC, and a zero one as null.
+func formatTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t.UTC().Format("2006-01-02T15:04:05Z")
+}
+
+func trackedMaps(repos []model.TrackedRepository) []map[string]any {
+	out := make([]map[string]any, 0, len(repos))
+	for _, r := range repos {
+		out = append(out, map[string]any{
+			"fullName":        r.FullName,
+			"url":             r.URL,
+			"status":          r.Status,
+			"addedAt":         formatTime(r.AddedAt),
+			"lastScanAt":      formatTime(r.LastScanAt),
+			"lastError":       r.LastError,
+			"dependencyCount": r.DependencyCount,
+		})
 	}
 	return out
 }

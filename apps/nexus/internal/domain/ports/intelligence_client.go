@@ -15,4 +15,14 @@ type IntelligenceClient interface {
 	// BlastRadius returns the repositories a vulnerability reaches through
 	// the dependency graph.
 	BlastRadius(ctx context.Context, cveID string, maxDepth, limit int) (model.BlastRadius, error)
+	// Vulnerability returns one finding in full.
+	Vulnerability(ctx context.Context, id string) (model.Vulnerability, error)
+}
+
+// WatchlistClient is an OUTBOUND port: the repositories cortex tracks.
+type WatchlistClient interface {
+	TrackedRepositories(ctx context.Context) ([]model.TrackedRepository, error)
+	DiscoverRepositories(ctx context.Context, owner string, limit int) ([]model.DiscoveredRepository, error)
+	TrackRepositories(ctx context.Context, fullNames []string) ([]model.TrackedRepository, error)
+	UntrackRepository(ctx context.Context, fullName string) (bool, error)
 }

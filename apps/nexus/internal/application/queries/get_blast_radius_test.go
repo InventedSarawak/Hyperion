@@ -80,3 +80,8 @@ var _ = Describe("GetBlastRadius use case", func() {
 		Expect(radius.Repositories[0].FullName()).To(Equal("vercel/commerce"))
 	})
 })
+
+// Vulnerability satisfies ports.IntelligenceClient.
+func (s *blastStub) Vulnerability(context.Context, string) (model.Vulnerability, error) {
+	return model.Vulnerability{}, nil
+}

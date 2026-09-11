@@ -250,3 +250,87 @@ var _ = Describe("GraphQL search sort and totals", func() {
 		Expect(result.Errors).ToNot(BeEmpty())
 	})
 })
+
+type stubVulnerability struct{ v model.Vulnerability }
+
+func (s stubVulnerability) Handle(context.Context, string) (model.Vulnerability, error) {
+	return s.v, nil
+}
+
+type stubWatchlist struct {
+	tracked   []string
+	untracked string
+}
+
+func (s *stubWatchlist) Tracked(context.Context) ([]model.TrackedRepository, error) {
+	return []model.TrackedRepository{{FullName: "vercel/next.js", Status: "scanned", DependencyCount: 12}}, nil
+}
+
+func (s *stubWatchlist) Discover(_ context.Context, owner string, _ int) ([]model.DiscoveredRepository, error) {
+	return []model.DiscoveredRepository{{FullName: owner + "/swr", Stars: 30000, Tracked: true}}, nil
+}
+
+func (s *stubWatchlist) Track(_ context.Context, names []string) ([]model.TrackedRepository, error) {
+	s.tracked = names
+	out := make([]model.TrackedRepository, 0, len(names))
+	for _, n := range names {
+		out = append(out, model.TrackedRepository{FullName: n, Status: "pending"})
+	}
+	return out, nil
+}
+
+func (s *stubWatchlist) Untrack(_ context.Context, name string) (bool, error) {
+	s.untracked = name
+	return true, nil
+}
+
+var _ = Describe("GraphQL details and watchlist", func() {
+	It("serves one finding with its sources and affected version ranges", func() {
+		schema, err := graphqladapter.NewSchema(&stubSearcher{}, &stubBlast{},
+			graphqladapter.WithVulnerability(stubVulnerability{v: model.Vulnerability{
+				CVEID:            "CVE-2025-55182",
+				Title:            "React Server Components are Vulnerable to RCE",
+				Sources:          []string{"nvd", "package_feed"},
+				AffectedPackages: []model.AffectedPackage{{Package: "npm:react-server-dom-webpack", VersionRange: ">= 19.0.0, < 19.0.1"}},
+			}}))
+		Expect(err).ToNot(HaveOccurred())
+
+		out := post(graphqladapter.NewHandler(schema),
+			`{ vulnerability(cveId: "CVE-2025-55182") { title sources affectedPackages { package versionRange } } }`)
+
+		Expect(out).ToNot(HaveKey("errors"))
+		v := out["data"].(map[string]any)["vulnerability"].(map[string]any)
+		Expect(v["sources"]).To(ConsistOf("nvd", "package_feed"))
+		pkg := v["affectedPackages"].([]any)[0].(map[string]any)
+		Expect(pkg["versionRange"]).To(Equal(">= 19.0.0, < 19.0.1"))
+	})
+
+	It("lists, discovers, tracks and untracks repositories", func() {
+		watch := &stubWatchlist{}
+		schema, err := graphqladapter.NewSchema(&stubSearcher{}, &stubBlast{}, graphqladapter.WithWatchlist(watch))
+		Expect(err).ToNot(HaveOccurred())
+		h := graphqladapter.NewHandler(schema)
+
+		out := post(h, `{ trackedRepositories { fullName status dependencyCount } discoverRepositories(owner: "vercel") { fullName tracked stars } }`)
+		Expect(out).ToNot(HaveKey("errors"))
+		data := out["data"].(map[string]any)
+		Expect(data["trackedRepositories"].([]any)[0].(map[string]any)["dependencyCount"]).To(BeEquivalentTo(12))
+		Expect(data["discoverRepositories"].([]any)[0].(map[string]any)["tracked"]).To(BeTrue())
+
+		out = post(h, `mutation { trackRepositories(fullNames: ["vercel/swr", "vercel/ai"]) { fullName status } }`)
+		Expect(out).ToNot(HaveKey("errors"))
+		Expect(watch.tracked).To(Equal([]string{"vercel/swr", "vercel/ai"}))
+
+		out = post(h, `mutation { untrackRepository(fullName: "vercel/swr") }`)
+		Expect(out["data"].(map[string]any)["untrackRepository"]).To(BeTrue())
+		Expect(watch.untracked).To(Equal("vercel/swr"))
+	})
+
+	It("keeps the fields in the schema but reports them unavailable when not wired", func() {
+		schema, err := graphqladapter.NewSchema(&stubSearcher{}, &stubBlast{})
+		Expect(err).ToNot(HaveOccurred())
+
+		out := post(graphqladapter.NewHandler(schema), `{ trackedRepositories { fullName } }`)
+		Expect(out["errors"]).ToNot(BeEmpty())
+	})
+})

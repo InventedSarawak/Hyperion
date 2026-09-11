@@ -91,3 +91,8 @@ var _ = Describe("SearchVulnerabilities use case", func() {
 func (s *stubIntelligence) BlastRadius(context.Context, string, int, int) (model.BlastRadius, error) {
 	return model.BlastRadius{}, nil
 }
+
+// Vulnerability satisfies ports.IntelligenceClient.
+func (s *stubIntelligence) Vulnerability(context.Context, string) (model.Vulnerability, error) {
+	return model.Vulnerability{}, nil
+}

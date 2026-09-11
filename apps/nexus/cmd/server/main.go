@@ -38,7 +38,9 @@ func main() {
 	search := queries.NewSearchVulnerabilities(intelligence)
 	blast := queries.NewGetBlastRadius(intelligence)
 
-	schema, err := graphqladapter.NewSchema(search, blast)
+	schema, err := graphqladapter.NewSchema(search, blast,
+		graphqladapter.WithVulnerability(queries.NewGetVulnerability(intelligence)),
+		graphqladapter.WithWatchlist(queries.NewWatchlist(intelligence)))
 	if err != nil {
 		logger.Error("graphql schema build failed", "error", err)
 		os.Exit(1)
