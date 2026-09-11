@@ -111,6 +111,37 @@ var _ = Describe("Consumer affected packages", func() {
 		Expect(ingester.got[0].AffectedPackages[1].Ecosystem).To(Equal(valueobject.EcosystemUnknown))
 	})
 
+	It("maps every id and the kind off the wire, filing the finding under its canonical id", func() {
+		msg := &eventsv1.SignalDiscovered{
+			SignalId: "package_feed:GHSA-fw8c-xr5c-95f9",
+			Source:   eventsv1.SourceKind_SOURCE_KIND_PACKAGE_FEED,
+			Vulnerability: &commonv1.Vulnerability{
+				CveId:   "MAL-2026-2307",
+				Aliases: []string{"GHSA-fw8c-xr5c-95f9"},
+				Kind:    commonv1.FindingKind_FINDING_KIND_MALWARE,
+			},
+		}
+		line, err := protojson.Marshal(msg)
+		Expect(err).ToNot(HaveOccurred())
+
+		ingester := &captureIngester{}
+		_, err = consumer.NewConsumer(ingester).Run(context.Background(), strings.NewReader(string(line)))
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(ingester.got[0].CVEID).To(Equal("GHSA-fw8c-xr5c-95f9"))
+		Expect(ingester.got[0].Aliases).To(Equal([]string{"MAL-2026-2307"}))
+		Expect(ingester.got[0].Kind).To(Equal(model.KindMalware))
+	})
+
+	It("reads an event with no kind as an ordinary vulnerability", func() {
+		ingester := &captureIngester{}
+		_, err := consumer.NewConsumer(ingester).Run(context.Background(),
+			strings.NewReader(eventLine("CVE-2021-44228", commonv1.Severity_SEVERITY_CRITICAL)))
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(ingester.got[0].Kind).To(Equal(model.KindVulnerability))
+	})
+
 	It("leaves affected packages nil when the event carries none", func() {
 		ingester := &captureIngester{}
 		_, err := consumer.NewConsumer(ingester).Run(context.Background(),

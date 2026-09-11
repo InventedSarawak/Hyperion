@@ -147,10 +147,15 @@ func (c *Consumer) read(ctx context.Context, r io.Reader, dispatch func(model.Vu
 
 // --- mapping: wire contract -> cortex domain ---
 
+// toDomain maps an event onto the domain and normalises its identity before
+// it is sharded, so reports of one finding that led with different ids (the
+// CVE from NVD, the GHSA from GitHub) land on the same worker.
 func toDomain(msg *eventsv1.SignalDiscovered) model.Vulnerability {
 	v := msg.GetVulnerability()
 	return model.Vulnerability{
 		CVEID:            v.GetCveId(),
+		Aliases:          v.GetAliases(),
+		Kind:             toKind(v.GetKind()),
 		Title:            v.GetTitle(),
 		Description:      v.GetDescription(),
 		Scores:           toScores(v.GetScores()),
@@ -159,7 +164,16 @@ func toDomain(msg *eventsv1.SignalDiscovered) model.Vulnerability {
 		PublishedAt:      fromTimestamp(v.GetPublishedAt()),
 		ModifiedAt:       fromTimestamp(v.GetModifiedAt()),
 		AffectedPackages: toPackageRefs(v.GetAffectedPackages()),
+	}.Normalized()
+}
+
+// toKind maps the wire kind. Unspecified — every feed that predates the field,
+// and every feed that only reports flaws — is an ordinary vulnerability.
+func toKind(k commonv1.FindingKind) model.FindingKind {
+	if k == commonv1.FindingKind_FINDING_KIND_MALWARE {
+		return model.KindMalware
 	}
+	return model.KindVulnerability
 }
 
 func toPackageRefs(refs []*commonv1.PackageRef) []valueobject.PackageRef {
