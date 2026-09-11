@@ -208,9 +208,73 @@ func (c *Client) BlastRadius(ctx context.Context, cveID string, maxDepth, limit 
 			Depth:      int(r.GetDepth()),
 			Direct:     r.GetDirect(),
 			Path:       r.GetPath(),
+
+			DeclaredVersion:  r.GetDeclaredVersion(),
+			AffectedVersions: r.GetAffectedVersions(),
+			Verdict:          verdictLabel(r.GetVerdict()),
 		})
 	}
 	return radius, nil
+}
+
+// RepositoryExposure asks cortex which vulnerabilities a repository has.
+func (c *Client) RepositoryExposure(ctx context.Context, fullName string, includeUnaffected bool) (model.RepositoryExposure, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timout)
+	defer cancel()
+
+	resp, err := c.stub.GetRepositoryExposure(ctx, &intelv1.GetRepositoryExposureRequest{
+		FullName:          fullName,
+		IncludeUnaffected: includeUnaffected,
+	})
+	if err != nil {
+		return model.RepositoryExposure{}, describe(err)
+	}
+	out := model.RepositoryExposure{
+		FullName: resp.GetFullName(),
+		Scanned:  resp.GetScanned(),
+		Summary:  toSummary(resp.GetSummary()),
+	}
+	for _, f := range resp.GetFindings() {
+		out.Findings = append(out.Findings, model.RepositoryFinding{
+			Vulnerability:    toViewModel(f.GetVulnerability()),
+			Package:          packageLabel(f.GetViaPackage()),
+			DeclaredVersion:  f.GetViaPackage().GetVersion(),
+			AffectedVersions: f.GetAffectedVersions(),
+			Verdict:          verdictLabel(f.GetVerdict()),
+			Depth:            int(f.GetDepth()),
+			Direct:           f.GetDirect(),
+			Path:             f.GetPath(),
+		})
+	}
+	return out, nil
+}
+
+// verdictLabel maps the wire verdict onto the gateway's.
+func verdictLabel(v commonv1.ExposureVerdict) string {
+	switch v {
+	case commonv1.ExposureVerdict_EXPOSURE_VERDICT_AFFECTED:
+		return model.VerdictAffected
+	case commonv1.ExposureVerdict_EXPOSURE_VERDICT_POSSIBLY_AFFECTED:
+		return model.VerdictPossiblyAffected
+	case commonv1.ExposureVerdict_EXPOSURE_VERDICT_NOT_AFFECTED:
+		return model.VerdictNotAffected
+	case commonv1.ExposureVerdict_EXPOSURE_VERDICT_UNKNOWN:
+		return model.VerdictUnknown
+	default:
+		return ""
+	}
+}
+
+// toSummary maps an exposure summary; a missing one is "not computed".
+func toSummary(s *commonv1.ExposureSummary) model.ExposureSummary {
+	return model.ExposureSummary{
+		Computed:         s.GetComputed(),
+		CriticalAffected: int(s.GetCriticalAffected()),
+		CriticalPossible: int(s.GetCriticalPossible()),
+		HighAffected:     int(s.GetHighAffected()),
+		HighPossible:     int(s.GetHighPossible()),
+		Total:            int(s.GetTotal()),
+	}
 }
 
 // packageLabel renders a package reference the way the graph keys it,

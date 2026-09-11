@@ -108,3 +108,7 @@ var _ = Describe("SearchVulnerabilities kinds", func() {
 		Expect(stub.gotKinds).To(Equal([]model.FindingKind{model.KindMalware}))
 	})
 })
+
+func (s *stubIntelligence) RepositoryExposure(context.Context, string, bool) (model.RepositoryExposure, error) {
+	return model.RepositoryExposure{}, nil
+}

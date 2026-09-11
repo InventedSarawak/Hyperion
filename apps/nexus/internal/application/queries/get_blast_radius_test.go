@@ -84,3 +84,7 @@ var _ = Describe("GetBlastRadius use case", func() {
 func (s *blastStub) Vulnerability(context.Context, string) (model.Vulnerability, error) {
 	return model.Vulnerability{}, nil
 }
+
+func (s *blastStub) RepositoryExposure(context.Context, string, bool) (model.RepositoryExposure, error) {
+	return model.RepositoryExposure{}, nil
+}

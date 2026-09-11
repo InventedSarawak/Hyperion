@@ -42,6 +42,17 @@ type Option func(*resolvers)
 type resolvers struct {
 	vulnerability VulnerabilityResolver
 	watchlist     WatchlistResolver
+	exposure      RepositoryExposureResolver
+}
+
+// RepositoryExposureResolver answers which vulnerabilities a repository has.
+type RepositoryExposureResolver interface {
+	Handle(ctx context.Context, fullName string, includeUnaffected bool) (model.RepositoryExposure, error)
+}
+
+// WithRepositoryExposure serves the `repositoryExposure` query.
+func WithRepositoryExposure(r RepositoryExposureResolver) Option {
+	return func(rs *resolvers) { rs.exposure = r }
 }
 
 // WithVulnerability serves the `vulnerability` query.
@@ -111,6 +122,50 @@ var vulnerabilityType = graphql.NewObject(graphql.ObjectConfig{
 	},
 })
 
+// exposureVerdictEnum mirrors the model's verdicts.
+var exposureVerdictEnum = graphql.NewEnum(graphql.EnumConfig{
+	Name: "ExposureVerdict",
+	Values: graphql.EnumValueConfigMap{
+		"AFFECTED": &graphql.EnumValueConfig{
+			Value:       model.VerdictAffected,
+			Description: "Every version the manifest allows is affected.",
+		},
+		"POSSIBLY_AFFECTED": &graphql.EnumValueConfig{
+			Value:       model.VerdictPossiblyAffected,
+			Description: "Some allowed versions are affected; the installed one (the lockfile) decides.",
+		},
+		"NOT_AFFECTED": &graphql.EnumValueConfig{
+			Value:       model.VerdictNotAffected,
+			Description: "No version the manifest allows is affected.",
+		},
+		"UNKNOWN": &graphql.EnumValueConfig{
+			Value:       model.VerdictUnknown,
+			Description: "One side could not be read — a dist-tag, a git reference, an unusual range.",
+		},
+	},
+})
+
+// exposureSummaryType mirrors model.ExposureSummary.
+var exposureSummaryType = graphql.NewObject(graphql.ObjectConfig{
+	Name: "ExposureSummary",
+	Description: "The serious findings a repository may be exposed to, counted once each at their " +
+		"worst verdict; malware counts as critical, an unknown verdict as possible.",
+	Fields: graphql.Fields{
+		"computed": &graphql.Field{
+			Type:        graphql.Boolean,
+			Description: "false when nothing could be judged (not scanned, no dependencies read, graph down): the counts then mean unknown, not clean",
+		},
+		"criticalAffected": &graphql.Field{Type: graphql.Int},
+		"criticalPossible": &graphql.Field{Type: graphql.Int},
+		"highAffected":     &graphql.Field{Type: graphql.Int},
+		"highPossible":     &graphql.Field{Type: graphql.Int},
+		"total": &graphql.Field{
+			Type:        graphql.Int,
+			Description: "every finding it may be exposed to, any severity",
+		},
+	},
+})
+
 // trackedRepositoryType mirrors model.TrackedRepository.
 var trackedRepositoryType = graphql.NewObject(graphql.ObjectConfig{
 	Name: "TrackedRepository",
@@ -125,6 +180,7 @@ var trackedRepositoryType = graphql.NewObject(graphql.ObjectConfig{
 		"lastScanAt":      &graphql.Field{Type: graphql.String},
 		"lastError":       &graphql.Field{Type: graphql.String},
 		"dependencyCount": &graphql.Field{Type: graphql.Int},
+		"exposure":        &graphql.Field{Type: exposureSummaryType},
 	},
 })
 
@@ -225,6 +281,50 @@ var impactedRepositoryType = graphql.NewObject(graphql.ObjectConfig{
 			Type:        graphql.String,
 			Description: "the dependency path rendered for display",
 		},
+		"declaredVersion": &graphql.Field{
+			Type:        graphql.String,
+			Description: "what the repository's manifest asks for, e.g. \"^5.11.0\"",
+		},
+		"affectedVersions": &graphql.Field{
+			Type:        graphql.String,
+			Description: "what the advisory says is affected, e.g. \"< 5.14.3\"",
+		},
+		"verdict": &graphql.Field{Type: exposureVerdictEnum},
+	},
+})
+
+// repositoryFindingType mirrors model.RepositoryFinding.
+var repositoryFindingType = graphql.NewObject(graphql.ObjectConfig{
+	Name: "RepositoryFinding",
+	Fields: graphql.Fields{
+		"vulnerability": &graphql.Field{Type: vulnerabilityType},
+		"package": &graphql.Field{
+			Type:        graphql.String,
+			Description: "the vulnerable library the repository reaches, e.g. \"npm:astro\"",
+		},
+		"declaredVersion":  &graphql.Field{Type: graphql.String},
+		"affectedVersions": &graphql.Field{Type: graphql.String},
+		"verdict":          &graphql.Field{Type: exposureVerdictEnum},
+		"depth":            &graphql.Field{Type: graphql.Int},
+		"direct":           &graphql.Field{Type: graphql.Boolean},
+		"path":             &graphql.Field{Type: graphql.NewList(graphql.String)},
+	},
+})
+
+// repositoryExposureType mirrors model.RepositoryExposure.
+var repositoryExposureType = graphql.NewObject(graphql.ObjectConfig{
+	Name: "RepositoryExposure",
+	Fields: graphql.Fields{
+		"fullName": &graphql.Field{Type: graphql.NewNonNull(graphql.String)},
+		"scanned": &graphql.Field{
+			Type:        graphql.Boolean,
+			Description: "false when the graph has no such repository: an empty list then means unknown, not safe",
+		},
+		"findings": &graphql.Field{
+			Type:        graphql.NewList(repositoryFindingType),
+			Description: "worst first: by verdict, then severity",
+		},
+		"summary": &graphql.Field{Type: exposureSummaryType},
 	},
 })
 
@@ -331,6 +431,32 @@ func NewSchema(searcher Searcher, blast BlastRadiusResolver, opts ...Option) (gr
 						return nil, err
 					}
 					return vulnerabilityMap(v), nil
+				},
+			},
+			"repositoryExposure": &graphql.Field{
+				Type: repositoryExposureType,
+				Description: "Which vulnerabilities a repository has: the findings its dependencies reach, " +
+					"each judged by comparing the version it declares with the versions the advisory " +
+					"says are affected. Blast radius, read from the repository's side.",
+				Args: graphql.FieldConfigArgument{
+					"fullName": &graphql.ArgumentConfig{Type: graphql.NewNonNull(graphql.String)},
+					"includeUnaffected": &graphql.ArgumentConfig{
+						Type:         graphql.Boolean,
+						DefaultValue: false,
+						Description:  "also return findings the declared versions rule out",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (any, error) {
+					if rs.exposure == nil {
+						return nil, errUnavailable
+					}
+					name, _ := p.Args["fullName"].(string)
+					include, _ := p.Args["includeUnaffected"].(bool)
+					exp, err := rs.exposure.Handle(p.Context, name, include)
+					if err != nil {
+						return nil, err
+					}
+					return repositoryExposureMap(exp), nil
 				},
 			},
 			"trackedRepositories": &graphql.Field{
@@ -516,9 +642,51 @@ func trackedMaps(repos []model.TrackedRepository) []map[string]any {
 			"lastScanAt":      formatTime(r.LastScanAt),
 			"lastError":       r.LastError,
 			"dependencyCount": r.DependencyCount,
+			"exposure":        summaryMap(r.Exposure),
 		})
 	}
 	return out
+}
+
+func summaryMap(s model.ExposureSummary) map[string]any {
+	return map[string]any{
+		"computed":         s.Computed,
+		"criticalAffected": s.CriticalAffected,
+		"criticalPossible": s.CriticalPossible,
+		"highAffected":     s.HighAffected,
+		"highPossible":     s.HighPossible,
+		"total":            s.Total,
+	}
+}
+
+// verdictOrNil leaves an unjudged verdict null rather than an invalid enum.
+func verdictOrNil(v string) any {
+	if v == "" {
+		return nil
+	}
+	return v
+}
+
+func repositoryExposureMap(e model.RepositoryExposure) map[string]any {
+	findings := make([]map[string]any, 0, len(e.Findings))
+	for _, f := range e.Findings {
+		findings = append(findings, map[string]any{
+			"vulnerability":    vulnerabilityMap(f.Vulnerability),
+			"package":          f.Package,
+			"declaredVersion":  f.DeclaredVersion,
+			"affectedVersions": f.AffectedVersions,
+			"verdict":          verdictOrNil(f.Verdict),
+			"depth":            f.Depth,
+			"direct":           f.Direct,
+			"path":             f.Path,
+		})
+	}
+	return map[string]any{
+		"fullName": e.FullName,
+		"scanned":  e.Scanned,
+		"findings": findings,
+		"summary":  summaryMap(e.Summary),
+	}
 }
 
 func blastRadiusMap(r model.BlastRadius) map[string]any {
@@ -535,6 +703,10 @@ func blastRadiusMap(r model.BlastRadius) map[string]any {
 			"direct":     repo.Direct,
 			"path":       repo.Path,
 			"chain":      repo.Chain(),
+
+			"declaredVersion":  repo.DeclaredVersion,
+			"affectedVersions": repo.AffectedVersions,
+			"verdict":          verdictOrNil(repo.Verdict),
 		})
 	}
 	return map[string]any{

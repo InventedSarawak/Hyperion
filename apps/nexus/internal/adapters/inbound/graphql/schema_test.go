@@ -365,3 +365,58 @@ var _ = Describe("GraphQL details and watchlist", func() {
 		Expect(out["errors"]).ToNot(BeEmpty())
 	})
 })
+
+type stubExposure struct {
+	gotName    string
+	gotInclude bool
+	result     model.RepositoryExposure
+}
+
+func (s *stubExposure) Handle(_ context.Context, name string, include bool) (model.RepositoryExposure, error) {
+	s.gotName, s.gotInclude = name, include
+	return s.result, nil
+}
+
+var _ = Describe("GraphQL repository exposure", func() {
+	It("serves which vulnerabilities a repository has, with verdicts and its flag", func() {
+		stub := &stubExposure{result: model.RepositoryExposure{
+			FullName: "InventedSarawak/CacheMiss",
+			Scanned:  true,
+			Findings: []model.RepositoryFinding{{
+				Vulnerability:    model.Vulnerability{CVEID: "CVE-2025-54793", Title: "Astro open redirect"},
+				Package:          "npm:astro",
+				DeclaredVersion:  "^5.11.0",
+				AffectedVersions: ">= 5.2.0, < 5.12.8",
+				Verdict:          model.VerdictPossiblyAffected,
+				Depth:            1,
+				Direct:           true,
+			}},
+			Summary: model.ExposureSummary{Computed: true, HighPossible: 2, Total: 5},
+		}}
+		schema, err := graphqladapter.NewSchema(&stubSearcher{}, &stubBlast{}, graphqladapter.WithRepositoryExposure(stub))
+		Expect(err).ToNot(HaveOccurred())
+
+		out := post(graphqladapter.NewHandler(schema), `{ repositoryExposure(fullName: "InventedSarawak/CacheMiss", includeUnaffected: true) {
+			fullName scanned summary { computed highPossible total }
+			findings { verdict package declaredVersion affectedVersions vulnerability { cveId title } } } }`)
+
+		Expect(out).ToNot(HaveKey("errors"))
+		Expect(stub.gotName).To(Equal("InventedSarawak/CacheMiss"))
+		Expect(stub.gotInclude).To(BeTrue())
+		exp := out["data"].(map[string]any)["repositoryExposure"].(map[string]any)
+		Expect(exp["scanned"]).To(BeTrue())
+		Expect(exp["summary"]).To(HaveKeyWithValue("highPossible", BeNumerically("==", 2)))
+		f := exp["findings"].([]any)[0].(map[string]any)
+		Expect(f["verdict"]).To(Equal("POSSIBLY_AFFECTED"))
+		Expect(f["package"]).To(Equal("npm:astro"))
+		Expect(f["declaredVersion"]).To(Equal("^5.11.0"))
+		Expect(f["vulnerability"]).To(HaveKeyWithValue("cveId", "CVE-2025-54793"))
+	})
+
+	It("is unavailable on a gateway without it", func() {
+		schema, err := graphqladapter.NewSchema(&stubSearcher{}, &stubBlast{})
+		Expect(err).ToNot(HaveOccurred())
+		out := post(graphqladapter.NewHandler(schema), `{ repositoryExposure(fullName: "a/b") { fullName } }`)
+		Expect(out).To(HaveKey("errors"))
+	})
+})

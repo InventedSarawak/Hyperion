@@ -13,6 +13,12 @@ type ImpactedRepository struct {
 	Depth      int
 	Direct     bool
 	Path       []string
+	// DeclaredVersion is what the repository's manifest asks for,
+	// AffectedVersions what the advisory says, Verdict one judged against
+	// the other.
+	DeclaredVersion  string
+	AffectedVersions string
+	Verdict          string
 }
 
 // FullName is the repository's identity, e.g. "vercel/commerce".

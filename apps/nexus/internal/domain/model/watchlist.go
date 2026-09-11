@@ -11,6 +11,7 @@ type TrackedRepository struct {
 	LastScanAt      time.Time
 	LastError       string
 	DependencyCount int
+	Exposure        ExposureSummary
 }
 
 // DiscoveredRepository is a repository an owner has on GitHub.

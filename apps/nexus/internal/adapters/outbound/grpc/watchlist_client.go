@@ -86,6 +86,7 @@ func toTracked(repos []*watchlistv1.TrackedRepository) []model.TrackedRepository
 			LastScanAt:      fromTimestamp(r.GetLastScanAt()),
 			LastError:       r.GetLastError(),
 			DependencyCount: int(r.GetDependencyCount()),
+			Exposure:        toSummary(r.GetExposure()),
 		})
 	}
 	return out
