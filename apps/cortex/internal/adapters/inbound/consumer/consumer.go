@@ -9,8 +9,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
@@ -33,27 +36,95 @@ type Ingester interface {
 // Consumer reads protojson events from an io.Reader and ingests each one.
 type Consumer struct {
 	ingester Ingester
+	workers  int
 	log      *slog.Logger
 }
 
-// NewConsumer wires the adapter to the ingest use case.
-func NewConsumer(ingester Ingester) *Consumer {
-	return &Consumer{ingester: ingester, log: slog.Default()}
+// Option customizes a Consumer.
+type Option func(*Consumer)
+
+// WithWorkers ingests on n workers at once. Each event is one read, one merge
+// and several network writes (Postgres, the search index, the graph, the
+// alert percolator), all waiting on I/O, so a single worker leaves every
+// backend idle most of the time — a ten-year backfill took hours that way.
+func WithWorkers(n int) Option {
+	return func(c *Consumer) {
+		if n > 0 {
+			c.workers = n
+		}
+	}
 }
 
-// Run consumes lines until EOF (or ctx cancellation), returning how many events
-// were ingested. Malformed lines and per-event ingest errors are logged and
-// skipped so one bad record can't halt the stream.
+// NewConsumer wires the adapter to the ingest use case. It ingests on one
+// worker, in input order, unless told otherwise.
+func NewConsumer(ingester Ingester, opts ...Option) *Consumer {
+	c := &Consumer{ingester: ingester, workers: 1, log: slog.Default()}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
+
+// Run consumes newline-delimited protojson events until EOF (or ctx is done)
+// and returns how many were ingested successfully. Malformed lines and
+// per-event ingest failures are logged and skipped, not fatal.
+//
+// Events are sharded across workers by vulnerability id, not handed to
+// whichever worker is free. Ingest is read-merge-write: two workers merging
+// observations of the same CVE at once would each read the old record and
+// the second write would erase the first's contribution. Pinning an id to one
+// worker keeps every CVE's events in order while different CVEs proceed in
+// parallel.
 func (c *Consumer) Run(ctx context.Context, r io.Reader) (int, error) {
+	var (
+		processed atomic.Int64
+		wg        sync.WaitGroup
+		lanes     = make([]chan model.Vulnerability, c.workers)
+	)
+	for i := range lanes {
+		lanes[i] = make(chan model.Vulnerability, laneBuffer)
+		wg.Add(1)
+		go func(lane <-chan model.Vulnerability) {
+			defer wg.Done()
+			for v := range lane {
+				if err := c.ingester.Handle(ctx, v); err != nil {
+					c.log.Error("ingest failed", "cve", v.CVEID, "error", err)
+					continue
+				}
+				processed.Add(1)
+			}
+		}(lanes[i])
+	}
+
+	err := c.read(ctx, r, func(v model.Vulnerability) {
+		lanes[laneFor(v.CVEID, len(lanes))] <- v
+	})
+
+	for _, lane := range lanes {
+		close(lane)
+	}
+	wg.Wait()
+	return int(processed.Load()), err
+}
+
+// laneBuffer lets the reader run a little ahead of each worker.
+const laneBuffer = 64
+
+// laneFor picks the worker an id always goes to.
+func laneFor(id string, lanes int) int {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(id))
+	return int(h.Sum32() % uint32(lanes))
+}
+
+// read decodes one event per line and hands each to dispatch.
+func (c *Consumer) read(ctx context.Context, r io.Reader, dispatch func(model.Vulnerability)) error {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
 
-	processed := 0
 	for scanner.Scan() {
-		select {
-		case <-ctx.Done():
-			return processed, ctx.Err()
-		default:
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 
 		line := bytes.TrimSpace(scanner.Bytes())
@@ -66,18 +137,12 @@ func (c *Consumer) Run(ctx context.Context, r io.Reader) (int, error) {
 			c.log.Warn("skipping malformed event", "error", err)
 			continue
 		}
-
-		v := toDomain(&msg)
-		if err := c.ingester.Handle(ctx, v); err != nil {
-			c.log.Error("ingest failed", "cve", v.CVEID, "error", err)
-			continue
-		}
-		processed++
+		dispatch(toDomain(&msg))
 	}
 	if err := scanner.Err(); err != nil {
-		return processed, fmt.Errorf("consumer: scan: %w", err)
+		return fmt.Errorf("consumer: scan: %w", err)
 	}
-	return processed, nil
+	return nil
 }
 
 // --- mapping: wire contract -> cortex domain ---

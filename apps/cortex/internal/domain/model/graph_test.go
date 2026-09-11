@@ -218,3 +218,42 @@ var _ = Describe("Vulnerability affected packages", func() {
 		Expect(merged.AffectedPackages).To(BeNil())
 	})
 })
+
+var _ = Describe("Vulnerability titles", func() {
+	It("keeps a real title when a later source repeats only the id", func() {
+		// The bug behind every number-only row: NVD's placeholder title (the
+		// id itself) arrived after GitHub's and replaced it.
+		fromGitHub := model.Vulnerability{CVEID: "CVE-2026-1", Title: "Prototype pollution in lodash"}
+		fromNVD := model.Vulnerability{CVEID: "CVE-2026-1", Title: "CVE-2026-1", Description: "NVD text"}
+
+		merged := fromGitHub.Merge(fromNVD)
+
+		Expect(merged.Title).To(Equal("Prototype pollution in lodash"))
+		Expect(merged.Description).To(Equal("NVD text"))
+	})
+
+	It("takes a real title over a record that had none", func() {
+		fromNVD := model.Vulnerability{CVEID: "CVE-2026-1", Description: "NVD text"}
+		merged := fromNVD.Merge(model.Vulnerability{CVEID: "CVE-2026-1", Title: "Real title"})
+		Expect(merged.Title).To(Equal("Real title"))
+	})
+
+	It("does not count the id, in any case, as a title", func() {
+		Expect(model.Vulnerability{CVEID: "CVE-2026-1", Title: " cve-2026-1 "}.HasTitle()).To(BeFalse())
+		Expect(model.Vulnerability{CVEID: "CVE-2026-1"}.HasTitle()).To(BeFalse())
+		Expect(model.Vulnerability{CVEID: "CVE-2026-1", Title: "RCE"}.HasTitle()).To(BeTrue())
+	})
+})
+
+var _ = Describe("Vulnerability references", func() {
+	It("accumulates references across feeds instead of replacing them", func() {
+		fromGitHub := model.Vulnerability{CVEID: "CVE-1", References: []string{"https://github.com/advisories/GHSA-x", "https://patch"}}
+		fromNVD := model.Vulnerability{CVEID: "CVE-1", References: []string{"https://patch", "https://vendor/bulletin"}}
+
+		merged := fromGitHub.Merge(fromNVD)
+
+		Expect(merged.References).To(Equal([]string{
+			"https://github.com/advisories/GHSA-x", "https://patch", "https://vendor/bulletin",
+		}))
+	})
+})

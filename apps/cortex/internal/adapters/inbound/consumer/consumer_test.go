@@ -2,7 +2,10 @@ package consumer_test
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"strings"
+	"sync"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -115,5 +118,48 @@ var _ = Describe("Consumer affected packages", func() {
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(ingester.got[0].AffectedPackages).To(BeNil())
+	})
+})
+
+// orderIngester records, per CVE, the order its events were ingested in.
+type orderIngester struct {
+	mu    sync.Mutex
+	order map[string][]string
+}
+
+func (o *orderIngester) Handle(_ context.Context, v model.Vulnerability) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.order[v.CVEID] = append(o.order[v.CVEID], v.Title)
+	return nil
+}
+
+var _ = Describe("Consumer with several workers", func() {
+	It("ingests everything and keeps each CVE's events in input order", func() {
+		// Ingest is read-merge-write, so two observations of one CVE must
+		// never be merged concurrently or out of order.
+		var lines []string
+		for seq := 0; seq < 20; seq++ {
+			for _, cve := range []string{"CVE-2026-0001", "CVE-2026-0002", "CVE-2026-0003", "GHSA-aaaa-bbbb-cccc"} {
+				msg := &eventsv1.SignalDiscovered{
+					Source:        eventsv1.SourceKind_SOURCE_KIND_NVD,
+					Vulnerability: &commonv1.Vulnerability{CveId: cve, Title: fmt.Sprintf("%02d", seq)},
+				}
+				b, err := protojson.Marshal(msg)
+				Expect(err).ToNot(HaveOccurred())
+				lines = append(lines, string(b))
+			}
+		}
+
+		ing := &orderIngester{order: map[string][]string{}}
+		n, err := consumer.NewConsumer(ing, consumer.WithWorkers(4)).
+			Run(context.Background(), strings.NewReader(strings.Join(lines, "\n")))
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(n).To(Equal(80))
+		for cve, seen := range ing.order {
+			Expect(seen).To(HaveLen(20), cve)
+			Expect(sort.StringsAreSorted(seen)).To(BeTrue(), "events for %s arrived out of order: %v", cve, seen)
+		}
 	})
 })
