@@ -12,10 +12,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/inventedsarawak/hyperion/apps/deck/internal/domain/model"
@@ -200,13 +202,13 @@ func (c *Client) do(ctx context.Context, query string, variables map[string]any,
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("gateway %s: %w", c.endpoint, err)
+		return unreachable(c.endpoint, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return fmt.Errorf("gateway %s: status %d: %s",
+		return fmt.Errorf("the gateway at %s answered %d: %s",
 			c.endpoint, resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
 
@@ -226,7 +228,8 @@ func (c *Client) do(ctx context.Context, query string, variables map[string]any,
 		for _, e := range envelope.Errors {
 			messages = append(messages, e.Message)
 		}
-		return fmt.Errorf("gateway: %s", strings.Join(messages, "; "))
+		// The gateway words these for people; pass them on as they are.
+		return errors.New(strings.Join(messages, "; "))
 	}
 	if len(envelope.Data) == 0 {
 		return fmt.Errorf("gateway: response carried no data")
@@ -235,6 +238,20 @@ func (c *Client) do(ctx context.Context, query string, variables map[string]any,
 		return fmt.Errorf("gateway: decode data: %w", err)
 	}
 	return nil
+}
+
+// unreachable explains a request that never got an answer. A refused
+// connection almost always means nexus is not running, so say that rather
+// than show the socket error.
+func unreachable(endpoint string, err error) error {
+	switch {
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return fmt.Errorf("can't reach the gateway at %s — is nexus running? (task status)", endpoint)
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("the gateway at %s took too long to answer; try again", endpoint)
+	default:
+		return fmt.Errorf("can't reach the gateway at %s: %w", endpoint, err)
+	}
 }
 
 // --- gateway wire shapes -> deck view models ---

@@ -62,7 +62,7 @@ func (c *Client) Search(ctx context.Context, query string, sort model.SearchSort
 		PageToken: pageToken,
 	})
 	if err != nil {
-		return model.SearchPage{}, fmt.Errorf("grpc: search: %w", err)
+		return model.SearchPage{}, describe(err)
 	}
 
 	page := model.SearchPage{
@@ -90,7 +90,7 @@ func (c *Client) BlastRadius(ctx context.Context, cveID string, maxDepth int) (m
 		MaxDepth: int32(maxDepth),
 	})
 	if err != nil {
-		return model.BlastRadius{}, fmt.Errorf("grpc: blast radius: %w", err)
+		return model.BlastRadius{}, describe(err)
 	}
 
 	radius := model.BlastRadius{CVEID: resp.GetCveId()}
@@ -180,7 +180,7 @@ func (c *Client) Vulnerability(ctx context.Context, id string) (model.Vulnerabil
 
 	resp, err := c.stub.GetVulnerability(ctx, &intelv1.GetVulnerabilityRequest{CveId: id})
 	if err != nil {
-		return model.Vulnerability{}, fmt.Errorf("grpc: get vulnerability: %w", err)
+		return model.Vulnerability{}, describe(err)
 	}
 	return toViewModel(resp.GetVulnerability()), nil
 }
