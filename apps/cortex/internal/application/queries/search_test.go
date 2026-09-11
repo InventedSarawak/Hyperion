@@ -63,7 +63,7 @@ var _ = Describe("Search use case", func() {
 
 	It("rejects an empty query under relevance, where every record would tie", func() {
 		_, err := queries.NewSearch(&stubIndex{}).Handle(ctx, "   ", relevance, nil, 10, "")
-		Expect(err).To(MatchError(ContainSubstring("must not be empty")))
+		Expect(err).To(MatchError(ContainSubstring("enter a search term")))
 	})
 
 	It("accepts an empty query when sorting by newest: that is the live feed", func() {

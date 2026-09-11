@@ -61,12 +61,13 @@ func NewServer(search Searcher, deps DependencyIngester, blast BlastRadiusCalcul
 func (s *Server) GetVulnerability(ctx context.Context, req *intelv1.GetVulnerabilityRequest) (*intelv1.GetVulnerabilityResponse, error) {
 	id := valueobject.NormalizeCVEID(req.GetCveId())
 	if id == "" {
-		return nil, status.Error(codes.InvalidArgument, "get vulnerability: id must not be empty")
+		return nil, status.Error(codes.InvalidArgument, msgNeedID)
 	}
 	v, err := s.vulns.GetByID(ctx, id)
 	switch {
 	case errors.Is(err, ports.ErrNotFound):
-		return nil, status.Errorf(codes.NotFound, "no finding %s", id)
+		return nil, status.Errorf(codes.NotFound,
+			"no finding is known by %s — the id may be mistyped, or no feed has reported it yet", id)
 	case err != nil:
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -118,6 +119,11 @@ func fromProtoKinds(kinds []commonv1.FindingKind) []model.FindingKind {
 	}
 	return out
 }
+
+// msgNeedID is the answer to a request that names no finding. Status
+// messages are written for the person at the other end: they reach deck and
+// the GraphQL console as they are.
+const msgNeedID = "enter a finding id — a CVE, GHSA or MAL id"
 
 // --- mapping: cortex domain -> wire contract ---
 

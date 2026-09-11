@@ -38,7 +38,7 @@ func (s *Server) GetBlastRadius(ctx context.Context, req *intelv1.GetBlastRadius
 		return nil, status.Error(codes.Unavailable, ports.ErrGraphUnavailable.Error())
 	}
 	if valueobject.NormalizeCVEID(req.GetCveId()) == "" {
-		return nil, status.Error(codes.InvalidArgument, "blast radius: cve id must not be empty")
+		return nil, status.Error(codes.InvalidArgument, msgNeedID)
 	}
 
 	radius, err := s.blast.Handle(ctx, req.GetCveId(), int(req.GetMaxDepth()), int(req.GetLimit()))

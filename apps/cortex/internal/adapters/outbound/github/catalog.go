@@ -66,7 +66,7 @@ func (c *Catalog) ListOwnerRepositories(ctx context.Context, owner string, limit
 		repos, err = c.list(ctx, "users", owner, limit)
 	}
 	if errors.Is(err, errNotFound) {
-		return nil, fmt.Errorf("%w: %s", ports.ErrOwnerNotFound, owner)
+		return nil, ports.OwnerNotFound(owner)
 	}
 	return repos, err
 }

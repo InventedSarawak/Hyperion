@@ -52,7 +52,7 @@ func (s *WatchlistServer) ListRepositories(ctx context.Context, _ *watchlistv1.L
 // DiscoverRepositories lists an owner's repositories on GitHub.
 func (s *WatchlistServer) DiscoverRepositories(ctx context.Context, req *watchlistv1.DiscoverRepositoriesRequest) (*watchlistv1.DiscoverRepositoriesResponse, error) {
 	if req.GetOwner() == "" {
-		return nil, status.Error(codes.InvalidArgument, "discover: owner must not be empty")
+		return nil, status.Error(codes.InvalidArgument, "enter a GitHub user or organization")
 	}
 	found, err := s.read.Discover(ctx, req.GetOwner(), int(req.GetLimit()))
 	if err != nil {

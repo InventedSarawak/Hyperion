@@ -3,6 +3,7 @@ package ports
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/model"
 )
@@ -15,7 +16,19 @@ var ErrNotTracked = errors.New("repository is not tracked")
 var ErrCatalogUnavailable = errors.New("repository catalog: not configured")
 
 // ErrOwnerNotFound is returned when the forge has no such user or org.
-var ErrOwnerNotFound = errors.New("repository catalog: owner not found")
+var ErrOwnerNotFound = errors.New("no such GitHub user or organization")
+
+// OwnerNotFound reports a missing owner by name, in words fit to show the
+// person who typed it, while still matching ErrOwnerNotFound.
+func OwnerNotFound(owner string) error { return ownerNotFound(owner) }
+
+type ownerNotFound string
+
+func (o ownerNotFound) Error() string {
+	return fmt.Sprintf("GitHub has no user or organization named %q", string(o))
+}
+
+func (o ownerNotFound) Is(target error) bool { return target == ErrOwnerNotFound }
 
 // Watchlist is an OUTBOUND port: durable storage for the repositories
 // Hyperion tracks. Implemented by adapters/outbound/postgres.

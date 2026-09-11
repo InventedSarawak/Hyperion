@@ -75,7 +75,7 @@ var _ = Describe("CalculateBlastRadius use case", func() {
 
 	It("rejects an empty CVE id rather than enumerating the graph", func() {
 		_, err := queries.NewCalculateBlastRadius(&recordingGraph{}, 0).Handle(ctx, "   ", 0, 0)
-		Expect(err).To(MatchError(ContainSubstring("must not be empty")))
+		Expect(err).To(MatchError(ContainSubstring("enter a finding id")))
 	})
 
 	It("normalizes a lowercase CVE id so it matches stored records", func() {

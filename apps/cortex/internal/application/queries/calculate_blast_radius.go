@@ -57,7 +57,7 @@ func NewCalculateBlastRadius(graph ports.DependencyGraph, defaultDepth int) *Cal
 func (q *CalculateBlastRadius) Handle(ctx context.Context, cveID string, maxDepth, limit int) (model.BlastRadius, error) {
 	cveID = valueobject.NormalizeCVEID(cveID)
 	if cveID == "" {
-		return model.BlastRadius{}, fmt.Errorf("blast radius: cve id must not be empty")
+		return model.BlastRadius{}, fmt.Errorf("enter a finding id to trace — a CVE, GHSA or MAL id")
 	}
 	if q.graph == nil {
 		return model.BlastRadius{}, ports.ErrGraphUnavailable

@@ -49,7 +49,7 @@ func (q *Search) Handle(ctx context.Context, query string, sort model.SearchSort
 		sort = model.SortRelevance
 	}
 	if query == "" && sort == model.SortRelevance {
-		return Result{}, fmt.Errorf("search: query must not be empty when sorting by relevance")
+		return Result{}, fmt.Errorf("enter a search term, or sort by newest to see the latest findings")
 	}
 
 	size := pageSize
