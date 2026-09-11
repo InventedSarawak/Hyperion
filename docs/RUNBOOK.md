@@ -130,30 +130,36 @@ Neo4j as `(:Library)-[:AFFECTED_BY]->(:Vulnerability)`.
 siphon polls on a timer and does not exit on its own, so **press Ctrl-C** once the counts
 stop moving.
 
-> **Want history, and packages?** The OSV watchlist is the best source of both: it is
-> queried _by package_ rather than by date, so it returns a package's whole advisory
-> history, and every record names its affected package. Verified: `npm:next,npm:lodash,
-PyPI:django` over a 7-year window returned **225 advisories, 100% package-bearing,
-> reaching back to 2017**.
->
-> ```bash
-> cd apps/siphon && SIPHON_LOOKBACK=61320h \
->   SIPHON_PACKAGE_WATCHLIST='npm:next,npm:lodash,PyPI:django' \
->   go run ./cmd/worker 2>/dev/null | \
->   (cd ../cortex && CORTEX_CONSUME_STDIN=true go run ./cmd/server)
-> ```
+### 3.1a History: `task backfill`
 
-> **Seed with a long lookback on first run.** The default `SIPHON_LOOKBACK=2h` yields
-> almost no package linkage, because only GitHub's _reviewed_ advisories carry package data
-> and roughly one appears every six hours. Without linkage, blast radius has nothing to
-> traverse. One time:
->
-> ```bash
-> cd apps/siphon && SIPHON_LOOKBACK=720h go run ./cmd/worker 2>/dev/null | \
->   (cd ../cortex && CORTEX_CONSUME_STDIN=true go run ./cmd/server)
-> ```
->
-> A 30-day window yields ~100 reviewed advisories, all package-bearing.
+Polling only ever sees the last `SIPHON_LOOKBACK` (2h), and NVD refuses any window wider
+than 120 days — so polling alone never reaches last year, let alone React2Shell
+(December 2025). A **fresh stack needs one backfill**:
+
+```bash
+task backfill                                   # NVD + OSV exports, last 10 years
+task backfill -- -backfill-from 2019-01-01      # a different start date
+task backfill -- -backfill-sources osv          # just the package data (~15 min)
+```
+
+- **NVD** half: every CVE _published_ since the start date, in 120-day windows, four at a
+  time. ~280,000 CVEs for ten years, about an hour (NVD takes ~40s per 2,000-record page).
+- **OSV** half: the full exports for npm, PyPI, Go, Maven, crates.io, RubyGems, NuGet and
+  Packagist (~300 MB). Every record names its package and version range — this is what
+  gives blast radius something to traverse.
+
+It exits when done. It is safe to run with the stack up, and `task restart` does not
+interrupt it (only `task down` would, by stopping the databases).
+
+To run it detached and watch it:
+
+```bash
+cd apps/siphon && go build -o ../../.run/bin/siphon ./cmd/worker && cd ../cortex && \
+  go build -o ../../.run/bin/cortex ./cmd/server && cd ../.. && \
+  setsid bash -c '.run/bin/siphon -backfill 2>>.run/backfill.log | \
+    CORTEX_CONSUME_STDIN=true .run/bin/cortex >>.run/backfill-cortex.log 2>&1' </dev/null &
+tail -f .run/backfill.log     # "backfill progress ... published=N" every 10,000
+```
 
 To check which feeds are reachable without ingesting anything:
 
@@ -163,43 +169,43 @@ task sources:check
 
 ### 3.2 Dependencies (who depends on what)
 
-```bash
-task scan                                   # scans the configured targets, then exits
-task scan -- -repos gin-gonic/gin,eslint/eslint   # ad-hoc repositories
-task scan -- -orgs vercel                   # discover and scan everything an owner has
-```
+**Add repositories in the product, not in `.env`.** Open deck (`task run:deck`), press `4`
+for the Repositories tab, then:
 
-**Prefer organizations over a hand-written list.** A repository nobody listed is invisible
-to blast radius, which makes exposure look smaller than it is — the one direction this
-system must not be wrong in. `SIPHON_REPO_ORGS=vercel` discovers them instead, skipping
-forks and archived repositories, capped by `SIPHON_REPO_ORG_LIMIT` (default 20) because
-each repository costs about three API calls. Discovery re-runs on every scan, so
-repositories created later are picked up automatically.
+1. `a`, type a GitHub user or organization (`vercel`, `@torvalds`, or a pasted profile
+   URL), `enter` — its repositories are listed, most recently pushed first;
+2. `space` to select (it moves down as it goes), `a` to select every untracked one;
+3. `enter` — they are tracked as **pending**, and siphon's scanner reads them within 30s.
 
-Verified: `task scan -- -orgs vercel` discovered 20 repositories and wrote 611 dependency
-edges in one command, taking `CVE-2026-64646` (Next.js) from 1 exposed repository to 6.
+The list refreshes itself until every scan finishes. `d` removes a repository (after a
+`y / n`) — from the watchlist **and** from the graph. `s` re-scans one now.
 
-Reads each repository's `go.mod` and `package.json` from GitHub, parses them, and reports
-them to cortex over gRPC, which writes:
+The watchlist lives in cortex (Postgres); siphon polls it every
+`SIPHON_REPO_WATCH_INTERVAL` (30s) and scans what is due — new ones at once, scanned ones
+every `SIPHON_REPO_SCAN_INTERVAL` (6h), failed ones after `SIPHON_REPO_RETRY_INTERVAL`
+(15m). The same operations are in GraphQL (`trackedRepositories`, `discoverRepositories`,
+`trackRepositories`, `untrackRepository`).
+
+Each scan reads the repository's `go.mod` and `package.json` from GitHub and writes:
 
 ```
 (:Author)-[:MAINTAINS]->(:Repository)-[:DEPENDS_ON {version, direct}]->(:Library)
 (:Repository)-[:PUBLISHES]->(:Library)-[:DEPENDS_ON]->(:Library)
 ```
 
-`task scan` runs once and exits non-zero if any repository failed, so it works as a cron or
-CI step. It ignores `SIPHON_REPO_SCAN_ENABLED` — that flag only controls whether a
-long-running `task run:siphon` _also_ scans in the background on its own interval.
+Each repository costs about three GitHub requests; unauthenticated you get 60 per hour,
+so set `SIPHON_GITHUB_TOKEN` (scans) and `CORTEX_GITHUB_TOKEN` (the owner listing in the
+Repositories tab — it can be the same token).
 
-Configure the default targets in `.env`:
+From a script:
 
 ```bash
-SIPHON_REPO_WATCHLIST=gin-gonic/gin,ajv-validator/ajv,eslint/eslint
-SIPHON_REPO_ORGS=vercel
-SIPHON_REPO_ORG_LIMIT=20
+task scan                                         # scan every tracked repository now
+task scan -- -repos gin-gonic/gin,eslint/eslint   # ad-hoc, without tracking them
+task scan -- -orgs vercel                         # an owner's repositories, without tracking
 ```
 
-Each repository costs about three GitHub requests. Unauthenticated, you get 60 per hour.
+`task scan` exits non-zero if any repository failed, so it works as a cron or CI step.
 
 ---
 
@@ -259,41 +265,35 @@ for debugging a cortex the gateway cannot reach, not for everyday use.
 Requires nexus and cortex to be up (`task up` does that). Configure it in `.env` with
 `DECK_TRANSPORT`, `DECK_GATEWAY_URL`, `DECK_FEED_QUERY`, `DECK_REFRESH_INTERVAL`.
 
-The layout is a banner on first load, a tab bar with a working indicator, a bordered
-results panel, and a search prompt pinned to the bottom:
+Four tabs — `tab` / `shift+tab` cycle, `1`–`4` jump:
 
 ```
-██╗  ██╗██╗   ██╗██████╗ ███████╗██████╗ ██╗ ██████╗ ███╗   ██╗
-██║  ██║╚██╗ ██╔╝██╔══██╗██╔════╝██╔══██╗██║██╔═══██╗████╗  ██║
-███████║ ╚████╔╝ ██████╔╝█████╗  ██████╔╝██║██║   ██║██╔██╗ ██║
-██╔══██║  ╚██╔╝  ██╔═══╝ ██╔══╝  ██╔══██╗██║██║   ██║██║╚██╗██║
-██║  ██║   ██║   ██║     ███████╗██║  ██║██║╚██████╔╝██║ ╚████║
-╚═╝  ╚═╝   ╚═╝   ╚═╝     ╚══════╝╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝
-
-HYPERION  ▌ 1 Live Feed   2 Graph Explorer                    updated 04:37:09
-╭──────────────────────────────────────────────────────────────────────────────╮
-│ Findings  query "next" — 25 findings                                         │
-│ ▸ CVE-2026-64646      HIGH      Next.js: Unbounded Server Action payload …   │
-│   CVE-2025-57822      MEDIUM    Next.js Improper Middleware Redirect … SSRF  │
-╰──────────────────────────────────────────────────────────────────────────────╯
-╭──────────────────────────────────────────────────────────────────────────────╮
-│ search: next                                                                 │
-╰──────────────────────────────────────────────────────────────────────────────╯
-  ↑/↓ move · enter blast radius · tab switch · / search · r refresh · q quit
+HYPERION  ▌ 1 Live Feed   2 Details   3 Graph Explorer   4 Repositories   updated 18:22:28
+╭──────────────────────────────────────────────────────────────────────────────────────╮
+│ Findings  query "react" · best match — 25 of 273  ·  ↓ more                          │
+│ ▸ CVE-2021-41140      MEDIUM    Discourse-reactions is a plugin for the Discourse p… │
+│   CVE-2018-6341       MEDIUM    React applications which rendered to HTML using the… │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────────────────╮
+│ search: react                                                                        │
+╰──────────────────────────────────────────────────────────────────────────────────────╯
+  ↑/↓ move · enter details · b blast radius · n more · s sort · / search · tab switch
 ```
 
-The banner stays pinned at the top for the whole session; the list beneath it scrolls to
-keep the cursor in view, and shows which part you are looking at (`25 findings · 2–25`).
-In a terminal too small to hold the banner and a usable list (under 68 columns or 24 rows)
-the banner steps aside — the tab bar still carries the name.
+| Tab              | Shows                                                                                                                                                     |
+| :--------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 Live Feed      | latest findings, or a search; **id · severity · title**, or the description when a record has no title (all of NVD)                                       |
+| 2 Details        | the open finding in full: rating, dates, reporting feeds, every CVSS vector, affected packages with version ranges, the re-flowed description, references |
+| 3 Graph Explorer | its blast radius, one tree per exposed repository                                                                                                         |
+| 4 Repositories   | the watchlist, and adding / removing repositories (§3.2)                                                                                                  |
 
-Everything is sized to the terminal on purpose: Bubble Tea keeps only the _last_
-terminal-height lines of a frame that is too tall, so an overflowing list would silently
-delete the top of the screen rather than scroll.
+`enter` on a finding opens **Details** and starts its blast radius loading in the
+background, so `enter` again (or `3`) shows the graph at once; `b` goes straight to the
+graph; `esc` returns to the feed.
 
-It opens on the **Live Feed**: a list of findings refreshed on a timer (v2 polls; gRPC
-streaming is v3). Select a finding and press `enter` to see its blast radius drawn as a
-tree in the **Graph Explorer**.
+The banner stays pinned while there is room and steps aside in a small terminal; every
+frame is sized to the terminal on purpose, because Bubble Tea keeps only the _last_
+terminal-height lines of a frame that is too tall.
 
 ### Results and paging
 
@@ -312,34 +312,40 @@ the selection on the same finding, even when newer ones push it down the list.
 
 ### Keys
 
-| Key                  | Action                                                      |
-| :------------------- | :---------------------------------------------------------- |
-| `↑` / `↓`, `k` / `j` | move the cursor                                             |
-| `g` / `G`            | jump to the first / last finding (also `home` / `end`)      |
-| `pgup` / `pgdn`      | page up / down (also `ctrl+u` / `ctrl+d`)                   |
-| `n` (or `]`)         | load the next page of results                               |
-| `s`                  | switch a search between best match and newest               |
-| `enter`              | open the blast radius for the selected finding              |
-|                      | in the Graph Explorer, the movement keys scroll the tree    |
-| `tab`                | switch between the two views                                |
-| `1` / `2`            | jump straight to Live Feed / Graph Explorer                 |
-| `/`                  | edit the search query — `enter` to run it, `esc` to discard |
-| `r`                  | refresh now                                                 |
-| `q`, `ctrl+c`        | quit                                                        |
+| Key                  | Where         | Action                                            |
+| :------------------- | :------------ | :------------------------------------------------ |
+| `↑` / `↓`, `k` / `j` | all           | move the cursor, or scroll Details and the graph  |
+| `g` / `G`            | all           | first / last (also `home` / `end`)                |
+| `pgup` / `pgdn`      | all           | page (also `ctrl+u` / `ctrl+d`)                   |
+| `tab` / `shift+tab`  | all           | next / previous tab                               |
+| `1`–`4`              | all           | jump to a tab                                     |
+| `/`                  | all           | edit the search — `enter` runs it, `esc` discards |
+| `n` (or `]`)         | Live Feed     | load the next page                                |
+| `s`                  | Live Feed     | best match ⇄ newest                               |
+| `enter`              | Live Feed     | open the finding in Details                       |
+| `enter`, `b`         | Details       | its blast radius                                  |
+| `b`                  | Live Feed     | straight to the blast radius                      |
+| `esc`                | Details/Graph | back to the feed                                  |
+| `a`                  | Repositories  | add from a GitHub user or org                     |
+| `space` / `a`        | picker        | select one and move on / select all untracked     |
+| `enter`              | picker        | track the selection                               |
+| `d`, then `y`        | Repositories  | remove the selected repository                    |
+| `s`                  | Repositories  | re-scan the selected repository                   |
+| `r`                  | all           | refresh what the tab shows                        |
+| `q`, `ctrl+c`        | all           | quit                                              |
 
-While `/` is active every key is text, so typing `j` searches for "j" rather than moving
-the cursor.
+While typing a search or an owner every key is text, so typing `j` searches for "j".
 
-What the Graph Explorer draws:
+What the Graph Explorer draws — the repository first, then the path down to the finding:
 
 ```
-CVE-2026-13676
-└── npm:fast-uri
-    ├── ajv-validator/ajv  (direct)
-    ├── eslint/eslint  (2 hops)
-    │   └── eslint/eslint → npm:ajv → npm:fast-uri
-    └── fleetdm/fleet  (3 hops)
-        └── fleetdm/fleet → npm:eslint → npm:ajv → npm:fast-uri
+vercel/commerce  (2 hops)
+└── npm:next
+    └── npm:react-server-dom-webpack
+        └── CVE-2025-55182
+
+not reached by any tracked repository
+└── npm:react-server-dom-parcel
 ```
 
 If a CVE has no package linkage the tree says **"blast radius unknown"** rather than
@@ -385,6 +391,16 @@ docker exec -it hyperion-postgres psql -U hyperion -d hyperion -c \
 
 ## 6. Stop the system
 
+After changing Go code, restart the services without touching the databases:
+
+```bash
+task restart     # rebuild + restart cortex, nexus and the ingest loop; infra keeps running
+```
+
+Anything else writing to the databases — a backfill, a one-off scan — keeps running.
+
+To stop everything:
+
 ```bash
 task down
 ```
@@ -427,14 +443,25 @@ configurable is registered in [TECHNICAL-DEBT.md](./TECHNICAL-DEBT.md).
 **Blast radius returns nothing.** Distinguish the two cases first — the response separates
 `vulnerable_packages` from `repositories` precisely so you can:
 
-- **No `vulnerable_packages`** → the CVE has no package linkage. Re-run ingestion with a
-  long `SIPHON_LOOKBACK` (see §3.1); most sources never name a package.
-- **Packages but no `repositories`** → nothing you have scanned depends on them. Add
-  repositories to the watchlist and run `task scan`.
+- **No `vulnerable_packages`** → the CVE has no package linkage. Run the OSV backfill
+  (`task backfill -- -backfill-sources osv`, §3.1a); NVD and most other feeds never name
+  a package.
+- **Packages but no `repositories`** → nothing you track depends on them. Add
+  repositories in deck's Repositories tab (§3.2).
 - **`UNAVAILABLE: dependency graph: no backend configured`** → cortex could not reach
   Neo4j. Check `task status` and `.run/cortex.log`.
 
-**GitHub returns 401 or a rate-limit error.** Check `SIPHON_GITHUB_TOKEN`. Note the known
+**A search shows only CVE ids, no descriptions.** Fixed on 2026-09-11 — NVD records used
+to carry their id as a placeholder title, which also overwrote real titles on merge. Data
+ingested before then keeps the damage; `task down`, `task infra:down -- -v`, `task up`,
+`task backfill` rebuilds it cleanly.
+
+**A repository stays `failed` in the Repositories tab.** The error is on its row. Usually
+a GitHub rate limit (set the tokens) or a private repository the token cannot read; it is
+retried every 15 minutes, or press `s`.
+
+**GitHub returns 401 or a rate-limit error.** Check `SIPHON_GITHUB_TOKEN` (scans) and
+`CORTEX_GITHUB_TOKEN` (owner listing). Note the known
 footgun: a blank setting written `KEY=   # hint` yields the _comment_ as the value. Keep
 hints on their own line.
 
@@ -450,19 +477,21 @@ legitimately return nothing. Confirm with `task sources:check`.
 
 ## 8. Command reference
 
-| Command                    | What it does                                        |
-| :------------------------- | :-------------------------------------------------- |
-| `task up`                  | infra + cortex + nexus, with health gates           |
-| `task down`                | stop services, then infra (volumes kept)            |
-| `task status`              | health, row/document/graph counts                   |
-| `task logs`                | tail cortex + nexus                                 |
-| `task ingest`              | one siphon poll piped into cortex (Ctrl-C to stop)  |
-| `task scan`                | scan watched repositories into the graph, then exit |
-| `task blast -- <CVE>`      | blast radius for one CVE (needs `grpcurl`)          |
-| `task run:deck`            | the terminal UI                                     |
-| `task sources:check`       | probe all ten ingestion sources and report          |
-| `task infra:up` / `:down`  | containers only                                     |
-| `task test:go`             | all Go tests                                        |
-| `task test:go:integration` | including Postgres / Elasticsearch / Neo4j suites   |
-| `task build:go`            | compile every Go service                            |
-| `task codegen`             | regenerate Go from the protobuf contracts           |
+| Command                    | What it does                                       |
+| :------------------------- | :------------------------------------------------- |
+| `task up`                  | infra + cortex + nexus, with health gates          |
+| `task down`                | stop services, then infra (volumes kept)           |
+| `task restart`             | rebuild + restart services; infra keeps running    |
+| `task status`              | health, row/document/graph counts                  |
+| `task logs`                | tail cortex + nexus                                |
+| `task ingest`              | one siphon poll piped into cortex (Ctrl-C to stop) |
+| `task backfill`            | load 10 years of NVD + OSV history, then exit      |
+| `task scan`                | scan every tracked repository now, then exit       |
+| `task blast -- <CVE>`      | blast radius for one CVE (needs `grpcurl`)         |
+| `task run:deck`            | the terminal UI                                    |
+| `task sources:check`       | probe all ten ingestion sources and report         |
+| `task infra:up` / `:down`  | containers only                                    |
+| `task test:go`             | all Go tests                                       |
+| `task test:go:integration` | including Postgres / Elasticsearch / Neo4j suites  |
+| `task build:go`            | compile every Go service                           |
+| `task codegen`             | regenerate Go from the protobuf contracts          |

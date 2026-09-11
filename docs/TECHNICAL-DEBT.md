@@ -113,6 +113,52 @@ signals a day; exploit-db, OSINT and package-feed publish a handful a _week_.
   looks like a broken adapter but is not. Verified against upstream: the data
   genuinely is not there.
 - **Fix:** per-source lookback/interval in config. Small change, high clarity win.
+- **Mitigated (2026-09-11):** history no longer depends on the lookback at all —
+  `task backfill` loads it directly (NVD published-date windows + OSV exports).
+
+### 🟡 A GHSA-keyed advisory splits in two when it later gets a CVE
+
+Records are keyed on their CVE, falling back to the GitHub advisory id for advisories
+with none (malware, and advisories GitHub publishes before MITRE assigns a CVE).
+
+- **Why:** without the fallback those findings were dropped outright — the axios
+  compromise (`GHSA-fw8c-xr5c-95f9`) never had a CVE and never will.
+- **Cost:** when an advisory first seen as `GHSA-…` is later assigned a CVE, the next
+  observation lands on a second record under the CVE. Both are searchable and both
+  link to the same packages, but they do not merge, and a subscription can alert twice.
+- **Fix in v3:** keep an alias table (`GHSA → CVE`) and merge on assignment.
+
+### 🟡 Descriptions and scores are last-writer-wins
+
+`Merge` unions sources, references and affected packages, but for the description and
+the score set the newest non-empty observation wins, whichever feed it came from.
+
+- **Cost:** which description you read depends on which feed reported last — NVD's
+  one-paragraph summary or GitHub's full Markdown write-up can replace each other on
+  every poll. Nothing is lost that matters for matching, but the display wobbles.
+- **Fix:** keep one description and score set per source and choose by source priority
+  at read time.
+
+### 🟡 Unreviewed malicious packages are skipped
+
+OSV's malicious-package dataset (`MAL-…`) is only ingested when GitHub has reviewed an
+entry and given it a GHSA id.
+
+- **Why:** npm alone has ~200,000 `MAL-` records — typosquats almost nobody installs —
+  and ingesting them would bury every search and alert.
+- **Cost:** a compromised package GitHub has not yet reviewed is invisible, even if one
+  of your repositories depends on it.
+- **Fix in v3:** ingest `MAL-` records only for packages that some tracked repository
+  actually depends on — the graph can answer that before the record is stored.
+
+### 🟢 A backfill can raise alerts for old findings
+
+The backfill publishes the same events as polling, so a subscription matching a
+2017 advisory fires when the backfill replays it.
+
+- **Cost:** a backfill run with subscriptions in place produces a burst of historical
+  alerts. After a full reset (no subscriptions) it produces none.
+- **Fix:** mark backfilled events as historical in the contract and skip alerting for them.
 
 ### 🟡 Naive migration runner
 
@@ -159,27 +205,46 @@ that publish a module: the module's direct requirements become its own edges.
 - **Fix in v3+:** ingest a real module graph (deps.dev, an SBOM feed, or
   `go mod graph` / lockfiles) instead of inferring it from what we happened to scan.
 
-### 🟡 Only _reviewed_ GitHub advisories carry package linkage
+### 🟢 ~~Only _reviewed_ GitHub advisories carry package linkage~~ — MITIGATED
 
 The advisory feed is dominated by `unreviewed` records — automated NVD imports with
-`vulnerabilities: []`. siphon makes a second `type=reviewed` pass to get the
-package data, but the volume is low: roughly **one reviewed advisory per 6 hours**.
+`vulnerabilities: []` — and only about one reviewed advisory appears every 6 hours, so
+polling alone builds almost no CVE-to-library linkage.
 
-- **Cost:** at the 2h default `SIPHON_LOOKBACK`, the graph gains essentially no
-  CVE-to-library linkage, and blast radius stays empty for reasons that look like
-  a bug but are not. A 30-day window yields 100 reviewed advisories, all with packages.
-- **Fix:** per-source lookback (already registered above). Until then, seed the
-  graph with a long `SIPHON_LOOKBACK` on first run.
+- **Repaid by the backfill (2026-09-11):** `task backfill` reads OSV's full
+  per-ecosystem exports, where every record names its package and version range, so a
+  fresh stack starts with ten years of linkage. Polling then only has to keep up.
+- **What remains:** between backfills, new linkage still arrives only through reviewed
+  GitHub advisories and the OSV package watchlist.
 
 ### 🟢 ~~The repository watchlist is manual~~ — REPAID
 
-`SIPHON_REPO_ORGS` now discovers every repository an org or user owns, skipping
-forks and archived repositories, re-running on each scan so repositories created
-later are picked up. `SIPHON_REPO_WATCHLIST` remains for naming individual repos.
+The watchlist is edited in the product (deck's Repositories tab, or the GraphQL
+mutations): pick an owner, choose repositories, and they are scanned within 30s. It
+lives in cortex; siphon polls it. `SIPHON_REPO_WATCHLIST` and `SIPHON_REPO_ORGS` are gone.
 
-- **What remains:** discovery is unauthenticated-org scale, capped by
-  `SIPHON_REPO_ORG_LIMIT` (default 20) because each repository costs ~3 API
-  calls. Per-tenant scoping via a GitHub App installation is still v4.
+- **What remains:** one shared list — per-user and per-team watchlists arrive with
+  auth in v4, and private repositories need a GitHub App installation rather than one
+  personal token.
+
+### 🟢 Two copies of "list an owner's repositories"
+
+cortex (for the Repositories tab) and siphon (for one-off `task scan -- -orgs`) each
+have a small GitHub listing adapter.
+
+- **Why:** each belongs to its own service's hexagon; sharing an adapter across
+  services would couple their release cycles for ~100 lines.
+- **Cost:** a GitHub API change has to be fixed twice.
+- **Fix:** retire siphon's `-orgs` flag once scripts use the watchlist instead.
+
+### 🟢 Untracking keeps what a repository taught the graph about libraries
+
+Removing a repository deletes it and its own edges, but library-to-library edges
+learned from the module it published stay.
+
+- **Why:** "ajv depends on fast-uri" stays true whether or not anyone tracks ajv, and
+  removing it would silently shorten other repositories' transitive blast radius.
+- **Cost:** those edges are no longer refreshed, so they can go stale.
 
 ### 🟢 The gateway adds a hop for the terminal client
 

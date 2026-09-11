@@ -5,6 +5,7 @@
 #   ./scripts/system.sh up       infra + cortex (gRPC) + nexus (GraphQL) + ingest loop
 #                                (HYPERION_INGEST=0 to skip the ingest loop)
 #   ./scripts/system.sh down     stop services, then infra
+#   ./scripts/system.sh restart  rebuild and restart services + ingest; infra keeps running
 #   ./scripts/system.sh status   what is running, with health checks
 #   ./scripts/system.sh logs     tail the service logs
 #
@@ -170,6 +171,20 @@ up() {
 }
 
 down() {
+  stop_services
+  log "stopping infrastructure..."
+  $COMPOSE down
+  log "stopped."
+}
+
+# restart picks up code changes without touching the databases, so anything
+# else writing to them — a backfill, a one-off scan — keeps running.
+restart() {
+  stop_services
+  up
+}
+
+stop_services() {
   stop_ingest
 
   for entry in "${SERVICES[@]}"; do
@@ -194,10 +209,6 @@ down() {
       [[ -n "$holder" ]] && kill -KILL $holder 2>/dev/null || true
     fi
   done
-
-  log "stopping infrastructure..."
-  $COMPOSE down
-  log "stopped."
 }
 
 status() {
@@ -279,9 +290,10 @@ logs() {
 }
 
 case "${1:-}" in
-  up)     up ;;
-  down)   down ;;
-  status) status ;;
-  logs)   logs ;;
-  *)      echo "usage: $0 {up|down|status|logs}" >&2; exit 2 ;;
+  up)      up ;;
+  down)    down ;;
+  restart) restart ;;
+  status)  status ;;
+  logs)    logs ;;
+  *)       echo "usage: $0 {up|down|restart|status|logs}" >&2; exit 2 ;;
 esac

@@ -20,6 +20,11 @@ tasks:
     cmds:
       - ./scripts/system.sh down
 
+  restart:
+    desc: Rebuild and restart cortex, nexus and ingest after a code change (infra keeps running)
+    cmds:
+      - ./scripts/system.sh restart
+
   status:
     desc: Show what is running, with health and data counts
     cmds:
@@ -91,7 +96,7 @@ tasks:
       - go run ./cmd/server
 
   scan:
-    desc: 'Scan repos into the dependency graph (needs cortex). Override: task scan -- -repos owner/name | -orgs vercel'
+    desc: 'Scan every tracked repository now (needs cortex). One-off: task scan -- -repos owner/name | -orgs vercel'
     dir: apps/siphon
     cmds:
       - go run ./cmd/worker -scan-repos {{.CLI_ARGS}}
@@ -122,6 +127,14 @@ tasks:
       - |
         grpcurl -plaintext -d '{"limit":20}' \
           localhost:50051 hyperion.alerting.v1.AlertingService/ListAlerts
+
+  backfill:
+    desc: 'Load history into cortex: NVD + OSV exports since a date (default 10 years). Override: task backfill -- -backfill-from 2019-01-01 -backfill-sources osv'
+    cmds:
+      - |
+        set -e
+        cd apps/siphon && go run ./cmd/worker -backfill {{.CLI_ARGS}} | \
+          (cd ../cortex && CORTEX_CONSUME_STDIN=true go run ./cmd/server)
 
   ingest:
     desc: Pipe one siphon poll straight into cortex (siphon | cortex)

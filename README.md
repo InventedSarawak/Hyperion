@@ -8,15 +8,16 @@ Hyperion is a simple, lightweight, and efficient TUI based CVE monitoring and an
 
 ```bash
 cp .env.sample .env   # every source works without a credential
-task up               # infra + cortex + nexus, with health gates
-task ingest           # pull advisories (Ctrl-C when counts settle)
-task scan             # read watched repos' manifests into the graph
-task run:deck         # the TUI
+task up               # infra + cortex + nexus + continuous ingest, with health gates
+task backfill         # once: 10 years of NVD + OSV history (about an hour)
+task run:deck         # the TUI — press 4 to add repositories to track
 task down             # stop everything (volumes kept)
 ```
 
 Full instructions — starting, stopping, loading data, using the CLI, and
-troubleshooting — are in **[docs/RUNBOOK.md](docs/RUNBOOK.md)**.
+troubleshooting — are in **[docs/RUNBOOK.md](docs/RUNBOOK.md)**. Everything the system
+can do, function by function, is in
+**[docs/CURRENT-FUNCTIONALITIES.md](docs/CURRENT-FUNCTIONALITIES.md)**.
 
 ---
 
