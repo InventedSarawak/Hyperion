@@ -29,7 +29,7 @@ func NewRunSearch(api ports.IntelligenceAPI) *RunSearch { return &RunSearch{api:
 // No query means "the latest findings", which only makes sense newest-first:
 // under relevance every record would score the same. So an empty query always
 // sorts by newest, and a query defaults to best match unless asked otherwise.
-func (c *RunSearch) Handle(ctx context.Context, query string, sort model.SearchSort, pageSize int) (model.Feed, error) {
+func (c *RunSearch) Handle(ctx context.Context, query string, sort model.SearchSort, includeMalware bool, pageSize int) (model.Feed, error) {
 	if c.api == nil {
 		return model.Feed{}, fmt.Errorf("search: not connected to the intelligence service")
 	}
@@ -42,11 +42,11 @@ func (c *RunSearch) Handle(ctx context.Context, query string, sort model.SearchS
 		sort = model.SortRelevance
 	}
 
-	page, err := c.api.Search(ctx, query, sort, clampPageSize(pageSize), "")
+	page, err := c.api.Search(ctx, query, sort, kindsFor(includeMalware), clampPageSize(pageSize), "")
 	if err != nil {
 		return model.Feed{}, err
 	}
-	return model.Feed{Query: query, Sort: sort}.Append(page), nil
+	return model.Feed{Query: query, Sort: sort, IncludeMalware: includeMalware}.Append(page), nil
 }
 
 // More loads the page after the last one in feed and appends it. A feed with
@@ -59,11 +59,22 @@ func (c *RunSearch) More(ctx context.Context, feed model.Feed, pageSize int) (mo
 		return feed, fmt.Errorf("search: not connected to the intelligence service")
 	}
 
-	page, err := c.api.Search(ctx, feed.Query, feed.Sort, clampPageSize(pageSize), feed.NextPageToken)
+	page, err := c.api.Search(ctx, feed.Query, feed.Sort, kindsFor(feed.IncludeMalware), clampPageSize(pageSize), feed.NextPageToken)
 	if err != nil {
 		return feed, err
 	}
 	return feed.Append(page), nil
+}
+
+// kindsFor is what a feed asks for. Malware is left out unless asked for:
+// OSV alone lists a quarter of a million malicious packages, nearly all
+// typosquats nobody installed, and they would bury every search. Searching
+// for a finding's exact id finds it either way.
+func kindsFor(includeMalware bool) []model.FindingKind {
+	if includeMalware {
+		return nil
+	}
+	return []model.FindingKind{model.KindVulnerability}
 }
 
 func clampPageSize(n int) int {

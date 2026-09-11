@@ -240,6 +240,19 @@ func (m Model) updateBrowsing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursor, m.offset = 0, 0
 		return m, tea.Batch(m.fresh(), m.spin())
 
+	case "m":
+		// Malware is left out by default: OSV lists a quarter of a million
+		// malicious packages, nearly all typosquats nobody installed. This
+		// brings them in (or back out). Typing a MAL or GHSA id finds one
+		// either way.
+		if m.tab != TabFeed {
+			return m, nil
+		}
+		m.malware = !m.malware
+		m.loading = true
+		m.cursor, m.offset = 0, 0
+		return m, tea.Batch(m.fresh(), m.spin())
+
 	case "enter":
 		switch m.tab {
 		case TabFeed:

@@ -46,7 +46,7 @@ func Dial(addr string) (*Client, error) {
 func (c *Client) Close() error { return c.conn.Close() }
 
 // Search calls cortex and maps one page into deck's view models.
-func (c *Client) Search(ctx context.Context, query string, sort model.SearchSort, pageSize int, pageToken string) (model.SearchPage, error) {
+func (c *Client) Search(ctx context.Context, query string, sort model.SearchSort, kinds []model.FindingKind, pageSize int, pageToken string) (model.SearchPage, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
@@ -57,6 +57,7 @@ func (c *Client) Search(ctx context.Context, query string, sort model.SearchSort
 	resp, err := c.stub.Search(ctx, &intelv1.SearchRequest{
 		Query:     query,
 		Sort:      wireSort,
+		Kinds:     wireKinds(kinds),
 		PageSize:  int32(pageSize),
 		PageToken: pageToken,
 	})
@@ -153,8 +154,14 @@ func toViewModel(v *commonv1.Vulnerability) model.Vulnerability {
 	for _, p := range v.GetAffectedPackages() {
 		packages = append(packages, model.AffectedPackage{Package: packageLabel(p), VersionRange: p.GetVersion()})
 	}
+	kind := model.KindVulnerability
+	if v.GetKind() == commonv1.FindingKind_FINDING_KIND_MALWARE {
+		kind = model.KindMalware
+	}
 	return model.Vulnerability{
 		CVEID:            v.GetCveId(),
+		Aliases:          v.GetAliases(),
+		Kind:             kind,
 		Title:            v.GetTitle(),
 		Description:      v.GetDescription(),
 		Scores:           toViewScores(v.GetScores()),
@@ -176,6 +183,19 @@ func (c *Client) Vulnerability(ctx context.Context, id string) (model.Vulnerabil
 		return model.Vulnerability{}, fmt.Errorf("grpc: get vulnerability: %w", err)
 	}
 	return toViewModel(resp.GetVulnerability()), nil
+}
+
+// wireKinds maps the kinds a search asks for onto the wire enum.
+func wireKinds(kinds []model.FindingKind) []commonv1.FindingKind {
+	out := make([]commonv1.FindingKind, 0, len(kinds))
+	for _, k := range kinds {
+		if k == model.KindMalware {
+			out = append(out, commonv1.FindingKind_FINDING_KIND_MALWARE)
+		} else {
+			out = append(out, commonv1.FindingKind_FINDING_KIND_VULNERABILITY)
+		}
+	}
+	return out
 }
 
 func toViewScores(scores []*commonv1.Cvss) []model.CVSS {

@@ -59,8 +59,9 @@ func (t Tab) Short() string {
 
 // Searcher loads the feed a page at a time (consumer-side interface).
 type Searcher interface {
-	// Handle loads the first page. An empty query is the live feed.
-	Handle(ctx context.Context, query string, sort model.SearchSort, pageSize int) (model.Feed, error)
+	// Handle loads the first page. An empty query is the live feed; malware
+	// is left out unless includeMalware is set.
+	Handle(ctx context.Context, query string, sort model.SearchSort, includeMalware bool, pageSize int) (model.Feed, error)
 	// More loads the page after feed's last and appends it.
 	More(ctx context.Context, feed model.Feed, pageSize int) (model.Feed, error)
 }
@@ -135,6 +136,7 @@ type Model struct {
 	query   string
 	active  string
 	sort    model.SearchSort
+	malware bool // include malicious packages in the feed
 	editing bool
 
 	// loadingMore is a following page in flight. It is separate from loading
@@ -243,23 +245,23 @@ func (m Model) spin() tea.Cmd {
 // updates what you have scrolled through instead of collapsing it to one page,
 // and it keeps the selection on the same finding.
 func (m Model) refresh() tea.Cmd {
-	query, sort, search := m.active, m.sort, m.search
+	query, sort, malware, search := m.active, m.sort, m.malware, m.search
 	size := clamp(len(m.feed.Hits), m.opts.PageSize, maxPageSize)
 	keep := ""
 	if v, ok := m.Selected(); ok {
 		keep = v.CVEID
 	}
 	return func() tea.Msg {
-		feed, err := search.Handle(context.Background(), query, sort, size)
+		feed, err := search.Handle(context.Background(), query, sort, malware, size)
 		return feedMsg{feed: feed, err: err, keep: keep}
 	}
 }
 
 // fresh runs a new query from the top, with nothing to preserve.
 func (m Model) fresh() tea.Cmd {
-	query, sort, size, search := m.active, m.sort, m.opts.PageSize, m.search
+	query, sort, malware, size, search := m.active, m.sort, m.malware, m.opts.PageSize, m.search
 	return func() tea.Msg {
-		feed, err := search.Handle(context.Background(), query, sort, size)
+		feed, err := search.Handle(context.Background(), query, sort, malware, size)
 		return feedMsg{feed: feed, err: err}
 	}
 }

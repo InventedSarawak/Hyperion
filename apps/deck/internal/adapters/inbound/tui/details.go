@@ -64,6 +64,13 @@ func (m Model) detailLines() []string {
 			add(styleTitle.Render(line))
 		}
 	}
+	if v.IsMalware() {
+		add(severityStyle(labelMalware).Render(" MALICIOUS PACKAGE "))
+		for _, line := range wrap("Remove it. Treat any machine that installed an affected version as compromised, "+
+			"and rotate every secret it could reach.", width) {
+			add(styleError.Render(line))
+		}
+	}
 	if m.detailErr != nil {
 		add(styleError.Render(truncate("couldn't load the full record: "+m.detailErr.Error(), width)))
 	}
@@ -71,6 +78,9 @@ func (m Model) detailLines() []string {
 	blank()
 	add(field("Published", dateOrDash(v.PublishedAt.IsZero(), v.PublishedAt.Format("2006-01-02")), width))
 	add(field("Modified", dateOrDash(v.ModifiedAt.IsZero(), v.ModifiedAt.Format("2006-01-02")), width))
+	if len(v.Aliases) > 0 {
+		add(field("Aliases", strings.Join(v.Aliases, ", "), width))
+	}
 	if len(v.Sources) > 0 {
 		add(field("Reported by", strings.Join(v.Sources, ", "), width))
 	}

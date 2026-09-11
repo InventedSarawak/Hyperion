@@ -13,8 +13,9 @@ import (
 // Implemented by adapters/outbound/graphql and adapters/outbound/grpc.
 type IntelligenceAPI interface {
 	// Search returns one page of results. An empty query is allowed only with
-	// SortNewest; pageToken is "" for the first page.
-	Search(ctx context.Context, query string, sort model.SearchSort, pageSize int, pageToken string) (model.SearchPage, error)
+	// SortNewest; kinds limits the results to those kinds of finding (none
+	// means every kind); pageToken is "" for the first page.
+	Search(ctx context.Context, query string, sort model.SearchSort, kinds []model.FindingKind, pageSize int, pageToken string) (model.SearchPage, error)
 	// BlastRadius returns the repositories a vulnerability reaches.
 	BlastRadius(ctx context.Context, cveID string, maxDepth int) (model.BlastRadius, error)
 	// Vulnerability returns one finding in full.

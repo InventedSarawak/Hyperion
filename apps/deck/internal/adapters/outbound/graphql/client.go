@@ -44,15 +44,15 @@ func New(endpoint string, httpClient *http.Client) *Client {
 // Close exists so the composition root can treat both transports alike.
 func (c *Client) Close() error { return nil }
 
-const searchQuery = `query Search($term: String, $sort: SearchSort, $pageSize: Int, $pageToken: String) {
-  search(term: $term, sort: $sort, pageSize: $pageSize, pageToken: $pageToken) {
+const searchQuery = `query Search($term: String, $sort: SearchSort, $kinds: [FindingKind!], $pageSize: Int, $pageToken: String) {
+  search(term: $term, sort: $sort, kinds: $kinds, pageSize: $pageSize, pageToken: $pageToken) {
     nextPageToken
     totalResults
     totalIsLowerBound
     hits {
       score
       vulnerability {
-        cveId title description references publishedAt modifiedAt sources
+        cveId aliases kind title description references publishedAt modifiedAt sources
         scores { version baseScore vector severity }
         affectedPackages { package }
       }
@@ -71,7 +71,7 @@ const blastRadiusQuery = `query BlastRadius($cveId: String!, $maxDepth: Int) {
 
 const vulnerabilityQuery = `query Vulnerability($cveId: String!) {
   vulnerability(cveId: $cveId) {
-    cveId title description references publishedAt modifiedAt sources
+    cveId aliases kind title description references publishedAt modifiedAt sources
     scores { version baseScore vector severity }
     affectedPackages { package versionRange }
   }
@@ -89,7 +89,7 @@ func (c *Client) Vulnerability(ctx context.Context, id string) (model.Vulnerabil
 }
 
 // Search returns one page of results through the gateway.
-func (c *Client) Search(ctx context.Context, query string, sort model.SearchSort, pageSize int, pageToken string) (model.SearchPage, error) {
+func (c *Client) Search(ctx context.Context, query string, sort model.SearchSort, kinds []model.FindingKind, pageSize int, pageToken string) (model.SearchPage, error) {
 	var out struct {
 		Search struct {
 			NextPageToken     string  `json:"nextPageToken"`
@@ -104,6 +104,7 @@ func (c *Client) Search(ctx context.Context, query string, sort model.SearchSort
 	variables := map[string]any{
 		"term":      query,
 		"sort":      gatewaySort(sort),
+		"kinds":     gatewayKinds(kinds),
 		"pageSize":  pageSize,
 		"pageToken": pageToken,
 	}
@@ -129,6 +130,19 @@ func gatewaySort(s model.SearchSort) string {
 		return "NEWEST"
 	}
 	return "RELEVANCE"
+}
+
+// gatewayKinds maps the kinds onto the gateway's GraphQL enum. None is sent
+// as null, which asks for every kind.
+func gatewayKinds(kinds []model.FindingKind) []string {
+	if len(kinds) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		out = append(out, strings.ToUpper(string(k)))
+	}
+	return out
 }
 
 // BlastRadius asks the gateway which repositories a vulnerability reaches.
@@ -227,6 +241,8 @@ func (c *Client) do(ctx context.Context, query string, variables map[string]any,
 
 type vulnerability struct {
 	CVEID            string   `json:"cveId"`
+	Aliases          []string `json:"aliases"`
+	Kind             string   `json:"kind"`
 	Title            string   `json:"title"`
 	Description      string   `json:"description"`
 	References       []string `json:"references"`
@@ -259,8 +275,14 @@ func (v vulnerability) toModel() model.Vulnerability {
 	for _, p := range v.AffectedPackages {
 		packages = append(packages, model.AffectedPackage{Package: p.Package, VersionRange: p.VersionRange})
 	}
+	kind := model.KindVulnerability
+	if strings.EqualFold(v.Kind, string(model.KindMalware)) {
+		kind = model.KindMalware
+	}
 	return model.Vulnerability{
 		CVEID:            v.CVEID,
+		Aliases:          v.Aliases,
+		Kind:             kind,
 		Title:            v.Title,
 		Description:      v.Description,
 		Scores:           scores,

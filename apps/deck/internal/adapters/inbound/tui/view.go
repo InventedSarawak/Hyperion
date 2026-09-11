@@ -159,6 +159,9 @@ func (m Model) feedCounter(start, end int) string {
 	if m.active != "" {
 		what = fmt.Sprintf("query %q · %s", m.active, m.sort.Label())
 	}
+	if m.malware {
+		what += " · incl. malware"
+	}
 
 	counter := fmt.Sprintf("%s — %d", what, loaded)
 	switch {
@@ -203,6 +206,10 @@ func thousands(n int64) string {
 // row that measured correctly in one path wrapped in the other.
 func (m Model) feedRow(v model.Vulnerability, selected bool) string {
 	severity := v.SeverityLabel()
+	if v.IsMalware() {
+		// Not a severity, but it outranks every one: say what it is.
+		severity = labelMalware
+	}
 
 	// Narrower than the fixed columns: a plain row, truncated. Legibility
 	// beats colour, and a row that wraps costs two lines of the budget.
@@ -318,7 +325,7 @@ func (m Model) footer() string {
 	case m.tab == TabRepos:
 		hints = m.repoHints()
 	default:
-		hints = "  ↑/↓ move · enter details · b blast radius · n more · s sort · / search · tab switch · r refresh · q quit"
+		hints = "  ↑/↓ move · enter details · b blast radius · n more · s sort · m malware · / search · tab switch · r refresh · q quit"
 	}
 	return styleFaint.Render(m.fitPlain(hints))
 }

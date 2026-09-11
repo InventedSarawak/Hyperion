@@ -19,14 +19,15 @@ type pagingAPI struct {
 	all      []model.SearchHit
 	gotQuery string
 	gotSort  model.SearchSort
+	gotKinds []model.FindingKind
 	gotToken string
 	err      error
 	// insertOnPage2 simulates records arriving between two requests.
 	insertOnPage2 []model.SearchHit
 }
 
-func (a *pagingAPI) Search(_ context.Context, query string, sort model.SearchSort, size int, token string) (model.SearchPage, error) {
-	a.gotQuery, a.gotSort, a.gotToken = query, sort, token
+func (a *pagingAPI) Search(_ context.Context, query string, sort model.SearchSort, kinds []model.FindingKind, size int, token string) (model.SearchPage, error) {
+	a.gotQuery, a.gotSort, a.gotKinds, a.gotToken = query, sort, kinds, token
 	if a.err != nil {
 		return model.SearchPage{}, a.err
 	}
@@ -64,7 +65,7 @@ var _ = Describe("RunSearch use case", func() {
 
 	It("serves the live feed, newest first, when there is no query", func() {
 		api := &pagingAPI{all: results(80)}
-		feed, err := commands.NewRunSearch(api).Handle(ctx, "  ", model.SortRelevance, 25)
+		feed, err := commands.NewRunSearch(api).Handle(ctx, "  ", model.SortRelevance, false, 25)
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(api.gotSort).To(Equal(model.SortNewest), "an empty query has only one meaningful order")
@@ -76,14 +77,14 @@ var _ = Describe("RunSearch use case", func() {
 
 	It("defaults a search term to best match", func() {
 		api := &pagingAPI{all: results(3)}
-		_, err := commands.NewRunSearch(api).Handle(ctx, "next", "", 25)
+		_, err := commands.NewRunSearch(api).Handle(ctx, "next", "", false, 25)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(api.gotSort).To(Equal(model.SortRelevance))
 	})
 
 	It("keeps newest when asked for it with a term", func() {
 		api := &pagingAPI{all: results(3)}
-		feed, err := commands.NewRunSearch(api).Handle(ctx, "next", model.SortNewest, 25)
+		feed, err := commands.NewRunSearch(api).Handle(ctx, "next", model.SortNewest, false, 25)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(feed.Sort).To(Equal(model.SortNewest))
 	})
@@ -92,7 +93,7 @@ var _ = Describe("RunSearch use case", func() {
 		api := &pagingAPI{all: results(60)}
 		search := commands.NewRunSearch(api)
 
-		feed, err := search.Handle(ctx, "", model.SortNewest, 25)
+		feed, err := search.Handle(ctx, "", model.SortNewest, false, 25)
 		Expect(err).ToNot(HaveOccurred())
 
 		feed, err = search.More(ctx, feed, 25)
@@ -111,7 +112,7 @@ var _ = Describe("RunSearch use case", func() {
 	It("does nothing when asked for more past the end", func() {
 		api := &pagingAPI{all: results(3)}
 		search := commands.NewRunSearch(api)
-		feed, err := search.Handle(ctx, "", model.SortNewest, 25)
+		feed, err := search.Handle(ctx, "", model.SortNewest, false, 25)
 		Expect(err).ToNot(HaveOccurred())
 
 		api.gotToken = "untouched"
@@ -126,7 +127,7 @@ var _ = Describe("RunSearch use case", func() {
 		// requests pushes page one's last item onto the start of page two.
 		api := &pagingAPI{all: results(50)}
 		search := commands.NewRunSearch(api)
-		feed, err := search.Handle(ctx, "", model.SortNewest, 25)
+		feed, err := search.Handle(ctx, "", model.SortNewest, false, 25)
 		Expect(err).ToNot(HaveOccurred())
 
 		api.insertOnPage2 = []model.SearchHit{{Vulnerability: model.Vulnerability{CVEID: "CVE-NEW"}}}
@@ -145,7 +146,7 @@ var _ = Describe("RunSearch use case", func() {
 	It("keeps the loaded pages when fetching the next one fails", func() {
 		api := &pagingAPI{all: results(60)}
 		search := commands.NewRunSearch(api)
-		feed, err := search.Handle(ctx, "", model.SortNewest, 25)
+		feed, err := search.Handle(ctx, "", model.SortNewest, false, 25)
 		Expect(err).ToNot(HaveOccurred())
 
 		api.err = errors.New("gateway down")
@@ -158,13 +159,44 @@ var _ = Describe("RunSearch use case", func() {
 
 	It("caps the page size", func() {
 		api := &pagingAPI{all: results(500)}
-		feed, err := commands.NewRunSearch(api).Handle(ctx, "", model.SortNewest, 100000)
+		feed, err := commands.NewRunSearch(api).Handle(ctx, "", model.SortNewest, false, 100000)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(feed.Hits).To(HaveLen(commands.MaxPageSize))
 	})
 
 	It("reports a missing connection instead of panicking", func() {
-		_, err := commands.NewRunSearch(nil).Handle(ctx, "", model.SortNewest, 25)
+		_, err := commands.NewRunSearch(nil).Handle(ctx, "", model.SortNewest, false, 25)
 		Expect(err).To(MatchError(ContainSubstring("not connected")))
+	})
+})
+
+var _ = Describe("RunSearch malware", func() {
+	ctx := context.Background()
+
+	It("leaves malware out of the feed unless asked for, on every page", func() {
+		api := &pagingAPI{all: results(60)}
+		search := commands.NewRunSearch(api)
+
+		feed, err := search.Handle(ctx, "", model.SortNewest, false, 25)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(api.gotKinds).To(Equal([]model.FindingKind{model.KindVulnerability}))
+
+		_, err = search.More(ctx, feed, 25)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(api.gotKinds).To(Equal([]model.FindingKind{model.KindVulnerability}))
+	})
+
+	It("asks for every kind once malware is included, and keeps asking while paging", func() {
+		api := &pagingAPI{all: results(60)}
+		search := commands.NewRunSearch(api)
+
+		feed, err := search.Handle(ctx, "axios", model.SortRelevance, true, 25)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(feed.IncludeMalware).To(BeTrue())
+		Expect(api.gotKinds).To(BeEmpty())
+
+		_, err = search.More(ctx, feed, 25)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(api.gotKinds).To(BeEmpty())
 	})
 })

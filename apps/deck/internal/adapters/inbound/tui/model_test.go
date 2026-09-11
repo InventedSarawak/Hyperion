@@ -24,21 +24,22 @@ import (
 // stubSearch pages through feed.Hits the way the gateway does: the page
 // token is the offset of the next page.
 type stubSearch struct {
-	gotQuery  string
-	gotSort   model.SearchSort
-	gotSize   int
-	feed      model.Feed // the complete result set
-	err       error
-	moreErr   error
-	moreCalls int
+	gotQuery   string
+	gotSort    model.SearchSort
+	gotMalware bool
+	gotSize    int
+	feed       model.Feed // the complete result set
+	err        error
+	moreErr    error
+	moreCalls  int
 }
 
-func (s *stubSearch) Handle(_ context.Context, query string, sort model.SearchSort, size int) (model.Feed, error) {
-	s.gotQuery, s.gotSort, s.gotSize = query, sort, size
+func (s *stubSearch) Handle(_ context.Context, query string, sort model.SearchSort, malware bool, size int) (model.Feed, error) {
+	s.gotQuery, s.gotSort, s.gotMalware, s.gotSize = query, sort, malware, size
 	if s.err != nil {
 		return model.Feed{}, s.err
 	}
-	return model.Feed{Query: query, Sort: sort}.Append(s.page(0, size)), nil
+	return model.Feed{Query: query, Sort: sort, IncludeMalware: malware}.Append(s.page(0, size)), nil
 }
 
 func (s *stubSearch) More(_ context.Context, feed model.Feed, size int) (model.Feed, error) {
@@ -920,5 +921,59 @@ var _ = Describe("Paging indicators", func() {
 		ids := m.LoadedIDs()
 		Expect(ids).To(ContainElement("CVE-2026-00023"), "nothing skipped")
 		Expect(ids).To(ContainElement("CVE-2026-00024"))
+	})
+})
+
+var _ = Describe("Malware in the feed", func() {
+	axiosMalware := model.Feed{Hits: []model.SearchHit{{Vulnerability: model.Vulnerability{
+		CVEID:   "GHSA-fw8c-xr5c-95f9",
+		Aliases: []string{"MAL-2026-2307"},
+		Kind:    model.KindMalware,
+		Title:   "Malicious code in axios",
+		Scores:  []model.CVSS{{Severity: "CRITICAL"}},
+	}}}}
+
+	It("leaves malware out until m brings it in, and says which it is showing", func() {
+		search := &stubSearch{feed: manyHits(5)}
+		m := feedModel(search, "", 25)
+		Expect(search.gotMalware).To(BeFalse())
+		Expect(stripANSI(m.View())).ToNot(ContainSubstring("incl. malware"))
+
+		m, cmd := apply(m, key("m"))
+		m = deliver(m, cmd)
+		Expect(search.gotMalware).To(BeTrue())
+		Expect(stripANSI(m.View())).To(ContainSubstring("incl. malware"))
+
+		m, cmd = apply(m, key("m"))
+		m = deliver(m, cmd)
+		Expect(search.gotMalware).To(BeFalse())
+		Expect(stripANSI(m.View())).ToNot(ContainSubstring("incl. malware"))
+	})
+
+	It("keeps malware included when the feed refreshes", func() {
+		search := &stubSearch{feed: manyHits(5)}
+		m := feedModel(search, "", 25)
+		m, cmd := apply(m, key("m"))
+		m = deliver(m, cmd)
+
+		search.gotMalware = false
+		_, cmd = apply(m, key("r"))
+		deliver(m, cmd)
+		Expect(search.gotMalware).To(BeTrue())
+	})
+
+	It("labels a malicious package as malware rather than by severity", func() {
+		m := feedModel(&stubSearch{feed: axiosMalware}, "axios", 25)
+		Expect(stripANSI(m.View())).To(ContainSubstring("GHSA-fw8c-xr5c-95f9 MALWARE"))
+	})
+
+	It("lists every id and warns about a malicious package in Details", func() {
+		m := feedModel(&stubSearch{feed: axiosMalware}, "axios", 25)
+		m, cmd := apply(m, tea.KeyMsg{Type: tea.KeyEnter})
+		m = deliver(m, cmd)
+
+		view := stripANSI(m.View())
+		Expect(view).To(ContainSubstring("MAL-2026-2307"))
+		Expect(view).To(ContainSubstring("MALICIOUS PACKAGE"))
 	})
 })

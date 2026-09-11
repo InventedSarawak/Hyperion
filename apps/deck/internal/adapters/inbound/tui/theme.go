@@ -34,6 +34,8 @@ var (
 // severityStyle colours a rating by how much it should alarm the reader.
 func severityStyle(label string) lipgloss.Style {
 	switch label {
+	case labelMalware:
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("231")).Background(lipgloss.Color("161"))
 	case "CRITICAL":
 		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("199"))
 	case "HIGH":
@@ -46,6 +48,9 @@ func severityStyle(label string) lipgloss.Style {
 		return styleDim
 	}
 }
+
+// labelMalware stands in for the severity of a malicious package.
+const labelMalware = "MALWARE"
 
 // statusStyle colours a repository's scan state.
 func statusStyle(status string) lipgloss.Style {

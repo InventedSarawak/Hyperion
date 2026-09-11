@@ -18,9 +18,23 @@ type CVSS struct {
 	Severity  string
 }
 
+// FindingKind says whether a finding is a flaw in legitimate software or a
+// package published to do harm.
+type FindingKind string
+
+const (
+	KindVulnerability FindingKind = "vulnerability"
+	KindMalware       FindingKind = "malware"
+)
+
 // Vulnerability is a finding as deck displays it.
 type Vulnerability struct {
-	CVEID       string // a CVE id, or a GHSA id for an advisory with no CVE
+	// CVEID is the canonical id: the CVE, else the GHSA, else the MAL, else
+	// whatever id the finding has.
+	CVEID string
+	// Aliases are the finding's other ids (GHSA, MAL, PYSEC, …).
+	Aliases     []string
+	Kind        FindingKind
 	Title       string
 	Description string
 	Scores      []CVSS
@@ -33,6 +47,9 @@ type Vulnerability struct {
 	// the packages without their version ranges; the full record has both.
 	AffectedPackages []AffectedPackage
 }
+
+// IsMalware reports whether the finding is a malicious package.
+func (v Vulnerability) IsMalware() bool { return v.Kind == KindMalware }
 
 // AffectedPackage is one library a finding affects.
 type AffectedPackage struct {
@@ -145,8 +162,11 @@ type SearchPage struct {
 // Feed is the list of findings on screen: every page loaded so far, and how
 // to fetch the next.
 type Feed struct {
-	Query             string
-	Sort              SearchSort
+	Query string
+	Sort  SearchSort
+	// IncludeMalware brings malicious packages into the feed; they are left
+	// out unless asked for.
+	IncludeMalware    bool
 	Hits              []SearchHit
 	NextPageToken     string
 	Total             int64
