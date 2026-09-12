@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"time"
 
@@ -51,17 +52,44 @@ func contentsResponse(body string) string {
 	return string(payload)
 }
 
-// server routes the endpoints the adapter calls. Any path not in files 404s,
-// which is how a repository without that manifest behaves.
+// server routes the endpoints the adapter calls. Any path not in files 404s.
+// Unless a test serves one, a repository's tree lists exactly the files it
+// serves through the contents API.
 func server(files map[string]string) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if body, ok := files[r.URL.Path]; ok {
 			_, _ = w.Write([]byte(body))
 			return
 		}
+		if m := treePath.FindStringSubmatch(r.URL.Path); m != nil {
+			if _, known := files["/repos/"+m[1]]; known {
+				prefix := "/repos/" + m[1] + "/contents/"
+				var paths []string
+				for p := range files {
+					if strings.HasPrefix(p, prefix) {
+						paths = append(paths, strings.TrimPrefix(p, prefix))
+					}
+				}
+				_, _ = w.Write([]byte(treeResponse(paths...)))
+				return
+			}
+		}
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"message":"Not Found"}`))
 	}))
+}
+
+var treePath = regexp.MustCompile(`^/repos/([^/]+/[^/]+)/git/trees/[^/]+$`)
+
+// treeResponse renders a recursive tree listing of plain files.
+func treeResponse(paths ...string) string {
+	entries := make([]map[string]string, 0, len(paths))
+	for _, p := range paths {
+		entries = append(entries, map[string]string{"path": p, "type": "blob", "sha": "0"})
+	}
+	payload, err := json.Marshal(map[string]any{"tree": entries, "truncated": false})
+	Expect(err).ToNot(HaveOccurred())
+	return string(payload)
 }
 
 func byName(deps []model.Dependency, name string) model.Dependency {
@@ -186,8 +214,12 @@ var _ = Describe("GitHub repository adapter", func() {
 		var gotAuth string
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			gotAuth = r.Header.Get("Authorization")
-			if r.URL.Path == "/repos/acme/app" {
+			switch r.URL.Path {
+			case "/repos/acme/app":
 				_, _ = w.Write([]byte(repoMeta))
+				return
+			case "/repos/acme/app/git/trees/master":
+				_, _ = w.Write([]byte(treeResponse()))
 				return
 			}
 			w.WriteHeader(http.StatusNotFound)
@@ -283,5 +315,96 @@ var _ = Describe("GitHub repository discovery", func() {
 		_, err := newClient(srv).Discover(ctx, "", 20)
 
 		Expect(err).To(MatchError(ContainSubstring("owner is required")))
+	})
+})
+
+var _ = Describe("GitHub repository adapter across languages", func() {
+	ctx := context.Background()
+	client := func(srv *httptest.Server) *githubrepo.Client {
+		return githubrepo.New(srv.URL, "", sourcehttp.WithHTTPClient(srv.Client()), sourcehttp.WithRateLimit(time.Millisecond))
+	}
+
+	It("reads dependency files wherever a monorepo keeps them, and not installed packages", func() {
+		srv := server(map[string]string{
+			"/repos/acme/mono":                                         repoMeta,
+			"/repos/acme/mono/contents/apps/api/go.mod":                contentsResponse(goMod),
+			"/repos/acme/mono/contents/apps/web/package.json":          contentsResponse(`{"name":"web","private":true,"dependencies":{"react":"18.2.0"}}`),
+			"/repos/acme/mono/contents/backend/requirements.txt":       contentsResponse("fastapi==0.109.2\n"),
+			"/repos/acme/mono/contents/node_modules/evil/package.json": contentsResponse(`{"name":"evil","dependencies":{"not-ours":"1.0.0"}}`),
+		})
+		defer srv.Close()
+
+		got, err := client(srv).Scan(ctx, "acme", "mono")
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(byName(got.Dependencies, "golang.org/x/net").ManifestPath).To(Equal("apps/api/go.mod"))
+		Expect(byName(got.Dependencies, "react").ManifestPath).To(Equal("apps/web/package.json"))
+		Expect(byName(got.Dependencies, "fastapi").Package.Ecosystem).To(Equal(valueobject.EcosystemPyPI))
+		for _, d := range got.Dependencies {
+			Expect(d.Package.Name).ToNot(Equal("not-ours"), "node_modules is someone else's code")
+		}
+	})
+
+	It("treats a repository with no commits as nothing to read, not a failure", func() {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/repos/acme/empty":
+				_, _ = w.Write([]byte(repoMeta))
+			case "/repos/acme/empty/git/trees/master":
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"message":"Git Repository is empty."}`))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		got, err := client(srv).Scan(ctx, "acme", "empty")
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got.Dependencies).To(BeEmpty())
+		Expect(got.Repository.FullName()).ToNot(BeEmpty())
+	})
+
+	It("reads the version of a Solidity library vendored as a git submodule, at its pinned commit", func() {
+		const tree = `{"truncated":false,"tree":[
+		  {"path":".gitmodules","type":"blob","sha":"1"},
+		  {"path":"contracts/src/Ledger.sol","type":"blob","sha":"2"},
+		  {"path":"contracts/lib/forge-std","type":"commit","sha":"7117c90"},
+		  {"path":"contracts/lib/openzeppelin-contracts","type":"commit","sha":"fcbae53"}]}`
+		files := map[string]string{
+			"/repos/acme/ledger":                  repoMeta,
+			"/repos/acme/ledger/git/trees/master": tree,
+			"/repos/acme/ledger/contents/.gitmodules": contentsResponse(`[submodule "contracts/lib/forge-std"]
+	path = contracts/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std
+[submodule "contracts/lib/openzeppelin-contracts"]
+	path = contracts/lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts
+`),
+			"/repos/OpenZeppelin/openzeppelin-contracts/contents/contracts/package.json": contentsResponse(`{"name":"@openzeppelin/contracts","version":"5.5.0"}`),
+			"/repos/foundry-rs/forge-std/contents/package.json":                          contentsResponse(`{"name":"forge-std","version":"1.9.4"}`),
+		}
+		refs := map[string]string{}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			refs[r.URL.Path] = r.URL.Query().Get("ref")
+			if body, ok := files[r.URL.Path]; ok {
+				_, _ = w.Write([]byte(body))
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		got, err := client(srv).Scan(ctx, "acme", "ledger")
+
+		Expect(err).ToNot(HaveOccurred())
+		oz := byName(got.Dependencies, "@openzeppelin/contracts")
+		Expect(oz.Package.Ecosystem).To(Equal(valueobject.EcosystemNPM))
+		Expect(oz.Package.Version).To(Equal("5.5.0"))
+		Expect(oz.Direct).To(BeTrue())
+		Expect(oz.ManifestPath).To(Equal(".gitmodules (contracts/lib/openzeppelin-contracts)"))
+		Expect(refs["/repos/OpenZeppelin/openzeppelin-contracts/contents/contracts/package.json"]).To(Equal("fcbae53"),
+			"the version at the pinned commit, not the library's latest")
 	})
 })

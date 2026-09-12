@@ -26,6 +26,10 @@ const maxRetries = 4
 // resources — callers need to tell it apart from a genuine failure.
 var ErrNotFound = errors.New("not found")
 
+// ErrConflict reports a 409. GitHub answers it for the tree of a repository
+// with no commits, which is an expected state rather than a failure.
+var ErrConflict = errors.New("conflict")
+
 // Client is a polite HTTP client: it paces requests and retries throttling.
 type Client struct {
 	http    *http.Client
@@ -159,6 +163,8 @@ func (c *Client) once(ctx context.Context, url string) ([]byte, bool, error) {
 	case resp.StatusCode == http.StatusOK:
 	case resp.StatusCode == http.StatusNotFound:
 		return nil, false, fmt.Errorf("%w: %s", ErrNotFound, url)
+	case resp.StatusCode == http.StatusConflict:
+		return nil, false, fmt.Errorf("%w: %s", ErrConflict, url)
 	case quotaExhausted(resp):
 		// The request budget is spent: retrying cannot succeed before the reset,
 		// and each retry would also burn the limiter delay, stalling the whole

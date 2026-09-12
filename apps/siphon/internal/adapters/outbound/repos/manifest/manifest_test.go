@@ -46,21 +46,21 @@ exclude github.com/old/module v1.0.0
 `
 
 	It("reads the module line as the library the repository publishes", func() {
-		got, err := manifest.GoMod{}.Parse([]byte(sample))
+		got, err := manifest.GoMod{}.Parse("go.mod", []byte(sample))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got.Publishes.Ecosystem).To(Equal(valueobject.EcosystemGo))
 		Expect(got.Publishes.Name).To(Equal("github.com/gin-gonic/gin"))
 	})
 
 	It("reads every require across block and single forms", func() {
-		got, err := manifest.GoMod{}.Parse([]byte(sample))
+		got, err := manifest.GoMod{}.Parse("go.mod", []byte(sample))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got.Dependencies).To(HaveLen(5))
 		Expect(byName(got.Dependencies, "github.com/stretchr/testify").Package.Version).To(Equal("v1.8.4"))
 	})
 
 	It("marks '// indirect' requirements as not direct", func() {
-		got, err := manifest.GoMod{}.Parse([]byte(sample))
+		got, err := manifest.GoMod{}.Parse("go.mod", []byte(sample))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(byName(got.Dependencies, "golang.org/x/net").Direct).To(BeTrue())
 		Expect(byName(got.Dependencies, "golang.org/x/sys").Direct).To(BeFalse())
@@ -68,13 +68,13 @@ exclude github.com/old/module v1.0.0
 	})
 
 	It("records where each requirement was declared", func() {
-		got, err := manifest.GoMod{}.Parse([]byte(sample))
+		got, err := manifest.GoMod{}.Parse("go.mod", []byte(sample))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(byName(got.Dependencies, "golang.org/x/net").ManifestPath).To(Equal("go.mod"))
 	})
 
 	It("handles a module with no requirements", func() {
-		got, err := manifest.GoMod{}.Parse([]byte("module example.com/tiny\n\ngo 1.23\n"))
+		got, err := manifest.GoMod{}.Parse("go.mod", []byte("module example.com/tiny\n\ngo 1.23\n"))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got.Publishes.Name).To(Equal("example.com/tiny"))
 		Expect(got.Dependencies).To(BeEmpty())
@@ -83,14 +83,14 @@ exclude github.com/old/module v1.0.0
 	It("survives a directive it does not understand", func() {
 		// Lax parsing exists for exactly this: a newer toolchain writing a
 		// directive we have never seen must not cost us the requires.
-		got, err := manifest.GoMod{}.Parse([]byte(
+		got, err := manifest.GoMod{}.Parse("go.mod", []byte(
 			"module example.com/x\n\ngodebug default=go1.21\n\nrequire golang.org/x/net v0.17.0\n"))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got.Dependencies).To(HaveLen(1))
 	})
 
 	It("reports a manifest it cannot parse at all", func() {
-		_, err := manifest.GoMod{}.Parse([]byte("require (\nunclosed\n"))
+		_, err := manifest.GoMod{}.Parse("go.mod", []byte("require (\nunclosed\n"))
 		Expect(err).To(HaveOccurred())
 	})
 })
@@ -104,14 +104,14 @@ var _ = Describe("package.json parser", func() {
 	}`
 
 	It("reads the name as the library the repository publishes", func() {
-		got, err := manifest.PackageJSON{}.Parse([]byte(sample))
+		got, err := manifest.PackageJSON{}.Parse("package.json", []byte(sample))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got.Publishes.Ecosystem).To(Equal(valueobject.EcosystemNPM))
 		Expect(got.Publishes.Name).To(Equal("express"))
 	})
 
 	It("keeps the declared version constraint", func() {
-		got, err := manifest.PackageJSON{}.Parse([]byte(sample))
+		got, err := manifest.PackageJSON{}.Parse("package.json", []byte(sample))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(byName(got.Dependencies, "accepts").Package.Version).To(Equal("~1.3.8"))
 	})
@@ -119,7 +119,7 @@ var _ = Describe("package.json parser", func() {
 	It("records devDependencies as an exposure, but not as direct", func() {
 		// The repository really can be compromised through a build-time
 		// package; whoever installs the published package cannot.
-		got, err := manifest.PackageJSON{}.Parse([]byte(sample))
+		got, err := manifest.PackageJSON{}.Parse("package.json", []byte(sample))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(byName(got.Dependencies, "body-parser").Direct).To(BeTrue())
 		Expect(byName(got.Dependencies, "mocha").Direct).To(BeFalse())
@@ -127,7 +127,7 @@ var _ = Describe("package.json parser", func() {
 	})
 
 	It("publishes nothing for a private package", func() {
-		got, err := manifest.PackageJSON{}.Parse([]byte(`{"name":"internal-app","private":true,
+		got, err := manifest.PackageJSON{}.Parse("package.json", []byte(`{"name":"internal-app","private":true,
 		  "dependencies":{"react":"18.2.0"}}`))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got.Publishes.IsZero()).To(BeTrue(), "nothing can depend on a private package")
@@ -136,11 +136,11 @@ var _ = Describe("package.json parser", func() {
 
 	It("orders dependencies deterministically despite Go's map randomization", func() {
 		raw := []byte(`{"name":"x","dependencies":{"zebra":"1","alpha":"1","middle":"1"}}`)
-		first, err := manifest.PackageJSON{}.Parse(raw)
+		first, err := manifest.PackageJSON{}.Parse("package.json", raw)
 		Expect(err).ToNot(HaveOccurred())
 
 		for i := 0; i < 20; i++ {
-			again, err := manifest.PackageJSON{}.Parse(raw)
+			again, err := manifest.PackageJSON{}.Parse("package.json", raw)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(again.Dependencies).To(Equal(first.Dependencies))
 		}
@@ -148,23 +148,25 @@ var _ = Describe("package.json parser", func() {
 	})
 
 	It("handles a manifest with no dependencies", func() {
-		got, err := manifest.PackageJSON{}.Parse([]byte(`{"name":"bare"}`))
+		got, err := manifest.PackageJSON{}.Parse("package.json", []byte(`{"name":"bare"}`))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got.Dependencies).To(BeEmpty())
 	})
 
 	It("reports malformed JSON", func() {
-		_, err := manifest.PackageJSON{}.Parse([]byte(`{"name":`))
+		_, err := manifest.PackageJSON{}.Parse("package.json", []byte(`{"name":`))
 		Expect(err).To(HaveOccurred())
 	})
 })
 
 var _ = Describe("Parsers", func() {
-	It("covers go.mod and package.json", func() {
-		paths := []string{}
+	It("covers every registry advisories name, and Solidity through npm", func() {
+		names := []string{}
 		for _, p := range manifest.Parsers() {
-			paths = append(paths, p.Path())
+			names = append(names, p.Name())
 		}
-		Expect(paths).To(ConsistOf("go.mod", "package.json"))
+		Expect(names).To(ContainElements("go.mod", "package.json", "requirements.txt", "pyproject.toml",
+			"Pipfile", "Cargo.toml", "pom.xml", "build.gradle", "libs.versions.toml", "Gemfile.lock",
+			"Gemfile", "composer.json", ".csproj", "Directory.Packages.props", "packages.config", "foundry.toml"))
 	})
 })
