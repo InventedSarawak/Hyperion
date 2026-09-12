@@ -16,7 +16,10 @@ type Version struct {
 	pre   []string // pre-release identifiers; nil for a release
 }
 
-// ParseVersion reads a version, tolerating a leading "v" (Go) or "=".
+// ParseVersion reads a version as the registries write them: semver
+// (1.2.3-rc.1), Go (v1.2.3, pseudo-versions), Python (1.0rc1, 2.0.post1,
+// 1.0.dev3), Maven (5.3.20.RELEASE, 2.0.0.Beta1, 1.0-SNAPSHOT) and plain dotted
+// numbers, tolerating a leading "v" or "=".
 func ParseVersion(raw string) (Version, bool) {
 	s := strings.TrimSpace(raw)
 	s = strings.TrimLeft(s, "=")
@@ -24,18 +27,14 @@ func ParseVersion(raw string) (Version, bool) {
 	if i := strings.IndexByte(s, '+'); i >= 0 {
 		s = s[:i]
 	}
-	var pre []string
-	if i := strings.IndexByte(s, '-'); i >= 0 {
-		if i+1 >= len(s) {
-			return Version{}, false
-		}
-		pre = strings.Split(s[i+1:], ".")
-		s = s[:i]
+	if i := strings.IndexByte(s, '!'); i >= 0 {
+		s = s[i+1:] // a PEP 440 epoch, shared by every release of a package
 	}
-	if s == "" {
+	m := versionCore.FindStringSubmatch(s)
+	if m == nil {
 		return Version{}, false
 	}
-	fields := strings.Split(s, ".")
+	fields := strings.Split(m[1], ".")
 	parts := make([]uint64, 0, len(fields))
 	for _, f := range fields {
 		n, err := strconv.ParseUint(f, 10, 64)
@@ -44,7 +43,78 @@ func ParseVersion(raw string) (Version, bool) {
 		}
 		parts = append(parts, n)
 	}
-	return Version{parts: parts, pre: pre}, true
+	rest := m[2]
+	switch {
+	case rest == "":
+		return Version{parts: parts}, true
+	case rest[0] == '-':
+		if len(rest) == 1 {
+			return Version{}, false
+		}
+		return Version{parts: parts, pre: strings.Split(rest[1:], ".")}, true
+	}
+	return qualified(parts, strings.TrimLeft(rest, "._"))
+}
+
+var (
+	versionCore = regexp.MustCompile(`^(\d+(?:\.\d+)*)(.*)$`)
+	preTag      = regexp.MustCompile(`(?i)^(alpha|a|beta|b|milestone|m|rc|cr|c|preview|pre|dev|snapshot)[.-]?(\d*)`)
+	postTag     = regexp.MustCompile(`(?i)^(post|rev|sp|pl)[.-]?(\d*)`)
+)
+
+// qualified reads a version whose numbers are followed by a word rather than
+// a semver "-": Python's 1.0rc1 and 2.0.post1, Maven's 5.3.20.RELEASE.
+func qualified(parts []uint64, q string) (Version, bool) {
+	switch strings.ToLower(q) {
+	case "final", "ga", "release":
+		return Version{parts: parts}, true // Maven's names for a plain release
+	}
+	if m := postTag.FindStringSubmatch(q); m != nil {
+		// A post-release sorts after its release and before the next one:
+		// 2.0.post1 is 2.0.0.1.
+		n, _ := strconv.ParseUint(firstDigits(m[2]), 10, 64)
+		padded := make([]uint64, max(len(parts), 3), max(len(parts), 3)+1)
+		copy(padded, parts)
+		return Version{parts: append(padded, n)}, true
+	}
+	if m := preTag.FindStringSubmatch(q); m != nil {
+		pre := []string{canonicalPre(m[1])}
+		if m[2] != "" {
+			pre = append(pre, m[2])
+		}
+		return Version{parts: parts, pre: pre}, true
+	}
+	// Any other word is a pre-release by another name, as Maven treats it.
+	// A wildcard is not a version at all.
+	if q == "" || strings.ContainsAny(q[:1], "xX*") {
+		return Version{}, false
+	}
+	return Version{parts: parts, pre: strings.FieldsFunc(q, func(r rune) bool { return r == '.' || r == '-' || r == '_' })}, true
+}
+
+func firstDigits(s string) string {
+	if s == "" {
+		return "0"
+	}
+	return s
+}
+
+// canonicalPre names pre-release stages so they sort in release order:
+// development builds first (numbers sort before words), then alpha, beta,
+// milestone and release candidate.
+func canonicalPre(tag string) string {
+	switch strings.ToLower(tag) {
+	case "dev", "snapshot":
+		return "0"
+	case "a", "alpha":
+		return "alpha"
+	case "b", "beta":
+		return "beta"
+	case "m", "milestone":
+		return "milestone"
+	default:
+		return "rc"
+	}
 }
 
 // Compare orders two versions: -1, 0 or 1. A pre-release sorts before its
@@ -313,16 +383,265 @@ func constraint(op string, v Version) interval {
 // package.json usually names a range — "^5.11.0" allows everything up to
 // 6.0.0 — so it is read as the set of versions npm could install. Dist-tags
 // ("latest"), git and file references name no version, and report false.
+//
+// Every registry writes constraints its own way, and reading one as another
+// gives wrong answers: "1.2" is exactly 1.2 to pip but anything below 2.0 to
+// Cargo, and "~1.2" means below 1.3 to npm but below 2.0 to Composer.
 func ParseDeclared(eco Ecosystem, raw string) (VersionSet, bool) {
 	s := strings.TrimSpace(raw)
-	if eco == EcosystemGo {
+	switch eco {
+	case EcosystemGo:
+		v, ok := ParseVersion(s)
+		if !ok {
+			return VersionSet{}, false
+		}
+		return exactly(v), true
+	case EcosystemPyPI:
+		return parsePEP440(s)
+	case EcosystemCargo:
+		return parseCargo(s)
+	case EcosystemRubyGems:
+		return parseRubyGems(s)
+	case EcosystemMaven, EcosystemNuGet:
+		return parseBracketRange(s)
+	case EcosystemPackagist:
+		return parseComposer(s)
+	default:
+		return parseNPMRange(s)
+	}
+}
+
+// --- Python (PEP 440, plus Poetry's ^ and ~) ---
+
+var pep440Op = regexp.MustCompile(`^(===|==|!=|~=|>=|<=|>|<)?(.+)$`)
+
+func parsePEP440(s string) (VersionSet, bool) {
+	s = strings.ReplaceAll(s, " ", "")
+	if s == "" || s == "*" {
+		return anyVersion, true // unpinned: pip installs whatever is newest
+	}
+	if strings.HasPrefix(s, "^") || strings.HasPrefix(s, "~") && !strings.HasPrefix(s, "~=") {
+		c, ok := npmComparator(s) // Poetry borrows npm's caret and tilde
+		if !ok {
+			return VersionSet{}, false
+		}
+		return VersionSet{spans: []interval{c}}, true
+	}
+	span := interval{}
+	for _, clause := range strings.Split(s, ",") {
+		c, ok := pep440Clause(clause)
+		if !ok {
+			return VersionSet{}, false
+		}
+		span = span.intersect(c)
+	}
+	return VersionSet{spans: []interval{span}}, true
+}
+
+func pep440Clause(clause string) (interval, bool) {
+	m := pep440Op.FindStringSubmatch(clause)
+	if m == nil {
+		return interval{}, false
+	}
+	op, ver := m[1], m[2]
+	if op == "!=" {
+		return interval{}, true // a hole in the range; ignoring it only widens what is judged
+	}
+	if strings.HasSuffix(ver, ".*") {
+		if op != "==" && op != "" {
+			return interval{}, false
+		}
+		p, ok := parsePartial(strings.TrimSuffix(ver, ".*"))
+		if !ok || len(p.parts) == 0 {
+			return interval{}, false
+		}
+		return interval{lo: bound{p.floor(), true, true}, hi: bound{bumpAt(p.parts, len(p.parts)-1), false, true}}, true
+	}
+	v, ok := ParseVersion(ver)
+	if !ok {
+		return interval{}, false
+	}
+	switch op {
+	case "~=":
+		// Compatible release: ~=1.4.2 is >=1.4.2 and ==1.4.*.
+		if len(v.parts) < 2 {
+			return interval{}, false
+		}
+		return interval{lo: bound{v, true, true}, hi: bound{bumpAt(v.parts, len(v.parts)-2), false, true}}, true
+	case "", "==", "===":
+		return interval{lo: bound{v, true, true}, hi: bound{v, true, true}}, true
+	default:
+		return constraint(op, v), true
+	}
+}
+
+// --- Cargo ---
+
+// parseCargo reads Cargo's requirements, where a bare "1.2" is a caret
+// requirement: anything compatible with 1.2, i.e. below 2.0.
+func parseCargo(s string) (VersionSet, bool) {
+	if s == "" || s == "*" {
+		return anyVersion, true
+	}
+	span := interval{}
+	for _, clause := range strings.Split(s, ",") {
+		token := strings.ReplaceAll(strings.TrimSpace(clause), " ", "")
+		if token != "" && token[0] >= '0' && token[0] <= '9' && !strings.ContainsAny(token, "*xX") {
+			token = "^" + token
+		}
+		c, ok := npmComparator(token)
+		if !ok {
+			return VersionSet{}, false
+		}
+		span = span.intersect(c)
+	}
+	return VersionSet{spans: []interval{span}}, true
+}
+
+// --- RubyGems ---
+
+var rubyOp = regexp.MustCompile(`^(>=|<=|!=|~>|=|>|<)?(.+)$`)
+
+// parseRubyGems reads Gem requirements: "~> 7.0" (pessimistic), ">= 1.2",
+// "= 1.2.3", and a bare version, which is exact — as a Gemfile.lock records.
+func parseRubyGems(s string) (VersionSet, bool) {
+	if s == "" {
+		return anyVersion, true
+	}
+	span := interval{}
+	for _, clause := range strings.Split(s, ",") {
+		m := rubyOp.FindStringSubmatch(strings.ReplaceAll(strings.TrimSpace(clause), " ", ""))
+		if m == nil {
+			return VersionSet{}, false
+		}
+		if m[1] == "!=" {
+			continue
+		}
+		v, ok := ParseVersion(m[2])
+		if !ok {
+			return VersionSet{}, false
+		}
+		switch m[1] {
+		case "~>":
+			span = span.intersect(pessimistic(v))
+		case "", "=":
+			span = span.intersect(interval{lo: bound{v, true, true}, hi: bound{v, true, true}})
+		default:
+			span = span.intersect(constraint(m[1], v))
+		}
+	}
+	return VersionSet{spans: []interval{span}}, true
+}
+
+// pessimistic is RubyGems' ~> and Composer's ~: the last component given may
+// rise, the one before it may not. ~> 2.2 allows 2.x from 2.2; ~> 2.2.0 allows
+// 2.2.x.
+func pessimistic(v Version) interval {
+	i := max(0, len(v.parts)-2)
+	return interval{lo: bound{v, true, true}, hi: bound{bumpAt(v.parts, i), false, true}}
+}
+
+// --- Maven and NuGet ---
+
+var bracketRange = regexp.MustCompile(`[\[(][^\])]*[\])]`)
+
+// parseBracketRange reads Maven and NuGet versions: a bare version, which is
+// what gets built (Maven treats it as a soft pin that resolution rarely moves,
+// NuGet resolves to the lowest version allowed), or interval notation such as
+// "[1.0,2.0)", "[1.2]" and "(,1.0],[1.2,)". No version at all — a property
+// this scan could not resolve — is unknown, not "anything".
+func parseBracketRange(s string) (VersionSet, bool) {
+	if s == "" {
+		return VersionSet{}, false
+	}
+	if s[0] != '[' && s[0] != '(' {
 		v, ok := ParseVersion(s)
 		if !ok {
 			return VersionSet{}, false
 		}
 		return exactly(v), true
 	}
-	return parseNPMRange(s)
+	var set VersionSet
+	for _, r := range bracketRange.FindAllString(s, -1) {
+		inner := r[1 : len(r)-1]
+		loInclusive, hiInclusive := r[0] == '[', r[len(r)-1] == ']'
+		lo, hi, isRange := strings.Cut(inner, ",")
+		if !isRange {
+			v, ok := ParseVersion(inner)
+			if !ok {
+				return VersionSet{}, false
+			}
+			set.spans = append(set.spans, interval{lo: bound{v, true, true}, hi: bound{v, true, true}})
+			continue
+		}
+		span := interval{}
+		if lo = strings.TrimSpace(lo); lo != "" {
+			v, ok := ParseVersion(lo)
+			if !ok {
+				return VersionSet{}, false
+			}
+			span.lo = bound{v, loInclusive, true}
+		}
+		if hi = strings.TrimSpace(hi); hi != "" {
+			v, ok := ParseVersion(hi)
+			if !ok {
+				return VersionSet{}, false
+			}
+			span.hi = bound{v, hiInclusive, true}
+		}
+		set.spans = append(set.spans, span)
+	}
+	if len(set.spans) == 0 {
+		return VersionSet{}, false
+	}
+	return set, true
+}
+
+// --- Composer ---
+
+var stabilityFlag = regexp.MustCompile(`@(?i:dev|alpha|beta|rc|stable)`)
+
+// parseComposer reads Composer constraints. They look like npm's but tilde
+// differs: "~1.2" allows anything below 2.0. A branch ("dev-main") is not a
+// version.
+func parseComposer(s string) (VersionSet, bool) {
+	s = strings.TrimSpace(stabilityFlag.ReplaceAllString(s, ""))
+	if s == "" || s == "*" {
+		return anyVersion, true
+	}
+	if strings.HasPrefix(s, "dev-") {
+		return VersionSet{}, false
+	}
+	var set VersionSet
+	for _, alt := range strings.Split(strings.ReplaceAll(s, "||", "|"), "|") {
+		alt = strings.TrimSpace(alt)
+		if strings.Contains(alt, " - ") {
+			sub, ok := parseNPMRange(alt)
+			if !ok {
+				return VersionSet{}, false
+			}
+			set.spans = append(set.spans, sub.spans...)
+			continue
+		}
+		span := interval{}
+		for _, token := range strings.FieldsFunc(alt, func(r rune) bool { return r == ' ' || r == ',' }) {
+			if strings.HasPrefix(token, "~") {
+				v, ok := ParseVersion(token[1:])
+				if !ok {
+					return VersionSet{}, false
+				}
+				span = span.intersect(pessimistic(v))
+				continue
+			}
+			c, ok := npmComparator(token)
+			if !ok {
+				return VersionSet{}, false
+			}
+			span = span.intersect(c)
+		}
+		set.spans = append(set.spans, span)
+	}
+	return set, true
 }
 
 func exactly(v Version) VersionSet {
@@ -441,7 +760,7 @@ func bumpAt(parts []uint64, i int) Version {
 	if i < 0 {
 		return Version{parts: []uint64{^uint64(0)}}
 	}
-	out := make([]uint64, 3)
+	out := make([]uint64, max(3, i+1))
 	copy(out, parts[:i])
 	out[i] = parts[i] + 1
 	return Version{parts: out, pre: []string{"0"}}
