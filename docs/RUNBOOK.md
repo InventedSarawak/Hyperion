@@ -186,14 +186,16 @@ every `SIPHON_REPO_SCAN_INTERVAL` (6h), failed ones after `SIPHON_REPO_RETRY_INT
 (15m). The same operations are in GraphQL (`trackedRepositories`, `discoverRepositories`,
 `trackRepositories`, `untrackRepository`).
 
-Each scan reads the repository's `go.mod` and `package.json` from GitHub and writes:
+Each scan lists the repository's files and reads every dependency file it recognises — Go,
+npm, Python, Rust, Java and Gradle, Ruby, PHP, .NET, and Solidity through npm and git
+submodules (CURRENT-FUNCTIONALITIES §1.4) — then writes:
 
 ```
 (:Author)-[:MAINTAINS]->(:Repository)-[:DEPENDS_ON {version, direct}]->(:Library)
 (:Repository)-[:PUBLISHES]->(:Library)-[:DEPENDS_ON]->(:Library)
 ```
 
-Each repository costs about three GitHub requests; unauthenticated you get 60 per hour,
+Each repository costs two GitHub requests plus one per dependency file; unauthenticated you get 60 per hour,
 so set `SIPHON_GITHUB_TOKEN` (scans) and `CORTEX_GITHUB_TOKEN` (the owner listing in the
 Repositories tab — it can be the same token).
 

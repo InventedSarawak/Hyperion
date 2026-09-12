@@ -131,16 +131,28 @@ the record moves to the CVE (see CURRENT-FUNCTIONALITIES 1.3).
 
 ### 🟡 Versions are judged from manifests, not lockfiles
 
-Version matching compares what `package.json` declares with an advisory's affected range. A
+Version matching compares what a manifest declares with an advisory's affected range. A
 declared range such as `^5.11.0` allows many versions, so a finding whose fix falls inside
 that range can only be "possibly affected".
 
-- **Why:** the scanner reads `package.json` and `go.mod`, which say what is allowed, not
-  what is installed.
+- **Why:** the scanner reads manifests (`package.json`, `pyproject.toml`, `Cargo.toml` …),
+  which say what is allowed, not what is installed; of the lockfiles only `Gemfile.lock` is
+  read. (`go.mod` and exact `==` pins are already exact.)
 - **Cost:** most npm findings read "possibly affected"; which way each one goes depends on
   the installed version, which only the lockfile records.
-- **Fix:** read `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock` and `go.sum`, and judge
-  the installed versions instead.
+- **Fix:** read `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `poetry.lock` and
+  `Cargo.lock`, and judge the installed versions instead.
+
+### 🟡 NuGet and RubyGems names must match the advisory's spelling
+
+Library nodes are keyed by the package name as written. PyPI names are normalised on the
+scanner's side (PEP 503, as advisories store them) and Packagist names are lower case, but
+NuGet ids are case-insensitive and advisories store them with capitals (`Newtonsoft.Json`).
+
+- **Cost:** a `.csproj` that writes `newtonsoft.json` does not reach the advisories for
+  `Newtonsoft.Json`.
+- **Fix:** normalise the key per registry in cortex (lower case for NuGet) and migrate the
+  existing library nodes.
 
 ### 🟡 Descriptions and scores are last-writer-wins
 

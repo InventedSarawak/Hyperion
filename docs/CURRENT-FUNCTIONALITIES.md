@@ -135,17 +135,37 @@ watchlist from cortex and scans each repository that is due:
 | scanned | its last scan is older than `SIPHON_REPO_SCAN_INTERVAL` (6h)      |
 | failed  | its last attempt is older than `SIPHON_REPO_RETRY_INTERVAL` (15m) |
 
-A scan reads the repository's `go.mod` and `package.json` from GitHub, parses direct and
-indirect requirements (and the module the repository itself publishes), sends them to
-cortex, and reports the outcome back to the watchlist — so a failure shows up in deck
-with its reason.
+A scan lists the repository's whole file tree in one request, picks every dependency file
+it recognises in any folder — so each service in a monorepo is read — and parses it:
+
+| Ecosystem | Files read                                                                                                                                              |
+| :-------- | :------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Go        | `go.mod` (the repository's own unpublished modules, wired in by `replace`, are left out)                                                                |
+| npm       | `package.json` (dependencies direct, devDependencies indirect)                                                                                          |
+| Python    | `requirements*.txt`, `pyproject.toml` (PEP 621, dependency groups, Poetry), `Pipfile`                                                                   |
+| Rust      | `Cargo.toml`, including workspace and per-target tables                                                                                                 |
+| Java      | `pom.xml`, `build.gradle` / `build.gradle.kts` (Android too), `libs.versions.toml`                                                                      |
+| Ruby      | `Gemfile.lock` (exact versions), else `Gemfile`                                                                                                         |
+| PHP       | `composer.json`                                                                                                                                         |
+| .NET      | `.csproj` / `.fsproj` / `.vbproj`, `Directory.Packages.props`, `packages.config`                                                                        |
+| Solidity  | `package.json` (Hardhat); git submodules (Foundry), read at the pinned commit — e.g. `@openzeppelin/contracts 5.5.0`; Soldeer entries in `foundry.toml` |
+
+Solidity libraries are recorded as the npm packages advisories name them by. Folders of
+installed or generated code — `node_modules`, `vendor`, `.venv`, `dist`, `build`, `target`,
+test fixtures, `examples` — are skipped, and at most 60 files are read per repository,
+shallowest first. An empty repository scans as having nothing to read. Every dependency is
+recorded with the file it came from and sent to cortex, and the outcome is reported back to
+the watchlist, so a failure shows up in deck with its reason.
 
 **How to use.** Add repositories in deck's Repositories tab (§4.4). There is no
 repository list in `.env` any more.
 
-**Limits.** Only `go.mod` and `package.json` are understood (no lockfiles, no Python,
-Java or Rust manifests yet). Each scan costs ~3 GitHub requests; without a token GitHub
-allows 60 an hour.
+**Limits.** Of the lockfiles only `Gemfile.lock` is read, so npm, Python and Rust versions
+are the declared ranges (see TECHNICAL-DEBT). A version held in a Gradle variable or a parent
+pom is unknown. NuGet and RubyGems names must match the advisory's spelling. A Solidity
+library copied in as plain files, rather than a submodule or package, is not seen. A scan
+costs two GitHub requests plus one per file and per submodule; without a token GitHub allows
+60 an hour.
 
 ### 1.5 One-off scans
 
@@ -405,7 +425,7 @@ The watchlist, with each repository's scan state, dependency count, **risk** and
 
 The RISK column flags what a repository may be exposed to: `▲ 1 crit 6 high`, `▲ 2 high`,
 `3 lower` (medium and low only), `clean`, or `—` when nothing could be judged — not scanned
-yet, or no dependency file read (only `package.json` and `go.mod` are read today).
+yet, or no dependency file it can read.
 
 | Key     | Does                                                                   |
 | :------ | :--------------------------------------------------------------------- |
