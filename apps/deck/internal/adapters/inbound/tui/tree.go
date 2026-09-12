@@ -42,7 +42,8 @@ func RenderTree(radius model.BlastRadius) string {
 	// A CVE with no package linkage is unanswerable, not unaffected. Saying
 	// "0 repositories" here would be the most dangerous kind of wrong.
 	if !radius.Linked() {
-		b.WriteString(cve + "\n")
+		b.WriteString(cve)
+		b.WriteString("\n")
 		b.WriteString(lastBranch + "no package linkage for this CVE — blast radius unknown\n")
 		return b.String()
 	}
@@ -55,7 +56,10 @@ func RenderTree(radius model.BlastRadius) string {
 
 		chain := append(chainBelow(repo), cve)
 		for depth, node := range chain {
-			b.WriteString(strings.Repeat(gap, depth) + lastBranch + node + "\n")
+			b.WriteString(strings.Repeat(gap, depth))
+			b.WriteString(lastBranch)
+			b.WriteString(node)
+			b.WriteString("\n")
 		}
 	}
 
@@ -69,7 +73,9 @@ func RenderTree(radius model.BlastRadius) string {
 			if i == len(unreached)-1 {
 				prefix = lastBranch
 			}
-			b.WriteString(prefix + pkg + "\n")
+			b.WriteString(prefix)
+			b.WriteString(pkg)
+			b.WriteString("\n")
 		}
 	}
 	return b.String()

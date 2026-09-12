@@ -43,7 +43,8 @@ func contentsResponse(body string) string {
 		if end > len(encoded) {
 			end = len(encoded)
 		}
-		wrapped.WriteString(encoded[i:end] + "\n")
+		wrapped.WriteString(encoded[i:end])
+		wrapped.WriteString("\n")
 	}
 	payload, err := json.Marshal(map[string]any{
 		"content": wrapped.String(), "encoding": "base64", "size": len(body),

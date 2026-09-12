@@ -29,7 +29,7 @@ var (
 	styleTabOn   = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
 	styleTabOff  = lipgloss.NewStyle().Foreground(colMuted)
 	stylePrompt  = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
-	styleCounter = lipgloss.NewStyle().Foreground(colMuted)
+	_ = lipgloss.NewStyle().Foreground(colMuted)
 )
 
 // severityStyle colours a rating by how much it should alarm the reader.

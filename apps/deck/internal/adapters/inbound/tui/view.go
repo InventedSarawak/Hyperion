@@ -31,7 +31,8 @@ func (m Model) View() string {
 	// The banner is pinned: it stays for the whole session. It is the list
 	// below it that scrolls, sized so the frame never outgrows the terminal.
 	if m.showBanner() {
-		b.WriteString(banner() + "\n\n")
+		b.WriteString(banner())
+		b.WriteString("\n\n")
 	}
 
 	b.WriteString(m.header())
