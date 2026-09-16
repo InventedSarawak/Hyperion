@@ -88,6 +88,8 @@ func (b *Backfill) runSource(ctx context.Context, source ports.Backfiller, from 
 				return publishError{fmt.Errorf("backfill %s: publish %s: %w", kind, sig.CVEID, err)}
 			}
 			published++
+			b.log.Debug("published", "source", kind.String(), "id", sig.CVEID,
+				"kind", string(sig.Kind), "packages", len(sig.AffectedPackages))
 			if b.progressEvery > 0 && published%b.progressEvery == 0 {
 				b.log.Info("backfill progress", "source", kind.String(), "published", published)
 			}
