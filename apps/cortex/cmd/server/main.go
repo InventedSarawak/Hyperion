@@ -169,8 +169,23 @@ func runKafkaConsumer(ctx context.Context, logger *slog.Logger, ingest *commands
 		return err
 	}
 
-	c, err := kafka.NewConsumer(clientCfg, cfg.Kafka.Topic, cfg.Kafka.Group,
-		kafka.WithConsumerLogger(logger))
+	opts := []kafka.ConsumerOption{kafka.WithConsumerLogger(logger)}
+
+	// Somewhere to put a record that will never succeed, so it cannot block
+	// every record behind it on its partition.
+	if cfg.Kafka.DeadLetterEnabled {
+		dl, err := kafka.NewDeadLetter(ctx, clientCfg, cfg.Kafka.Topic, cfg.Kafka.DeadLetterTopic, logger)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = dl.Close() }()
+
+		opts = append(opts, kafka.WithDeadLetter(dl, cfg.Kafka.MaxConsecutiveDLQ))
+		logger.Info("unprocessable records will be set aside",
+			"dead_letter_topic", dl.Topic(), "stop_after_consecutive", cfg.Kafka.MaxConsecutiveDLQ)
+	}
+
+	c, err := kafka.NewConsumer(clientCfg, cfg.Kafka.Topic, cfg.Kafka.Group, opts...)
 	if err != nil {
 		return err
 	}

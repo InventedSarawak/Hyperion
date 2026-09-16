@@ -88,19 +88,23 @@ new inbound adapter in cortex, and no change to a domain type or a use case.
   `siphon | cortex` deliberately — one command that loads data and reports what it
   stored is genuinely the point there. They opt out explicitly.
 
-### 🟡 No dead-letter topic
+### 🟢 ~~No dead-letter topic~~ — REPAID (v3, 2026-09-17)
 
-A record that fails to ingest is retried (5 attempts, doubling backoff) and then
-**stops the consumer** without committing.
+A record that exhausts its retries is forwarded to `hyperion.signals.v1.dlq`
+with the failure, origin partition/offset and attempt count in headers, and
+committed past — so one poisonous record no longer blocks its partition.
 
-- **Why:** the alternative — logging and committing past it — silently loses data
-  during a database outage, which is the failure that matters most here. Stopping
-  loudly is the safe half of the trade.
-- **Cost:** a record that can never succeed halts ingest until someone intervenes.
-  Decode failures are already exempt (they are skipped as unprocessable), so this
-  needs a genuinely poisonous _ingest_, but the failure mode is real.
-- **Fix:** publish exhausted records to `hyperion.signals.v1.dlq` with the failure
-  attached, commit past them, and alert on the topic being non-empty.
+- **The trap that was avoided:** a dead-letter queue on its own turns a
+  database outage into a silent migration of the whole topic. The consumer
+  therefore counts _consecutive_ dead-letters and stops after ten
+  (`CORTEX_KAFKA_DLQ_MAX_CONSECUTIVE`): one bad record is a record, ten in a
+  row is the world being broken. A success resets the count.
+- **If the dead-letter topic itself is unreachable,** the consumer stops
+  without committing, which is the only remaining way not to lose the record.
+- **Draining it:** `task topic:dlq` reads it with reasons attached,
+  `task topic:dlq -- -replay` republishes the records unchanged.
+- **What remains:** nothing alerts on the topic being non-empty — it has to be
+  looked at. A metric belongs in v6 with the rest of the telemetry.
 
 ### 🟢 Topics are created by the services that use them
 

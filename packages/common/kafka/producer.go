@@ -151,6 +151,31 @@ func (p *Producer) Publish(ctx context.Context, key string, m proto.Message) err
 	return p.takeErr()
 }
 
+// publishRaw queues bytes that are already encoded, under the given headers.
+//
+// It exists for the dead-letter path, which forwards a record exactly as it
+// arrived: re-encoding it would mean decoding it first, and the records that
+// end up there are precisely the ones that could not be handled.
+func (p *Producer) publishRaw(ctx context.Context, key string, value []byte, headers []kgo.RecordHeader) error {
+	if len(value) > MaxRecordBytes {
+		return fmt.Errorf("kafka: record for key %q is %d bytes, over the %d limit", key, len(value), MaxRecordBytes)
+	}
+
+	rec := &kgo.Record{Topic: p.topic, Key: []byte(key), Value: value, Headers: headers}
+	p.cl.Produce(ctx, rec, func(r *kgo.Record, err error) {
+		if err == nil {
+			return
+		}
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if p.err == nil {
+			p.err = fmt.Errorf("kafka: deliver key %q to %s: %w", string(r.Key), r.Topic, err)
+		}
+		p.log.Error("kafka delivery failed", "topic", r.Topic, "key", string(r.Key), "error", err)
+	})
+	return p.takeErr()
+}
+
 // Flush blocks until every record published so far has been acknowledged by
 // the broker, and reports the first delivery failure if there was one.
 //

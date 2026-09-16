@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -34,6 +35,9 @@ type Message struct {
 	Offset    int64
 	Timestamp time.Time
 	EventType string
+	// Headers carries the record's headers, so a reader can see why a record
+	// was set aside without decoding its value.
+	Headers map[string]string
 }
 
 // Into decodes the record value into dst.
@@ -73,18 +77,29 @@ type Consumer struct {
 	attempts int
 	backoff  time.Duration
 	log      *slog.Logger
+
+	// deadLetter, when set, receives records that exhausted their retries
+	// instead of stopping the consumer.
+	deadLetter *DeadLetter
+	// maxConsecutiveDeadLetters stops the consumer once this many records in
+	// a row have been set aside — the signal that the failure is the world,
+	// not the records.
+	maxConsecutiveDeadLetters int64
+	consecutiveDeadLetters    atomic.Int64
 }
 
 // ConsumerOption customizes a Consumer.
 type ConsumerOption func(*consumerSettings)
 
 type consumerSettings struct {
-	maxPoll   int
-	attempts  int
-	backoff   time.Duration
-	fromStart bool
-	log       *slog.Logger
-	extra     []kgo.Opt
+	maxPoll        int
+	attempts       int
+	backoff        time.Duration
+	fromStart      bool
+	log            *slog.Logger
+	extra          []kgo.Opt
+	deadLetter     *DeadLetter
+	maxConsecutive int64
 }
 
 // WithMaxPollRecords caps how many records one poll returns.
@@ -105,6 +120,26 @@ func WithRetries(attempts int, backoff time.Duration) ConsumerOption {
 		}
 		if backoff > 0 {
 			s.backoff = backoff
+		}
+	}
+}
+
+// WithDeadLetter sends records that exhaust their retries to another topic and
+// commits past them, instead of stopping the consumer.
+//
+// maxConsecutive bounds how far that goes: once this many records in a row have
+// been set aside, the consumer stops anyway. One poisonous record is a record;
+// two hundred in a row is the database being down, and quietly moving the whole
+// topic into a dead-letter queue would be the worst of both behaviours. Zero
+// takes a sensible default.
+func WithDeadLetter(dl *DeadLetter, maxConsecutive int) ConsumerOption {
+	return func(s *consumerSettings) {
+		if dl == nil {
+			return
+		}
+		s.deadLetter = dl
+		if maxConsecutive > 0 {
+			s.maxConsecutive = int64(maxConsecutive)
 		}
 	}
 }
@@ -142,11 +177,12 @@ func NewConsumer(cfg Config, topic, group string, opts ...ConsumerOption) (*Cons
 	}
 
 	settings := consumerSettings{
-		maxPoll:   500,
-		attempts:  5,
-		backoff:   time.Second,
-		fromStart: true,
-		log:       slog.Default(),
+		maxPoll:        500,
+		attempts:       5,
+		backoff:        time.Second,
+		fromStart:      true,
+		log:            slog.Default(),
+		maxConsecutive: 10,
 	}
 	for _, opt := range opts {
 		opt(&settings)
@@ -178,13 +214,15 @@ func NewConsumer(cfg Config, topic, group string, opts ...ConsumerOption) (*Cons
 		return nil, fmt.Errorf("kafka: consumer client: %w", err)
 	}
 	return &Consumer{
-		cl:       cl,
-		topic:    topic,
-		group:    group,
-		maxPoll:  settings.maxPoll,
-		attempts: settings.attempts,
-		backoff:  settings.backoff,
-		log:      settings.log,
+		cl:                        cl,
+		topic:                     topic,
+		group:                     group,
+		maxPoll:                   settings.maxPoll,
+		attempts:                  settings.attempts,
+		backoff:                   settings.backoff,
+		log:                       settings.log,
+		deadLetter:                settings.deadLetter,
+		maxConsecutiveDeadLetters: settings.maxConsecutive,
 	}, nil
 }
 
@@ -285,21 +323,17 @@ func (c *Consumer) handleBatch(ctx context.Context, fetches kgo.Fetches, h Handl
 
 // handleRecord applies the retry policy to a single record.
 func (c *Consumer) handleRecord(ctx context.Context, h Handler, rec *kgo.Record) error {
-	msg := Message{
-		Topic:     rec.Topic,
-		Key:       string(rec.Key),
-		Value:     rec.Value,
-		Partition: rec.Partition,
-		Offset:    rec.Offset,
-		Timestamp: rec.Timestamp,
-		EventType: Header(rec, HeaderEventType),
-	}
+	msg := messageFrom(rec)
 
 	wait := c.backoff
 	for attempt := 1; ; attempt++ {
 		err := h.Handle(ctx, msg)
 		switch {
 		case err == nil:
+			// A success breaks the run: the limit is about consecutive
+			// failures, not a total that creeps up over days of healthy
+			// operation.
+			c.consecutiveDeadLetters.Store(0)
 			return nil
 		case errors.Is(err, ErrUnprocessable):
 			c.log.Warn("skipping unprocessable record",
@@ -307,8 +341,7 @@ func (c *Consumer) handleRecord(ctx context.Context, h Handler, rec *kgo.Record)
 				"key", msg.Key, "error", err)
 			return nil
 		case attempt >= c.attempts:
-			return fmt.Errorf("kafka: %s partition %d offset %d failed after %d attempts: %w",
-				msg.Topic, msg.Partition, msg.Offset, attempt, err)
+			return c.exhausted(ctx, msg, err, attempt)
 		}
 
 		c.log.Warn("retrying record",
@@ -320,6 +353,53 @@ func (c *Consumer) handleRecord(ctx context.Context, h Handler, rec *kgo.Record)
 		case <-time.After(wait):
 		}
 		wait *= 2
+	}
+}
+
+// exhausted decides what happens to a record that has run out of retries:
+// stop the consumer, or set the record aside and carry on.
+func (c *Consumer) exhausted(ctx context.Context, msg Message, cause error, attempts int) error {
+	failed := fmt.Errorf("kafka: %s partition %d offset %d failed after %d attempts: %w",
+		msg.Topic, msg.Partition, msg.Offset, attempts, cause)
+
+	if c.deadLetter == nil {
+		return failed
+	}
+
+	if err := c.deadLetter.Send(ctx, msg, cause, attempts); err != nil {
+		// Nowhere safe to put it. Stopping keeps the record on the topic,
+		// uncommitted, which is the only remaining way not to lose it.
+		return fmt.Errorf("%w (and the dead-letter topic is unavailable: %w)", failed, err)
+	}
+
+	inARow := c.consecutiveDeadLetters.Add(1)
+	c.log.Error("record set aside on the dead-letter topic",
+		"topic", msg.Topic, "partition", msg.Partition, "offset", msg.Offset,
+		"key", msg.Key, "dead_letter_topic", c.deadLetter.Topic(),
+		"consecutive", inARow, "error", cause)
+
+	if inARow >= c.maxConsecutiveDeadLetters {
+		return fmt.Errorf("kafka: %d records in a row could not be processed; stopping rather than draining %s into %s: %w",
+			inARow, c.topic, c.deadLetter.Topic(), cause)
+	}
+	return nil
+}
+
+// messageFrom converts a client record into the type service adapters see.
+func messageFrom(rec *kgo.Record) Message {
+	headers := make(map[string]string, len(rec.Headers))
+	for _, h := range rec.Headers {
+		headers[h.Key] = string(h.Value)
+	}
+	return Message{
+		Topic:     rec.Topic,
+		Key:       string(rec.Key),
+		Value:     rec.Value,
+		Partition: rec.Partition,
+		Offset:    rec.Offset,
+		Timestamp: rec.Timestamp,
+		EventType: headers[HeaderEventType],
+		Headers:   headers,
 	}
 }
 

@@ -257,6 +257,24 @@ task run:siphon               # the publisher
 task run:cortex               # the consumer, and the gRPC API
 ```
 
+**When a record cannot be ingested.** Two different failures, answered differently:
+
+| Failure                                              | What happens                                                                                                                                                          |
+| :--------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The record will not **decode**                       | skipped, logged, committed past — retrying cannot change the answer                                                                                                   |
+| The record will not **ingest** (Postgres refuses it) | retried 5 times with doubling backoff, then set aside on `hyperion.signals.v1.dlq` and committed past, so nothing behind it on that partition is blocked              |
+| **Ten** records in a row are set aside               | cortex stops. That many consecutive failures is the database being down, not the records, and draining the topic into a dead-letter queue would be a silent migration |
+| The dead-letter topic itself is unreachable          | cortex stops, uncommitted — the only remaining way not to lose the record                                                                                             |
+
+```bash
+task topic:dlq              # what failed, and why (empty is healthy)
+task topic:dlq -- -replay   # put them back on the signal topic, unchanged
+```
+
+A dead-lettered record keeps its original bytes exactly, with the reason, the origin
+partition and offset, the attempt count and the time in headers — so replaying it is
+publishing the same record again, not reconstructing it.
+
 **What it guarantees.**
 
 - **Per-finding order.** A record's key is the finding id, so every report of one CVE —

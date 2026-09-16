@@ -86,6 +86,14 @@ type KafkaConfig struct {
 	Group string
 	// Partitions applies only when cortex has to create the topic.
 	Partitions int
+
+	// DeadLetter sends records that exhaust their retries to another topic
+	// instead of stopping ingest. MaxConsecutive bounds that: a run of
+	// failures that long is the world being broken, not the records, and
+	// cortex stops rather than draining the topic into the dead-letter queue.
+	DeadLetterEnabled bool
+	DeadLetterTopic   string
+	MaxConsecutiveDLQ int
 }
 
 // Load reads configuration from the environment, applying defaults.
@@ -136,6 +144,10 @@ func Load() Config {
 			Topic:      l.String("KAFKA_TOPIC", kafka.TopicSignals),
 			Group:      l.String("KAFKA_GROUP", DefaultConsumerGroup),
 			Partitions: l.Int("KAFKA_PARTITIONS", kafka.DefaultPartitions),
+
+			DeadLetterEnabled: l.Bool("KAFKA_DLQ_ENABLED", true),
+			DeadLetterTopic:   l.String("KAFKA_DLQ_TOPIC", ""),
+			MaxConsecutiveDLQ: l.Int("KAFKA_DLQ_MAX_CONSECUTIVE", 10),
 		},
 	}
 }

@@ -66,6 +66,15 @@ nexus returning findings with cross-source provenance (`["package_feed","nvd"]`)
   New trap, documented: wiping cortex's stores no longer refills them from the next poll —
   clear `hyperion:siphon:seen:*` or backfill.
 
+- **Dead-letter topic (2026-09-17).** A record that exhausts its retries goes to
+  `hyperion.signals.v1.dlq` — original bytes untouched, with the reason, origin
+  partition/offset and attempt count in headers — and ingest continues past it. The trap
+  avoided: a dead-letter queue alone turns a database outage into a silent migration of
+  the whole topic, so the consumer counts **consecutive** dead-letters and stops after ten.
+  A success resets the count; an unreachable dead-letter topic stops the consumer
+  uncommitted. `task topic:dlq` reads it, `task topic:dlq -- -replay` puts records back
+  (verified live: 3168 -> 3170 records on the signal topic after a replay).
+
 ### What is deliberately not done
 
 - Repository scans still call cortex over synchronous gRPC

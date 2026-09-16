@@ -186,6 +186,12 @@ tasks:
         docker exec hyperion-kafka /opt/kafka/bin/kafka-consumer-groups.sh \
           --bootstrap-server localhost:9092 --describe --group intel-indexer
 
+  topic:dlq:
+    desc: 'Records ingest could not process, and why. Put them back with: task topic:dlq -- -replay'
+    dir: apps/cortex
+    cmds:
+      - go run ./cmd/tail -topic dlq -from-start {{.CLI_ARGS}}
+
   topic:ui:
     desc: Open the Kafka console in a browser (topics, decoded messages, consumer lag)
     cmds:

@@ -54,6 +54,13 @@ var _ = Describe("against a real broker", Ordered, func() {
 		})
 	})
 
+	// ctx is a short-lived context for setup calls inside a spec.
+	ctx := func() context.Context {
+		c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		DeferCleanup(cancel)
+		return c
+	}
+
 	// publish writes n records under each of the given keys, values numbered
 	// "<key>-<i>", and blocks until the broker has them all.
 	publish := func(keys []string, n int) {
@@ -247,6 +254,102 @@ var _ = Describe("against a real broker", Ordered, func() {
 		mu.Lock()
 		defer mu.Unlock()
 		Expect(handled).To(Equal([]string{"poison-0", "poison-2", "poison-3"}))
+	})
+
+	It("sets an unprocessable record aside and carries on, when there is somewhere to put it", func() {
+		publish([]string{"dlq"}, 4)
+
+		dlqTopic := topic + kafka.DeadLetterSuffix
+		dl, err := kafka.NewDeadLetter(ctx(), cfg, topic, dlqTopic, nil)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			Expect(dl.Close()).To(Succeed())
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			Expect(kafka.DeleteTopic(cleanupCtx, cfg, dlqTopic)).To(Succeed())
+		})
+
+		var (
+			mu      sync.Mutex
+			handled []string
+		)
+		handler := kafka.HandlerFunc(func(_ context.Context, msg kafka.Message) error {
+			var v wrapperspb.StringValue
+			if err := msg.Into(&v); err != nil {
+				return err
+			}
+			// One record that never succeeds. Everything behind it on the
+			// partition must still be delivered.
+			if v.GetValue() == "dlq-1" {
+				return errors.New("this record can never be stored")
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			handled = append(handled, v.GetValue())
+			return nil
+		})
+
+		r := start("hyperion-test-dlq", handler,
+			kafka.WithRetries(2, 10*time.Millisecond),
+			kafka.WithDeadLetter(dl, 10))
+		Eventually(func() int {
+			mu.Lock()
+			defer mu.Unlock()
+			return len(handled)
+		}, "45s", "250ms").Should(Equal(3))
+		Eventually(totalLag(r.consumer), "45s", "250ms").Should(BeZero())
+		Expect(r.stop()).To(MatchError(context.Canceled))
+
+		mu.Lock()
+		defer mu.Unlock()
+		Expect(handled).To(Equal([]string{"dlq-0", "dlq-2", "dlq-3"}))
+
+		// The record itself is on the dead-letter topic, byte for byte, with
+		// the reason attached — so it can be looked at, fixed and replayed.
+		var dead []kafka.Message
+		tailCtx, cancelTail := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancelTail()
+		Expect(kafka.Tail(tailCtx, cfg, dlqTopic, kafka.TailOptions{FromStart: true, Limit: 1},
+			func(m kafka.Message) error {
+				dead = append(dead, m)
+				return nil
+			})).To(Succeed())
+
+		Expect(dead).To(HaveLen(1))
+		var v wrapperspb.StringValue
+		Expect(dead[0].Into(&v)).To(Succeed())
+		Expect(v.GetValue()).To(Equal("dlq-1"))
+		Expect(dead[0].Headers[kafka.HeaderDLQError]).To(ContainSubstring("can never be stored"))
+		Expect(dead[0].Headers[kafka.HeaderDLQTopic]).To(Equal(topic))
+		Expect(dead[0].Headers[kafka.HeaderDLQAttempts]).To(Equal("2"))
+	})
+
+	It("stops rather than draining the whole topic into the dead-letter queue when everything is failing", func() {
+		publish([]string{"outage"}, 8)
+
+		dlqTopic := topic + kafka.DeadLetterSuffix
+		dl, err := kafka.NewDeadLetter(ctx(), cfg, topic, dlqTopic, nil)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			Expect(dl.Close()).To(Succeed())
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			Expect(kafka.DeleteTopic(cleanupCtx, cfg, dlqTopic)).To(Succeed())
+		})
+
+		// Everything fails, as it would with the database down. Setting every
+		// record aside would be a silent migration of the topic; the consumer
+		// is supposed to give up instead.
+		everything := kafka.HandlerFunc(func(_ context.Context, _ kafka.Message) error {
+			return errors.New("database is down")
+		})
+
+		r := start("hyperion-test-outage", everything,
+			kafka.WithRetries(1, 10*time.Millisecond),
+			kafka.WithDeadLetter(dl, 3))
+
+		Eventually(r.finished, "45s").Should(BeClosed())
+		Expect(r.stop()).To(MatchError(ContainSubstring("in a row could not be processed")))
 	})
 
 	It("stops without committing when a record fails past its retries, so the work is replayed", func() {
