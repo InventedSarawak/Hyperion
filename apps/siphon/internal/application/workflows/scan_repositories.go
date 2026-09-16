@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/ports"
 )
@@ -113,7 +112,7 @@ func (s *ScanRepositories) resolve(ctx context.Context) ([]string, []error) {
 // other poller, and deliberately ignored: a manifest has no watermark. Its
 // current contents are the whole truth, and there is no incremental window to
 // ask for.
-func (s *ScanRepositories) Run(ctx context.Context, _ time.Time) (int, error) {
+func (s *ScanRepositories) Run(ctx context.Context) (int, error) {
 	repositories, errs := s.resolve(ctx)
 	total := 0
 

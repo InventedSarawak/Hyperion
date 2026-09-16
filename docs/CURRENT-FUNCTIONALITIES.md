@@ -46,11 +46,32 @@ For what is planned see [TODO.md](../TODO.md); for what was cut and why see
 source for what changed since its **watermark**, turns each record into a
 `SignalDiscovered` event and publishes it to the Kafka topic (1.7).
 
-**The watermark** is how far ingestion has read. It advances only when a poll succeeds —
-never past a window that failed — and is stored in Redis under
-`hyperion:siphon:watermark:advisories`, without an expiry, so it survives a restart. On
-start siphon resumes from it and logs how far behind it is; with nothing stored it falls
-back to `SIPHON_LOOKBACK` (default 2h).
+**Each source has its own cadence and its own watermark.** The ten feeds publish at rates
+that differ by orders of magnitude, so one interval and one window cannot suit them all:
+
+| Sources                   | Asked every | First window |
+| :------------------------ | :---------- | :----------- |
+| nvd, mitre                | 10m         | 2h           |
+| github_advisory           | 15m         | 12h          |
+| gsd, shodan               | 30m         | 24h          |
+| cisa_kev, vendor_advisory | 1h          | 48h          |
+| osint                     | 2h          | 7d           |
+| exploitdb, package_feed   | 6h          | 14d          |
+
+Override one feed with `SIPHON_<SOURCE>_INTERVAL` / `SIPHON_<SOURCE>_LOOKBACK`. Setting
+`SIPHON_POLL_INTERVAL` or `SIPHON_LOOKBACK` overrides **every** source at once, which is
+for a deliberate catch-up and little else — leave them unset for per-source cadence.
+
+This is what makes the slow feeds work at all. At the old global 2h window, Exploit-DB,
+OSINT and the package feeds returned nothing essentially always, which read as a broken
+adapter and was not one. Measured after the change: `vendor_advisory` fetched 13 records
+over its 48h window where 2h found none.
+
+**The watermark** is how far one source has read. It advances only when that source's poll
+succeeds — never past a window that failed — and is stored in Redis under
+`hyperion:siphon:watermark:source:<name>`, without an expiry, so it survives a restart.
+One key per source, so a fast feed can never drag a slow one's position past records it
+never read. With nothing stored, a source falls back to its own first window.
 
 That difference is large in practice: restarting with a 2h lookback re-fetched 526 records
 where resuming from a 54-second-old watermark fetched 59. It also closes a real gap — an

@@ -154,17 +154,23 @@ window re-read from scratch: 885 suppressed, 25 published.
   thousands of records, and fingerprinting them all would fill Redis to no
   purpose.
 
-### 🟡 Single global lookback across sources of wildly different cadence
+### 🟢 ~~Single global lookback across sources of wildly different cadence~~ — REPAID (v3, 2026-09-17)
 
-One `SIPHON_LOOKBACK` drives all ten sources. NVD/GitHub/Shodan publish hundreds of
-signals a day; exploit-db, OSINT and package-feed publish a handful a _week_.
+Each source now has its own interval, its own first window and its own
+watermark (`hyperion:siphon:watermark:source:<name>`). Defaults run from 10m/2h
+for NVD to 6h/14d for Exploit-DB and the package feeds; `SIPHON_<SOURCE>_INTERVAL`
+and `_LOOKBACK` override one feed.
 
-- **Cost:** at the 2h default, three sources return 0 essentially always — which
-  looks like a broken adapter but is not. Verified against upstream: the data
-  genuinely is not there.
-- **Fix:** per-source lookback/interval in config. Small change, high clarity win.
-- **Mitigated (2026-09-11):** history no longer depends on the lookback at all —
-  `task backfill` loads it directly (NVD published-date windows + OSV exports).
+- **What it fixed:** at the old global 2h window three sources returned nothing
+  essentially always. Measured after: `vendor_advisory` fetched 13 records over
+  its 48h window where 2h found none, and dedupe suppressed the repeats so the
+  wider window costs nothing downstream.
+- **What it cost:** the scheduler stopped owning a watermark at all. It is a
+  plain ticker now, and how far back to read is answered by the poller — which
+  is the only thing that can answer it per source.
+- **Migration:** `SIPHON_POLL_INTERVAL` and `SIPHON_LOOKBACK` still work and
+  still override every source at once. They are commented out in `.env.sample`,
+  because leaving them set silently flattens all ten feeds back to one cadence.
 
 ### 🟢 A re-keyed finding can alert a subscription once more
 

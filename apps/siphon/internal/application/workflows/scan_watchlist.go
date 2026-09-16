@@ -53,7 +53,7 @@ func NewScanWatchlist(
 // expected, per-repository state the user sees in the list ("failed: rate
 // limited"), not a failure of the pass. Only failing to reach the watchlist
 // itself fails the run.
-func (s *ScanWatchlist) Run(ctx context.Context, _ time.Time) (int, error) {
+func (s *ScanWatchlist) Run(ctx context.Context) (int, error) {
 	tracked, err := s.watchlist.Tracked(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("scan watchlist: list: %w", err)

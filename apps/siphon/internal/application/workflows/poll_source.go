@@ -25,6 +25,15 @@ type PollSource struct {
 	// dedupe, when set, suppresses observations already published.
 	dedupe       ports.DedupeStore
 	dedupeWindow time.Duration
+
+	// Cadence and position, per source. Ten feeds publish at rates that
+	// differ by orders of magnitude — NVD hundreds a day, Exploit-DB a
+	// handful a week — so one interval and one window cannot suit them all.
+	interval   time.Duration
+	lookback   time.Duration
+	nextDue    time.Time
+	since      time.Time
+	checkpoint ports.CheckpointStore
 }
 
 // NewPollSource wires the use case with its outbound ports. Concrete adapters
@@ -35,6 +44,8 @@ func NewPollSource(source ports.SourceClient, publisher ports.SignalPublisher) *
 		publisher: publisher,
 		now:       time.Now,
 		log:       slog.Default(),
+		interval:  10 * time.Minute,
+		lookback:  2 * time.Hour,
 	}
 }
 
@@ -53,6 +64,106 @@ func (p *PollSource) WithDedupe(store ports.DedupeStore, window time.Duration) *
 	}
 	return p
 }
+
+// WithCadence sets how often this source is polled and how far back the first
+// poll reaches when nothing has been stored yet.
+func (p *PollSource) WithCadence(interval, lookback time.Duration) *PollSource {
+	if interval > 0 {
+		p.interval = interval
+	}
+	if lookback > 0 {
+		p.lookback = lookback
+	}
+	return p
+}
+
+// WithCheckpoint persists this source's own watermark, so a restart resumes
+// each feed where it left off rather than all of them at one shared point.
+func (p *PollSource) WithCheckpoint(store ports.CheckpointStore) *PollSource {
+	p.checkpoint = store
+	return p
+}
+
+// Due reports whether this source is ready to be polled again.
+func (p *PollSource) Due(now time.Time) bool { return !now.Before(p.nextDue) }
+
+// NextDue reports when this source will next be polled.
+func (p *PollSource) NextDue() time.Time { return p.nextDue }
+
+// Interval reports how often this source is polled.
+func (p *PollSource) Interval() time.Duration { return p.interval }
+
+// RunDue polls this source from its own watermark and, on success, advances
+// it and schedules the next poll.
+//
+// A failed poll advances nothing: the window it could not read is read again
+// next time, which is the whole reason the watermark only moves on success.
+// The retry is not immediate though — a source that is failing should not be
+// hammered — so the next attempt waits out the interval like any other.
+func (p *PollSource) RunDue(ctx context.Context) (int, error) {
+	started := p.now()
+	since := p.resume(ctx, started)
+
+	n, err := p.Run(ctx, since)
+	p.nextDue = started.Add(p.interval)
+	if err != nil {
+		return n, err
+	}
+
+	p.since = started
+	p.persist(ctx, started)
+	return n, nil
+}
+
+// resume decides where this source starts reading: its stored watermark, else
+// what it read last in this process, else its own lookback window.
+func (p *PollSource) resume(ctx context.Context, now time.Time) time.Time {
+	if !p.since.IsZero() {
+		return p.since
+	}
+
+	fallback := now.Add(-p.lookback)
+	if p.checkpoint == nil {
+		return fallback
+	}
+
+	at, found, err := p.checkpoint.Load(ctx, p.watermarkName())
+	switch {
+	case err != nil:
+		p.log.Warn("could not read the stored watermark; falling back to the lookback window",
+			"source", p.source.Kind().String(), "lookback", p.lookback.String(), "error", err)
+		return fallback
+	case !found:
+		return fallback
+	}
+
+	p.log.Info("resuming from the stored watermark",
+		"source", p.source.Kind().String(), "since", at.UTC().Format(time.RFC3339),
+		"behind", now.Sub(at).Round(time.Second).String())
+	return at
+}
+
+// persist records the new watermark. A failure is worth a line but not worth
+// failing the poll: the events went out either way, and the cost of losing the
+// write is that a restart re-reads this window.
+func (p *PollSource) persist(ctx context.Context, at time.Time) {
+	if p.checkpoint == nil {
+		return
+	}
+	// Deliberately not the poll's context: a poll that succeeded on the way to
+	// shutdown should still record where it reached.
+	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+
+	if err := p.checkpoint.Save(saveCtx, p.watermarkName(), at); err != nil {
+		p.log.Warn("could not persist the ingestion watermark; a restart will re-read this window",
+			"source", p.source.Kind().String(), "error", err)
+	}
+}
+
+// watermarkName keys this source's position. One key per source, so adding a
+// feed cannot disturb another's place in the queue.
+func (p *PollSource) watermarkName() string { return "source:" + p.source.Kind().String() }
 
 // Run fetches signals discovered since `since`, wraps each valid one as a
 // SignalDiscovered event, and publishes it. It returns the number published.

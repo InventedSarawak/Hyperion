@@ -95,13 +95,18 @@ func main() {
 	seen, closeDedupe := buildDedupeStore(ctx, logger, cfg)
 	defer closeDedupe()
 
-	poll := workflows.NewPollSources(clients, pub).WithDedupe(seen, cfg.Dedupe.Window)
-
 	checkpoints, closeCheckpoints := buildCheckpointStore(ctx, logger, cfg)
 	defer closeCheckpoints()
 
-	sched := scheduler.New(poll, cfg.PollInterval, cfg.Lookback).
-		WithCheckpoint(checkpoints, advisoryWatermark)
+	poll := workflows.NewPollSources(clients, pub).
+		WithDedupe(seen, cfg.Dedupe.Window).
+		WithCadence(cfg.CadenceFor).
+		WithCheckpoint(checkpoints)
+
+	// The scheduler wakes often enough for the most frequent source to be on
+	// time; each source then decides whether it is due. One ticker for ten
+	// feeds, rather than ten tickers or one compromise interval.
+	sched := scheduler.New(poll, cfg.MinInterval(registry.Active()))
 
 	// The supply-chain scan runs alongside on its own, much slower schedule.
 	stopScan := startRepositoryScan(ctx, logger, cfg)
@@ -109,9 +114,13 @@ func main() {
 
 	logger.Info("siphon starting",
 		"active_sources", registry.ActiveKinds(),
-		"interval", cfg.PollInterval.String(),
-		"lookback", cfg.Lookback.String(),
+		"tick", cfg.MinInterval(registry.Active()).String(),
 	)
+	for _, kind := range registry.Active() {
+		interval, lookback := cfg.CadenceFor(kind)
+		logger.Info("source cadence", "source", kind.String(),
+			"every", interval.String(), "first_window", lookback.String())
+	}
 
 	if err := sched.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("siphon exited with error", "error", err)
@@ -119,11 +128,6 @@ func main() {
 	}
 	logger.Info("siphon stopped")
 }
-
-// advisoryWatermark names the advisory poll's stored watermark. The watchlist
-// scanner has none: a manifest read is about what a repository says now, not
-// about how far through time it has read.
-const advisoryWatermark = "advisories"
 
 // buildCheckpointStore returns the store that makes the watermark outlive the
 // process, or nil when there is none.
@@ -242,7 +246,7 @@ func startRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphoncon
 	go func() {
 		// Lookback is irrelevant to a manifest read: its current contents are
 		// the whole truth, so the watermark the scheduler tracks is unused.
-		if err := scheduler.New(scan, cfg.RepoScan.WatchInterval, 0).Start(ctx); err != nil &&
+		if err := scheduler.New(scan, cfg.RepoScan.WatchInterval).Start(ctx); err != nil &&
 			!errors.Is(err, context.Canceled) {
 			logger.Error("watchlist scanner stopped", "error", err)
 		}
@@ -362,7 +366,7 @@ func runRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphonconfi
 		logger.Info("scanning every repository on the watchlist")
 	}
 
-	reported, err := scan.Run(ctx, time.Time{})
+	reported, err := scan.Run(ctx)
 	if err != nil {
 		logger.Error("repository scan finished with errors", "reported", reported, "error", err)
 		os.Exit(1)

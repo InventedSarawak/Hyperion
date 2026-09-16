@@ -3,6 +3,7 @@ package workflows_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -19,11 +20,48 @@ type fakeSource struct {
 	kind    valueobject.SourceKind
 	signals []model.SourceSignal
 	err     error
+	// since records the window it was asked for, so a spec can assert on
+	// where a source resumed from.
+	since time.Time
 }
 
 func (f *fakeSource) Kind() valueobject.SourceKind { return f.kind }
-func (f *fakeSource) Fetch(context.Context, time.Time) ([]model.SourceSignal, error) {
+func (f *fakeSource) Fetch(_ context.Context, since time.Time) ([]model.SourceSignal, error) {
+	f.since = since
 	return f.signals, f.err
+}
+
+// fakeCheckpoints is a stand-in CheckpointStore (outbound port): it remembers
+// what was saved, and can be told to fail either half.
+type fakeCheckpoints struct {
+	mu      sync.Mutex
+	stored  map[string]time.Time
+	loadErr error
+	saveErr error
+}
+
+func newFakeCheckpoints() *fakeCheckpoints {
+	return &fakeCheckpoints{stored: map[string]time.Time{}}
+}
+
+func (f *fakeCheckpoints) Load(_ context.Context, name string) (time.Time, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.loadErr != nil {
+		return time.Time{}, false, f.loadErr
+	}
+	at, ok := f.stored[name]
+	return at, ok, nil
+}
+
+func (f *fakeCheckpoints) Save(_ context.Context, name string, at time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.saveErr != nil {
+		return f.saveErr
+	}
+	f.stored[name] = at
+	return nil
 }
 
 // capturingPublisher is a stand-in SignalPublisher (outbound port) — records
@@ -253,5 +291,87 @@ var _ = Describe("PollSource use case", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(n).To(Equal(1))
 		Expect(pub.published).To(HaveLen(1))
+	})
+})
+
+var _ = Describe("per-source cadence and watermark", func() {
+	var (
+		ctx    = context.Background()
+		pub    *capturingPublisher
+		store  *fakeCheckpoints
+		signal = model.SourceSignal{CVEID: "CVE-2021-44228"}
+	)
+
+	BeforeEach(func() {
+		pub = &capturingPublisher{}
+		store = newFakeCheckpoints()
+	})
+
+	It("keeps a separate watermark for each source", func() {
+		nvd := &fakeSource{kind: valueobject.SourceKindNVD, signals: []model.SourceSignal{signal}}
+		exploitDB := &fakeSource{kind: valueobject.SourceKindExploitDB, signals: []model.SourceSignal{signal}}
+
+		fast := workflows.NewPollSource(nvd, pub).WithCheckpoint(store).WithCadence(time.Minute, time.Hour)
+		slow := workflows.NewPollSource(exploitDB, pub).WithCheckpoint(store).WithCadence(6*time.Hour, 14*24*time.Hour)
+
+		_, err := fast.RunDue(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = slow.RunDue(ctx)
+		Expect(err).NotTo(HaveOccurred())
+
+		// One key per source. A shared key would let a fast feed drag a slow
+		// one's position forward, past records it never read.
+		Expect(store.stored).To(HaveKey("source:nvd"))
+		Expect(store.stored).To(HaveKey("source:exploit_db"))
+	})
+
+	It("reaches back its own lookback when nothing is stored", func() {
+		exploitDB := &fakeSource{kind: valueobject.SourceKindExploitDB}
+		slow := workflows.NewPollSource(exploitDB, pub).WithCadence(6*time.Hour, 14*24*time.Hour)
+
+		_, err := slow.RunDue(ctx)
+		Expect(err).NotTo(HaveOccurred())
+
+		// The whole point of per-source windows: at the old global two hours
+		// this feed returned nothing essentially always, because it publishes
+		// a handful of records a week.
+		Expect(exploitDB.since).To(BeTemporally("~", time.Now().Add(-14*24*time.Hour), time.Minute))
+	})
+
+	It("resumes a source from its own stored watermark", func() {
+		stored := time.Now().Add(-90 * time.Minute).UTC().Truncate(time.Second)
+		Expect(store.Save(ctx, "source:nvd", stored)).To(Succeed())
+
+		nvd := &fakeSource{kind: valueobject.SourceKindNVD}
+		_, err := workflows.NewPollSource(nvd, pub).WithCheckpoint(store).RunDue(ctx)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(nvd.since).To(BeTemporally("==", stored))
+	})
+
+	It("is not due again until its interval has passed", func() {
+		nvd := &fakeSource{kind: valueobject.SourceKindNVD}
+		poller := workflows.NewPollSource(nvd, pub).WithCadence(time.Hour, time.Hour)
+
+		Expect(poller.Due(time.Now())).To(BeTrue(), "a source that has never run is due")
+
+		_, err := poller.RunDue(ctx)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(poller.Due(time.Now())).To(BeFalse())
+		Expect(poller.Due(time.Now().Add(61 * time.Minute))).To(BeTrue())
+	})
+
+	It("does not move a source's watermark when its poll failed", func() {
+		failing := &fakeSource{kind: valueobject.SourceKindNVD, err: errors.New("nvd is down")}
+		poller := workflows.NewPollSource(failing, pub).WithCheckpoint(store)
+
+		_, err := poller.RunDue(ctx)
+
+		Expect(err).To(HaveOccurred())
+		Expect(store.stored).NotTo(HaveKey("source:nvd"))
+		// It still waits out the interval: a failing source should be retried,
+		// not hammered.
+		Expect(poller.Due(time.Now())).To(BeFalse())
 	})
 })

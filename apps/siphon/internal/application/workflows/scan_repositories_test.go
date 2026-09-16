@@ -3,7 +3,6 @@ package workflows_test
 import (
 	"context"
 	"errors"
-	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -66,7 +65,7 @@ var _ = Describe("ScanRepositories use case", func() {
 		pub := &fakePublisher{}
 
 		n, err := workflows.NewScanRepositories(client, nil, pub,
-			workflows.Targets{Repositories: []string{"gin-gonic/gin", "acme/api"}}).Run(ctx, time.Time{})
+			workflows.Targets{Repositories: []string{"gin-gonic/gin", "acme/api"}}).Run(ctx)
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(n).To(Equal(3))
@@ -77,7 +76,7 @@ var _ = Describe("ScanRepositories use case", func() {
 	It("rejects a watchlist entry that is not owner/name", func() {
 		client := &fakeRepoClient{}
 		_, err := workflows.NewScanRepositories(client, nil, &fakePublisher{},
-			workflows.Targets{Repositories: []string{"just-a-name", "/missing-owner", "owner/"}}).Run(ctx, time.Time{})
+			workflows.Targets{Repositories: []string{"just-a-name", "/missing-owner", "owner/"}}).Run(ctx)
 
 		Expect(err).To(MatchError(ContainSubstring("owner/name form")))
 		Expect(client.scanned).To(BeEmpty())
@@ -93,7 +92,7 @@ var _ = Describe("ScanRepositories use case", func() {
 		pub := &fakePublisher{}
 
 		n, err := workflows.NewScanRepositories(client, nil, pub,
-			workflows.Targets{Repositories: []string{"acme/broken", "acme/api"}}).Run(ctx, time.Time{})
+			workflows.Targets{Repositories: []string{"acme/broken", "acme/api"}}).Run(ctx)
 
 		Expect(err).To(MatchError(ContainSubstring("403 forbidden")))
 		Expect(n).To(Equal(1), "the healthy repository is still reported")
@@ -110,7 +109,7 @@ var _ = Describe("ScanRepositories use case", func() {
 		}
 		pub := &fakePublisher{}
 
-		n, err := workflows.NewScanRepositories(client, nil, pub, workflows.Targets{Repositories: []string{"acme/api"}}).Run(ctx, time.Time{})
+		n, err := workflows.NewScanRepositories(client, nil, pub, workflows.Targets{Repositories: []string{"acme/api"}}).Run(ctx)
 
 		Expect(err).To(HaveOccurred())
 		Expect(n).To(Equal(1))
@@ -121,7 +120,7 @@ var _ = Describe("ScanRepositories use case", func() {
 		client := &fakeRepoClient{errs: map[string]error{"acme/api": errors.New("404 not found")}}
 		pub := &fakePublisher{}
 
-		_, err := workflows.NewScanRepositories(client, nil, pub, workflows.Targets{Repositories: []string{"acme/api"}}).Run(ctx, time.Time{})
+		_, err := workflows.NewScanRepositories(client, nil, pub, workflows.Targets{Repositories: []string{"acme/api"}}).Run(ctx)
 
 		Expect(err).To(HaveOccurred())
 		Expect(pub.published).To(BeEmpty())
@@ -135,7 +134,7 @@ var _ = Describe("ScanRepositories use case", func() {
 		pub := &fakePublisher{err: errors.New("cortex unavailable")}
 
 		n, err := workflows.NewScanRepositories(client, nil, pub,
-			workflows.Targets{Repositories: []string{"acme/api", "acme/web"}}).Run(ctx, time.Time{})
+			workflows.Targets{Repositories: []string{"acme/api", "acme/web"}}).Run(ctx)
 
 		Expect(err).To(MatchError(ContainSubstring("cortex unavailable")))
 		Expect(n).To(Equal(0))
@@ -143,7 +142,7 @@ var _ = Describe("ScanRepositories use case", func() {
 	})
 
 	It("does nothing with an empty watchlist", func() {
-		n, err := workflows.NewScanRepositories(&fakeRepoClient{}, nil, &fakePublisher{}, workflows.Targets{}).Run(ctx, time.Time{})
+		n, err := workflows.NewScanRepositories(&fakeRepoClient{}, nil, &fakePublisher{}, workflows.Targets{}).Run(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(n).To(Equal(0))
 	})
@@ -181,7 +180,7 @@ var _ = Describe("ScanRepositories discovery", func() {
 
 		n, err := workflows.NewScanRepositories(client, disco, &fakePublisher{}, workflows.Targets{
 			Organizations: []string{"vercel"}, PerOwnerLimit: 20,
-		}).Run(ctx, time.Time{})
+		}).Run(ctx)
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(n).To(Equal(2))
@@ -201,7 +200,7 @@ var _ = Describe("ScanRepositories discovery", func() {
 		_, err := workflows.NewScanRepositories(client, disco, &fakePublisher{}, workflows.Targets{
 			Repositories:  []string{"acme/api", "vercel/commerce"},
 			Organizations: []string{"vercel"},
-		}).Run(ctx, time.Time{})
+		}).Run(ctx)
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(client.scanned).To(HaveLen(2), "vercel/commerce must not be scanned twice")
@@ -216,7 +215,7 @@ var _ = Describe("ScanRepositories discovery", func() {
 		_, err := workflows.NewScanRepositories(client, disco, &fakePublisher{}, workflows.Targets{
 			Repositories:  []string{"Vercel/Commerce"},
 			Organizations: []string{"vercel"},
-		}).Run(ctx, time.Time{})
+		}).Run(ctx)
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(client.scanned).To(HaveLen(1))
@@ -231,7 +230,7 @@ var _ = Describe("ScanRepositories discovery", func() {
 		n, err := workflows.NewScanRepositories(client, disco, &fakePublisher{}, workflows.Targets{
 			Repositories:  []string{"acme/api"},
 			Organizations: []string{"vercel"},
-		}).Run(ctx, time.Time{})
+		}).Run(ctx)
 
 		Expect(err).To(MatchError(ContainSubstring("403 forbidden")))
 		Expect(n).To(Equal(1), "a discovery failure must not cost us the known repositories")
@@ -239,7 +238,7 @@ var _ = Describe("ScanRepositories discovery", func() {
 
 	It("reports an organization configured with no discoverer wired", func() {
 		_, err := workflows.NewScanRepositories(&fakeRepoClient{}, nil, &fakePublisher{},
-			workflows.Targets{Organizations: []string{"vercel"}}).Run(ctx, time.Time{})
+			workflows.Targets{Organizations: []string{"vercel"}}).Run(ctx)
 
 		Expect(err).To(MatchError(ContainSubstring("discovery is unavailable")))
 	})
@@ -253,14 +252,14 @@ var _ = Describe("ScanRepositories discovery", func() {
 		scan := workflows.NewScanRepositories(client, disco, &fakePublisher{},
 			workflows.Targets{Organizations: []string{"vercel"}})
 
-		_, err := scan.Run(ctx, time.Time{})
+		_, err := scan.Run(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(client.scanned).To(ConsistOf("vercel/one"))
 
 		// A repository created after startup is exactly the one a hand-written
 		// watchlist would miss.
 		disco.byOwner["vercel"] = []string{"vercel/one", "vercel/two"}
-		_, err = scan.Run(ctx, time.Time{})
+		_, err = scan.Run(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(client.scanned).To(ConsistOf("vercel/one", "vercel/one", "vercel/two"))
 	})

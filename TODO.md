@@ -207,11 +207,9 @@ Gathered from [`docs/TECHNICAL-DEBT.md`](docs/TECHNICAL-DEBT.md) on 2026-09-17: 
 entries that belong to v3's subject — how data flows through the backbone, and whether
 what flows is right. Everything else stays where it is; the reasoning is below.
 
-- [ ] **A watermark per source, not one for all ten** (🟡 _Single global lookback_).
-      Directly extends the checkpoint just built: one `SIPHON_LOOKBACK` and one watermark
-      drive ten sources whose cadences differ by orders of magnitude, so slow feeds return
-      nothing at 2h and a single slow source cannot be tracked separately. Per-source
-      interval, lookback and watermark. Small, and the clearest win left.
+- [x] **A watermark per source, not one for all ten (2026-09-17)** (🟡 _Single global
+      lookback_). Per-source interval, first window and watermark; the scheduler became a
+      plain ticker. `vendor_advisory` fetches 13 records over 48h where 2h found none.
 - [ ] **Graceful shutdown for ingest** (🟡 _Ingest has no graceful shutdown_).
       Postgres can end up holding a record Elasticsearch does not, because an abrupt stop
       drops what is in flight between the two writes. Kafka already replays the
