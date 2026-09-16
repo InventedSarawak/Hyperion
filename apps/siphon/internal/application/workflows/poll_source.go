@@ -6,7 +6,6 @@ package workflows
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/events"
@@ -20,7 +19,6 @@ type PollSource struct {
 	source    ports.SourceClient
 	publisher ports.SignalPublisher
 	now       func() time.Time
-	log       *slog.Logger
 }
 
 // NewPollSource wires the use case with its outbound ports. Concrete adapters
@@ -30,7 +28,6 @@ func NewPollSource(source ports.SourceClient, publisher ports.SignalPublisher) *
 		source:    source,
 		publisher: publisher,
 		now:       time.Now,
-		log:       slog.Default(),
 	}
 }
 
@@ -54,10 +51,6 @@ func (p *PollSource) Run(ctx context.Context, since time.Time) (int, error) {
 			return published, fmt.Errorf("poll source %s: publish %s: %w", p.source.Kind(), sig.CVEID, err)
 		}
 		published++
-		// One line per finding is far too much for a poll of thousands, and
-		// exactly what is wanted when following a single one through.
-		p.log.Debug("published", "source", p.source.Kind().String(), "id", sig.CVEID,
-			"kind", string(sig.Kind), "packages", len(sig.AffectedPackages))
 	}
 	return published, nil
 }

@@ -18,10 +18,7 @@ const Service = "siphon"
 // Config holds siphon's runtime settings.
 type Config struct {
 	PollInterval time.Duration
-	// LogLevel is debug, info, warn or error. At debug every signal
-	// published is logged as it goes out.
-	LogLevel string
-	Lookback time.Duration
+	Lookback     time.Duration
 
 	NVD           NVDConfig
 	GitHub        GitHubConfig
@@ -159,7 +156,6 @@ func Load() Config {
 	return Config{
 		loader:       l,
 		PollInterval: l.Duration("POLL_INTERVAL", 10*time.Minute),
-		LogLevel:     l.String("LOG_LEVEL", "info"),
 		Lookback:     l.Duration("LOOKBACK", 2*time.Hour),
 
 		NVD: NVDConfig{

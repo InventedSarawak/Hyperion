@@ -36,13 +36,6 @@ type Config struct {
 	// IngestWorkers is how many events are ingested concurrently. Each is
 	// I/O-bound, so this is what sets backfill throughput.
 	IngestWorkers int
-	// IngestProgressEvery is how many ingested findings pass between progress
-	// lines. A backfill runs for half an hour; silence is indistinguishable
-	// from a stall.
-	IngestProgressEvery int
-	// LogLevel is debug, info, warn or error. At debug every finding ingested
-	// is logged as it lands.
-	LogLevel string
 
 	Neo4jURI            string
 	Neo4jUsername       string
@@ -75,16 +68,14 @@ func Load() Config {
 	}
 
 	return Config{
-		loader:              l,
-		DatabaseURL:         l.String("DATABASE_URL", DefaultDatabaseURL),
-		ElasticsearchURL:    l.String("ELASTICSEARCH_URL", DefaultElasticsearchURL),
-		IndexName:           l.String("INDEX_NAME", DefaultIndexName),
-		GRPCAddr:            l.String("GRPC_ADDR", DefaultGRPCAddr),
-		ServeGRPC:           l.Bool("SERVE_GRPC", true),
-		ConsumeStdin:        l.Bool("CONSUME_STDIN", false),
-		IngestWorkers:       l.Int("INGEST_WORKERS", 8),
-		IngestProgressEvery: l.Int("INGEST_PROGRESS_EVERY", 1000),
-		LogLevel:            l.String("LOG_LEVEL", "info"),
+		loader:           l,
+		DatabaseURL:      l.String("DATABASE_URL", DefaultDatabaseURL),
+		ElasticsearchURL: l.String("ELASTICSEARCH_URL", DefaultElasticsearchURL),
+		IndexName:        l.String("INDEX_NAME", DefaultIndexName),
+		GRPCAddr:         l.String("GRPC_ADDR", DefaultGRPCAddr),
+		ServeGRPC:        l.Bool("SERVE_GRPC", true),
+		ConsumeStdin:     l.Bool("CONSUME_STDIN", false),
+		IngestWorkers:    l.Int("INGEST_WORKERS", 8),
 
 		Neo4jURI:      l.String("NEO4J_URI", DefaultNeo4jURI),
 		Neo4jUsername: l.String("NEO4J_USERNAME", DefaultNeo4jUsername),

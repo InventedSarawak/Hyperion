@@ -12,7 +12,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"google.golang.org/grpc"
@@ -43,13 +42,13 @@ func main() {
 		"rebuild the search index from Postgres, then exit (after a mapping change, or to repair drift)")
 	flag.Parse()
 
-	cfg := config.Load()
-
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel(cfg.LogLevel)}))
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	cfg := config.Load()
 
 	pool, err := postgres.Connect(ctx, cfg.DatabaseURL)
 	if err != nil {
@@ -109,7 +108,7 @@ func main() {
 	}
 
 	if cfg.ConsumeStdin {
-		runStdinConsumer(ctx, logger, ingest, repo, cfg.IngestWorkers, cfg.IngestProgressEvery)
+		runStdinConsumer(ctx, logger, ingest, repo, cfg.IngestWorkers)
 		return
 	}
 
@@ -162,14 +161,10 @@ func buildSearchIndex(ctx context.Context, logger *slog.Logger, cfg config.Confi
 }
 
 // runStdinConsumer ingests protojson events piped in on stdin, then exits.
-func runStdinConsumer(ctx context.Context, logger *slog.Logger, ingest *commands.IngestSignal, repo *postgres.Repo, workers, progressEvery int) {
-	logger.Info("cortex ingesting SignalDiscovered events from stdin",
-		"workers", workers, "progress_every", progressEvery)
+func runStdinConsumer(ctx context.Context, logger *slog.Logger, ingest *commands.IngestSignal, repo *postgres.Repo, workers int) {
+	logger.Info("cortex ingesting SignalDiscovered events from stdin", "workers", workers)
 
-	n, err := consumer.NewConsumer(ingest,
-		consumer.WithWorkers(workers),
-		consumer.WithProgressEvery(progressEvery),
-	).Run(ctx, os.Stdin)
+	n, err := consumer.NewConsumer(ingest, consumer.WithWorkers(workers)).Run(ctx, os.Stdin)
 	if err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("consumer error", "error", err)
 		os.Exit(1)
@@ -262,19 +257,4 @@ func runReindex(ctx context.Context, logger *slog.Logger, repo *postgres.Repo, i
 		os.Exit(1)
 	}
 	logger.Info("reindex complete", "written", report.Written, "removed", report.Removed)
-}
-
-// logLevel maps the configured name onto a slog level. An unknown name is
-// info: a typo in a log setting must not silence the service.
-func logLevel(name string) slog.Level {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "debug":
-		return slog.LevelDebug
-	case "warn", "warning":
-		return slog.LevelWarn
-	case "error":
-		return slog.LevelError
-	default:
-		return slog.LevelInfo
-	}
 }

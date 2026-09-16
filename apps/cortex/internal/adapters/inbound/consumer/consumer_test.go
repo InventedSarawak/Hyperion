@@ -1,11 +1,8 @@
 package consumer_test
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -195,78 +192,5 @@ var _ = Describe("Consumer with several workers", func() {
 			Expect(seen).To(HaveLen(20), cve)
 			Expect(sort.StringsAreSorted(seen)).To(BeTrue(), "events for %s arrived out of order: %v", cve, seen)
 		}
-	})
-})
-
-var _ = Describe("Consumer progress", func() {
-	ctx := context.Background()
-
-	// captured collects what the consumer logged, at any level.
-	captured := func(buf *bytes.Buffer) []map[string]any {
-		var out []map[string]any
-		for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
-			if line == "" {
-				continue
-			}
-			var entry map[string]any
-			Expect(json.Unmarshal([]byte(line), &entry)).To(Succeed())
-			out = append(out, entry)
-		}
-		return out
-	}
-
-	events := func(ids ...string) string {
-		var b strings.Builder
-		for _, id := range ids {
-			b.WriteString(eventLine(id, commonv1.Severity_SEVERITY_HIGH) + "\n")
-		}
-		return b.String()
-	}
-
-	It("reports progress as it goes, so a long run is not silence", func() {
-		var buf bytes.Buffer
-		logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
-
-		n, err := consumer.NewConsumer(&captureIngester{},
-			consumer.WithProgressEvery(2), consumer.WithLogger(logger)).
-			Run(ctx, strings.NewReader(events("CVE-2021-0001", "CVE-2021-0002", "CVE-2021-0003", "CVE-2021-0004")))
-
-		Expect(err).ToNot(HaveOccurred())
-		Expect(n).To(Equal(4))
-
-		var progress []map[string]any
-		for _, entry := range captured(&buf) {
-			if entry["msg"] == "ingest progress" {
-				progress = append(progress, entry)
-			}
-		}
-		Expect(progress).To(HaveLen(2), "one line every two findings")
-		Expect(progress[1]["ingested"]).To(BeNumerically("==", 4))
-		Expect(progress[1]).To(HaveKey("per_second"))
-		Expect(progress[1]).To(HaveKey("latest"))
-	})
-
-	It("says nothing per finding at info, and names each one at debug", func() {
-		var quiet, verbose bytes.Buffer
-		lines := events("CVE-2021-0001", "CVE-2021-0002")
-
-		_, err := consumer.NewConsumer(&captureIngester{}, consumer.WithProgressEvery(0),
-			consumer.WithLogger(slog.New(slog.NewJSONHandler(&quiet, &slog.HandlerOptions{Level: slog.LevelInfo})))).
-			Run(ctx, strings.NewReader(lines))
-		Expect(err).ToNot(HaveOccurred())
-		Expect(strings.TrimSpace(quiet.String())).To(BeEmpty(), "nothing to say when all is well")
-
-		_, err = consumer.NewConsumer(&captureIngester{}, consumer.WithProgressEvery(0),
-			consumer.WithLogger(slog.New(slog.NewJSONHandler(&verbose, &slog.HandlerOptions{Level: slog.LevelDebug})))).
-			Run(ctx, strings.NewReader(lines))
-		Expect(err).ToNot(HaveOccurred())
-
-		var ingested []string
-		for _, entry := range captured(&verbose) {
-			if entry["msg"] == "ingested" {
-				ingested = append(ingested, entry["id"].(string))
-			}
-		}
-		Expect(ingested).To(ConsistOf("CVE-2021-0001", "CVE-2021-0002"))
 	})
 })

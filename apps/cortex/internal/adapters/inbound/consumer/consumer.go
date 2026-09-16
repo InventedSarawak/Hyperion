@@ -35,12 +35,9 @@ type Ingester interface {
 
 // Consumer reads protojson events from an io.Reader and ingests each one.
 type Consumer struct {
-	// progressEvery is how many ingested findings pass between progress
-	// lines; 0 silences them.
-	progressEvery int
-	ingester      Ingester
-	workers       int
-	log           *slog.Logger
+	ingester Ingester
+	workers  int
+	log      *slog.Logger
 }
 
 // Option customizes a Consumer.
@@ -61,7 +58,7 @@ func WithWorkers(n int) Option {
 // NewConsumer wires the adapter to the ingest use case. It ingests on one
 // worker, in input order, unless told otherwise.
 func NewConsumer(ingester Ingester, opts ...Option) *Consumer {
-	c := &Consumer{ingester: ingester, workers: 1, progressEvery: 1000, log: slog.Default()}
+	c := &Consumer{ingester: ingester, workers: 1, log: slog.Default()}
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -81,9 +78,7 @@ func NewConsumer(ingester Ingester, opts ...Option) *Consumer {
 func (c *Consumer) Run(ctx context.Context, r io.Reader) (int, error) {
 	var (
 		processed atomic.Int64
-		failed    atomic.Int64
 		wg        sync.WaitGroup
-		started   = time.Now()
 		lanes     = make([]chan model.Vulnerability, c.workers)
 	)
 	for i := range lanes {
@@ -93,23 +88,10 @@ func (c *Consumer) Run(ctx context.Context, r io.Reader) (int, error) {
 			defer wg.Done()
 			for v := range lane {
 				if err := c.ingester.Handle(ctx, v); err != nil {
-					failed.Add(1)
 					c.log.Error("ingest failed", "cve", v.CVEID, "error", err)
 					continue
 				}
-				done := processed.Add(1)
-				c.log.Debug("ingested", "id", v.CVEID, "kind", v.Kind,
-					"packages", len(v.AffectedPackages), "sources", v.Sources)
-				// A heartbeat rather than a line per finding: a backfill is
-				// hundreds of thousands of them, and what a reader needs to
-				// know is that it is moving, and how fast.
-				if c.progressEvery > 0 && done%int64(c.progressEvery) == 0 {
-					c.log.Info("ingest progress",
-						"ingested", done,
-						"failed", failed.Load(),
-						"per_second", int64(float64(done)/time.Since(started).Seconds()),
-						"latest", v.CVEID)
-				}
+				processed.Add(1)
 			}
 		}(lanes[i])
 	}
@@ -122,30 +104,7 @@ func (c *Consumer) Run(ctx context.Context, r io.Reader) (int, error) {
 		close(lane)
 	}
 	wg.Wait()
-	if n := failed.Load(); n > 0 {
-		c.log.Warn("some findings could not be ingested", "failed", n, "ingested", processed.Load())
-	}
 	return int(processed.Load()), err
-}
-
-// WithProgressEvery sets how many ingested findings pass between progress
-// lines. Zero silences them.
-func WithProgressEvery(n int) Option {
-	return func(c *Consumer) {
-		if n >= 0 {
-			c.progressEvery = n
-		}
-	}
-}
-
-// WithLogger sends the consumer's own logging somewhere other than the
-// default logger.
-func WithLogger(l *slog.Logger) Option {
-	return func(c *Consumer) {
-		if l != nil {
-			c.log = l
-		}
-	}
 }
 
 // laneBuffer lets the reader run a little ahead of each worker.

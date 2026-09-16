@@ -45,14 +45,14 @@ func main() {
 		"comma-separated backfill sources: nvd, osv")
 	flag.Parse()
 
-	cfg := siphonconfig.Load()
-
 	// Logs go to stderr; published events go to stdout (kept separate on purpose).
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel(cfg.LogLevel)}))
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	cfg := siphonconfig.Load()
 
 	// Resolve which of the documented sources are usable this run.
 	registry := sources.Build(cfg, nil)
@@ -278,19 +278,4 @@ func splitList(raw string) []string {
 		}
 	}
 	return out
-}
-
-// logLevel maps the configured name onto a slog level. An unknown name is
-// info: a typo in a log setting must not silence the worker.
-func logLevel(name string) slog.Level {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "debug":
-		return slog.LevelDebug
-	case "warn", "warning":
-		return slog.LevelWarn
-	case "error":
-		return slog.LevelError
-	default:
-		return slog.LevelInfo
-	}
 }
