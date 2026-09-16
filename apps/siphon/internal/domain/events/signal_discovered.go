@@ -25,6 +25,19 @@ type SignalDiscovered struct {
 	Signal       model.SourceSignal
 	DiscoveredAt time.Time
 	RawRef       string // pointer to the archived raw payload, if any
+	// Historical marks an event replayed from an archive rather than observed
+	// now. A backfill publishes exactly what polling would — that is what
+	// makes the two merge identically — but loading ten years of history is
+	// not ten years of news, and anything that notifies people should know
+	// the difference.
+	Historical bool
+}
+
+// AsHistorical marks the event as a replay of the past rather than something
+// that just happened.
+func (e SignalDiscovered) AsHistorical() SignalDiscovered {
+	e.Historical = true
+	return e
 }
 
 // NewSignalDiscovered builds the event and derives its identity. The SignalID

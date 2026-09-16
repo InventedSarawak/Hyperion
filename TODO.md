@@ -214,10 +214,10 @@ what flows is right. Everything else stays where it is; the reasoning is below.
       commits the batch in hand within a 30s grace period instead of abandoning a record
       mid-write; rows carry `indexed_at` and a reconciler settles whatever drifted every
       5m. Verified live: 131 drifted rows repaired automatically.
-- [ ] **Mark backfilled events as historical** (🟢 _A backfill can raise alerts for old
-      findings_). A contract change, which makes it v3 work: `SignalDiscovered` gains a
-      flag, and alerting skips it, so loading ten years of history stops firing ten years
-      of alerts.
+- [x] **Mark backfilled events as historical (2026-09-17)** (🟢). `SignalDiscovered`
+      gained a `historical` flag; cortex stores such events identically and skips
+      alerting and the live feed for them, so loading ten years of history no longer
+      fires ten years of alerts.
 - [ ] **Versioned migrations, Postgres and Neo4j** (🟡 _Naive migration runner_ + 🟢
       _Neo4j migrations are implicit_). One piece of work: a schema-version table instead
       of re-running every file and relying on `IF NOT EXISTS`. Both stores have the same

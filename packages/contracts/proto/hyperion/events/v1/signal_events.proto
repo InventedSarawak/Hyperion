@@ -31,6 +31,11 @@ message SignalDiscovered {
   hyperion.common.v1.Vulnerability vulnerability = 3;
   google.protobuf.Timestamp discovered_at = 4;
   string raw_ref = 5; // pointer to the archived raw payload (e.g. object key)
+  // historical marks an event replayed from an archive rather than observed
+  // now: a backfill publishes the same events polling would, which is what
+  // makes them merge identically, but a ten-year load is not ten years of
+  // news. Consumers store it the same and skip telling anyone about it.
+  bool historical = 6;
 }
 
 // DependencyObserved is emitted by siphon when it reads a repository's

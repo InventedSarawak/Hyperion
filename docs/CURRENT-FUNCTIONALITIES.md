@@ -166,6 +166,12 @@ so a backfill can raise alerts for old findings if a subscription matches them. 
 interrupted run leaves a gap rather than a clean resumption point: the events queued when
 it stopped are not stored, and the fix is to run the backfill again over that range.
 
+**History is stored, not announced.** Events from a backfill carry a `historical` flag.
+cortex stores them exactly as it stores polled events — that is what lets a backfilled
+record and a polled one merge into each other — but skips alerting and the live feed for
+them. Loading ten years of advisories is not ten years of news, and a subscription
+matching them would otherwise fire thousands of times for findings long since fixed.
+
 ### 1.3 Record identity
 
 **What it does.** Keeps every id a finding is known by, and files it under one of them so

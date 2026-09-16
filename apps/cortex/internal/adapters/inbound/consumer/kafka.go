@@ -62,8 +62,9 @@ func (h *KafkaHandler) Handle(ctx context.Context, msg kafka.Message) error {
 		return err
 	}
 
-	v := toDomain(&evt)
-	if err := h.ingester.Handle(ctx, v); err != nil {
+	obs := toObservation(&evt)
+	v := obs.Vulnerability
+	if err := h.ingester.Handle(ctx, obs); err != nil {
 		return err
 	}
 

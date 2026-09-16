@@ -23,6 +23,7 @@ import (
 	commonv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/common/v1"
 	eventsv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/events/v1"
 
+	"github.com/inventedsarawak/hyperion/apps/cortex/internal/application/commands"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/model"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/valueobject"
 )
@@ -31,7 +32,7 @@ const maxLineBytes = 4 * 1024 * 1024 // events can be large (many references)
 
 // Ingester is the use case this adapter drives (consumer-side interface).
 type Ingester interface {
-	Handle(ctx context.Context, v model.Vulnerability) error
+	Handle(ctx context.Context, obs commands.Observation) error
 }
 
 // Consumer reads protojson events from an io.Reader and ingests each one.
@@ -86,14 +87,15 @@ func (c *Consumer) Run(ctx context.Context, r io.Reader) (int, error) {
 		dropped   atomic.Int64
 		wg        sync.WaitGroup
 		started   = time.Now()
-		lanes     = make([]chan model.Vulnerability, c.workers)
+		lanes     = make([]chan commands.Observation, c.workers)
 	)
 	for i := range lanes {
-		lanes[i] = make(chan model.Vulnerability, laneBuffer)
+		lanes[i] = make(chan commands.Observation, laneBuffer)
 		wg.Add(1)
-		go func(lane <-chan model.Vulnerability) {
+		go func(lane <-chan commands.Observation) {
 			defer wg.Done()
-			for v := range lane {
+			for obs := range lane {
+				v := obs.Vulnerability
 				// Shutting down: keep draining, so the reader is never left
 				// blocked on a full lane, but do not begin work a dead
 				// context will only refuse. These are counted rather than
@@ -104,7 +106,7 @@ func (c *Consumer) Run(ctx context.Context, r io.Reader) (int, error) {
 					dropped.Add(1)
 					continue
 				}
-				if err := c.ingester.Handle(ctx, v); err != nil {
+				if err := c.ingester.Handle(ctx, obs); err != nil {
 					// The same shutdown, caught a moment later: this event
 					// was in flight when the context was cancelled. Not a
 					// failure of the event, and not worth an error line.
@@ -133,8 +135,8 @@ func (c *Consumer) Run(ctx context.Context, r io.Reader) (int, error) {
 		}(lanes[i])
 	}
 
-	err := c.read(ctx, r, func(v model.Vulnerability) {
-		lanes[laneFor(v.CVEID, len(lanes))] <- v
+	err := c.read(ctx, r, func(obs commands.Observation) {
+		lanes[laneFor(obs.Vulnerability.CVEID, len(lanes))] <- obs
 	})
 
 	for _, lane := range lanes {
@@ -185,7 +187,7 @@ func laneFor(id string, lanes int) int {
 }
 
 // read decodes one event per line and hands each to dispatch.
-func (c *Consumer) read(ctx context.Context, r io.Reader, dispatch func(model.Vulnerability)) error {
+func (c *Consumer) read(ctx context.Context, r io.Reader, dispatch func(commands.Observation)) error {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
 
@@ -204,7 +206,7 @@ func (c *Consumer) read(ctx context.Context, r io.Reader, dispatch func(model.Vu
 			c.log.Warn("skipping malformed event", "error", err)
 			continue
 		}
-		dispatch(toDomain(&msg))
+		dispatch(toObservation(&msg))
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("consumer: scan: %w", err)
@@ -214,9 +216,18 @@ func (c *Consumer) read(ctx context.Context, r io.Reader, dispatch func(model.Vu
 
 // --- mapping: wire contract -> cortex domain ---
 
-// toDomain maps an event onto the domain and normalises its identity before
+// toObservation maps an event onto the domain, keeping the provenance that
+// decides whether anyone is told about it, and normalises its identity before
 // it is sharded, so reports of one finding that led with different ids (the
 // CVE from NVD, the GHSA from GitHub) land on the same worker.
+func toObservation(msg *eventsv1.SignalDiscovered) commands.Observation {
+	return commands.Observation{
+		Vulnerability: toDomain(msg),
+		Historical:    msg.GetHistorical(),
+	}
+}
+
+// toDomain maps the finding itself.
 func toDomain(msg *eventsv1.SignalDiscovered) model.Vulnerability {
 	v := msg.GetVulnerability()
 	return model.Vulnerability{

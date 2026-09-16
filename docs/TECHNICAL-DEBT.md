@@ -233,14 +233,20 @@ exact id finds one either way.
 - **Fix in v3:** rank malware by whether a tracked repository depends on the package —
   the graph can answer that — and alert only on those.
 
-### 🟢 A backfill can raise alerts for old findings
+### 🟢 ~~A backfill can raise alerts for old findings~~ — REPAID (v3, 2026-09-17)
 
-The backfill publishes the same events as polling, so a subscription matching a
-2017 advisory fires when the backfill replays it.
+`SignalDiscovered` carries a `historical` flag, set by the backfill workflow.
+cortex stores such an event exactly as it stores a polled one — which is what
+lets a backfilled record and a polled one merge into each other — and skips
+both alerting and the live feed for it.
 
-- **Cost:** a backfill run with subscriptions in place produces a burst of historical
-  alerts. After a full reset (no subscriptions) it produces none.
-- **Fix:** mark backfilled events as historical in the contract and skip alerting for them.
+- **Why a contract field rather than a heuristic:** "is this old?" cannot be
+  answered from the advisory's dates. A 2017 CVE amended yesterday is current
+  news; the same record replayed from an export is not. Only the publisher
+  knows which it is sending.
+- **Modelled on the observation, not the finding:** the same advisory is
+  historical when a backfill replays it and current when a poll finds it, so
+  the flag belongs to the report. Ingest takes an `Observation` now.
 
 ### 🟡 Naive migration runner
 

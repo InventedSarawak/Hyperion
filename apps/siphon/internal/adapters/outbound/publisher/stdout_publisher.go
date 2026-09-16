@@ -64,6 +64,7 @@ func toProto(evt events.SignalDiscovered) *eventsv1.SignalDiscovered {
 		Vulnerability: toProtoVulnerability(evt.Signal),
 		DiscoveredAt:  toTimestamp(evt.DiscoveredAt),
 		RawRef:        evt.RawRef,
+		Historical:    evt.Historical,
 	}
 }
 

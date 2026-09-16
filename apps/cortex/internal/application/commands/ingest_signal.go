@@ -12,6 +12,20 @@ import (
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/ports"
 )
 
+// Observation is one report of a finding, with the provenance that changes what
+// ingest does with it.
+//
+// The flag lives here rather than on the finding because it describes the
+// report, not the vulnerability: the same advisory is historical when a
+// backfill replays it and current when a poll finds it, and what is stored is
+// identical either way.
+type Observation struct {
+	Vulnerability model.Vulnerability
+	// Historical marks a replay of the past. It is stored exactly as anything
+	// else is, and nobody is told about it.
+	Historical bool
+}
+
 // IngestSignal stores an incoming vulnerability, reconciling it with any
 // existing record via the domain's Merge rule, then makes it searchable.
 type IngestSignal struct {
@@ -66,8 +80,8 @@ const maxStoreAttempts = 3
 // persists, and indexes. Postgres is the source of truth: a failure there
 // fails the ingest, while a search-index failure is logged and tolerated (the
 // record can be reindexed).
-func (c *IngestSignal) Handle(ctx context.Context, incoming model.Vulnerability) error {
-	incoming = incoming.Normalized()
+func (c *IngestSignal) Handle(ctx context.Context, obs Observation) error {
+	incoming := obs.Vulnerability.Normalized()
 	if err := incoming.Validate(); err != nil {
 		return err
 	}
@@ -147,7 +161,12 @@ func (c *IngestSignal) Handle(ctx context.Context, incoming model.Vulnerability)
 	// the rest — the record is already stored, and a matcher outage must not
 	// cost us the finding itself. A failure here is logged loudly because a
 	// silent alerting outage is indistinguishable from "nothing happened".
-	if c.alerter != nil {
+	//
+	// Except for history. A backfill publishes the same events polling would —
+	// which is what makes them merge identically — but loading ten years of
+	// advisories is not ten years of news, and a subscription that matched
+	// them would fire thousands of times for things long since fixed.
+	if c.alerter != nil && !obs.Historical {
 		if _, err := c.alerter.Handle(ctx, incoming); err != nil {
 			c.log.Error("alert matching failed; record is stored but nobody was told",
 				"cve", incoming.CVEID, "error", err)
@@ -158,7 +177,9 @@ func (c *IngestSignal) Handle(ctx context.Context, incoming model.Vulnerability)
 	// is the finding as it was actually stored. Notify does not block — a
 	// viewer that has stopped reading misses updates rather than holding up
 	// ingestion.
-	if c.notifier != nil {
+	// Live watchers are told about what is arriving now, for the same reason:
+	// a backfill would otherwise scroll ten years past a terminal.
+	if c.notifier != nil && !obs.Historical {
 		c.notifier.Notify(ctx, incoming)
 	}
 	return nil

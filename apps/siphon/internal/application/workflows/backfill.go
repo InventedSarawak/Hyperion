@@ -83,7 +83,10 @@ func (b *Backfill) runSource(ctx context.Context, source ports.Backfiller, from 
 			if sig.Validate() != nil {
 				continue
 			}
-			evt := events.NewSignalDiscovered(kind, sig, discoveredAt, "")
+			// Marked historical: cortex stores it exactly as it would a polled
+			// event, and does not alert on it. Without this, a ten-year load
+			// fires a subscription for every advisory since 2016.
+			evt := events.NewSignalDiscovered(kind, sig, discoveredAt, "").AsHistorical()
 			if err := b.publisher.Publish(ctx, evt); err != nil {
 				return publishError{fmt.Errorf("backfill %s: publish %s: %w", kind, sig.CVEID, err)}
 			}

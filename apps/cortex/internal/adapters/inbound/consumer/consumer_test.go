@@ -19,6 +19,7 @@ import (
 	eventsv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/events/v1"
 
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/inbound/consumer"
+	"github.com/inventedsarawak/hyperion/apps/cortex/internal/application/commands"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/model"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/valueobject"
 )
@@ -26,10 +27,14 @@ import (
 // captureIngester records what the consumer would ingest.
 type captureIngester struct {
 	got []model.Vulnerability
+	// historical records the provenance of each observation, so a spec can
+	// assert that a replayed event is recognised as one.
+	historical []bool
 }
 
-func (c *captureIngester) Handle(_ context.Context, v model.Vulnerability) error {
-	c.got = append(c.got, v)
+func (c *captureIngester) Handle(_ context.Context, obs commands.Observation) error {
+	c.got = append(c.got, obs.Vulnerability)
+	c.historical = append(c.historical, obs.Historical)
 	return nil
 }
 
@@ -162,7 +167,8 @@ type orderIngester struct {
 	order map[string][]string
 }
 
-func (o *orderIngester) Handle(_ context.Context, v model.Vulnerability) error {
+func (o *orderIngester) Handle(_ context.Context, obs commands.Observation) error {
+	v := obs.Vulnerability
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.order[v.CVEID] = append(o.order[v.CVEID], v.Title)
@@ -280,7 +286,7 @@ type interruptingIngester struct {
 	calls  int
 }
 
-func (i *interruptingIngester) Handle(_ context.Context, _ model.Vulnerability) error {
+func (i *interruptingIngester) Handle(_ context.Context, _ commands.Observation) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.calls++

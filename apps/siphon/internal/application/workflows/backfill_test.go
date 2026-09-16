@@ -87,3 +87,26 @@ var _ = Describe("Backfill use case", func() {
 		Expect(second.from).To(BeZero(), "the second source is never started")
 	})
 })
+
+var _ = Describe("Backfill provenance", func() {
+	It("marks everything it publishes as historical", func() {
+		src := &fakeBackfiller{
+			kind: valueobject.SourceKindNVD,
+			batches: [][]model.SourceSignal{{
+				{CVEID: "CVE-2017-5638"}, {CVEID: "CVE-2014-0160"},
+			}},
+		}
+		pub := &capturingPublisher{}
+
+		n, err := workflows.NewBackfill([]ports.Backfiller{src}, pub).Run(context.Background(), time.Time{})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(n).To(Equal(2))
+		// The events are otherwise identical to what polling produces — that
+		// is what makes a backfilled record merge with a polled one — but
+		// cortex must be able to tell that this is history, not news.
+		for _, evt := range pub.published {
+			Expect(evt.Historical).To(BeTrue(), "%s should be marked historical", evt.Signal.CVEID)
+		}
+	})
+})

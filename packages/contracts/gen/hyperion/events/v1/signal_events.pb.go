@@ -107,6 +107,11 @@ type SignalDiscovered struct {
 	Vulnerability *v1.Vulnerability      `protobuf:"bytes,3,opt,name=vulnerability,proto3" json:"vulnerability,omitempty"`
 	DiscoveredAt  *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=discovered_at,json=discoveredAt,proto3" json:"discovered_at,omitempty"`
 	RawRef        string                 `protobuf:"bytes,5,opt,name=raw_ref,json=rawRef,proto3" json:"raw_ref,omitempty"` // pointer to the archived raw payload (e.g. object key)
+	// historical marks an event replayed from an archive rather than observed
+	// now: a backfill publishes the same events polling would, which is what
+	// makes them merge identically, but a ten-year load is not ten years of
+	// news. Consumers store it the same and skip telling anyone about it.
+	Historical    bool `protobuf:"varint,6,opt,name=historical,proto3" json:"historical,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -174,6 +179,13 @@ func (x *SignalDiscovered) GetRawRef() string {
 		return x.RawRef
 	}
 	return ""
+}
+
+func (x *SignalDiscovered) GetHistorical() bool {
+	if x != nil {
+		return x.Historical
+	}
+	return false
 }
 
 // DependencyObserved is emitted by siphon when it reads a repository's
@@ -275,13 +287,16 @@ var File_hyperion_events_v1_signal_events_proto protoreflect.FileDescriptor
 
 const file_hyperion_events_v1_signal_events_proto_rawDesc = "" +
 	"\n" +
-	"&hyperion/events/v1/signal_events.proto\x12\x12hyperion.events.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a hyperion/common/v1/package.proto\x1a#hyperion/common/v1/repository.proto\x1a&hyperion/common/v1/vulnerability.proto\"\x8a\x02\n" +
+	"&hyperion/events/v1/signal_events.proto\x12\x12hyperion.events.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a hyperion/common/v1/package.proto\x1a#hyperion/common/v1/repository.proto\x1a&hyperion/common/v1/vulnerability.proto\"\xaa\x02\n" +
 	"\x10SignalDiscovered\x12\x1b\n" +
 	"\tsignal_id\x18\x01 \x01(\tR\bsignalId\x126\n" +
 	"\x06source\x18\x02 \x01(\x0e2\x1e.hyperion.events.v1.SourceKindR\x06source\x12G\n" +
 	"\rvulnerability\x18\x03 \x01(\v2!.hyperion.common.v1.VulnerabilityR\rvulnerability\x12?\n" +
 	"\rdiscovered_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\fdiscoveredAt\x12\x17\n" +
-	"\araw_ref\x18\x05 \x01(\tR\x06rawRef\"\xee\x02\n" +
+	"\araw_ref\x18\x05 \x01(\tR\x06rawRef\x12\x1e\n" +
+	"\n" +
+	"historical\x18\x06 \x01(\bR\n" +
+	"historical\"\xee\x02\n" +
 	"\x12DependencyObserved\x12%\n" +
 	"\x0eobservation_id\x18\x01 \x01(\tR\robservationId\x12>\n" +
 	"\n" +
