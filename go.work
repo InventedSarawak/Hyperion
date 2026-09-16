@@ -11,4 +11,5 @@ use (
 	./packages/common
 	./packages/contracts
 	./packages/telemetry
+	./tests/e2e
 )

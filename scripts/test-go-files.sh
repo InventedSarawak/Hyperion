@@ -14,7 +14,7 @@ if [[ "$runner" == richgo* ]] && ! command -v richgo >/dev/null 2>&1; then
   runner="${runner/richgo/$go_bin\/richgo}"
 fi
 
-for mod in apps/* packages/common packages/contracts packages/telemetry; do
+for mod in apps/* packages/common packages/contracts packages/telemetry tests/e2e; do
   if [ -f "$mod/go.mod" ]; then
     echo "Testing $mod"
     packages="$(cd "$mod" && go list ./... 2>/dev/null || true)"

@@ -154,6 +154,21 @@ tasks:
     cmds:
       - ./scripts/test-go-files.sh
 
+  test:all:
+    desc: Every level of test, in order — unit, integration, then black-box against a running stack
+    cmds:
+      - task: test:go:integration
+      - task: test:e2e
+
+  test:e2e:
+    desc: 'Black-box end-to-end tests against a running stack (task up first)'
+    dir: tests/e2e
+    env:
+      HYPERION_E2E_CORTEX_ADDR: localhost:50051
+      HYPERION_E2E_NEXUS_URL: http://localhost:8080/graphql
+    cmds:
+      - go test ./... {{.CLI_ARGS}}
+
   codegen:
     desc: Generate Go code from protobuf contracts (buf + local protoc-gen plugins)
     dir: packages/contracts
