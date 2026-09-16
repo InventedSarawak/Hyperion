@@ -18,6 +18,8 @@ type GemfileLock struct{}
 // Name identifies the format.
 func (GemfileLock) Name() string { return "Gemfile.lock" }
 
+func (GemfileLock) lockfile() {}
+
 // Matches reports whether the file is a Gemfile.lock.
 func (GemfileLock) Matches(filePath string) bool { return path.Base(filePath) == "Gemfile.lock" }
 
@@ -63,7 +65,7 @@ func (GemfileLock) Parse(filePath string, content []byte) (model.RepositorySnaps
 	}
 	var snapshot model.RepositorySnapshot
 	for _, s := range specs {
-		snapshot.Dependencies = append(snapshot.Dependencies, dependency("rubygems", s[0], s[1], direct[s[0]], filePath))
+		snapshot.Dependencies = append(snapshot.Dependencies, locked("rubygems", s[0], s[1], direct[s[0]], filePath))
 	}
 	return snapshot, nil
 }

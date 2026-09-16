@@ -51,6 +51,9 @@ type Dependency struct {
 	Package      valueobject.PackageRef
 	Direct       bool
 	ManifestPath string
+	// Locked marks a version read from a lockfile: the one actually
+	// installed, rather than the range a manifest allows.
+	Locked bool
 }
 
 // Validate enforces the entity's invariants.

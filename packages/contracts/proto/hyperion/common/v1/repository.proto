@@ -28,4 +28,8 @@ message Dependency {
   PackageRef package = 1;
   bool direct = 2; // false for transitive requirements (go.mod "// indirect")
   string manifest_path = 3; // where it was declared, e.g. "go.mod"
+  // Locked marks a version read from a lockfile: the one actually installed,
+  // rather than the range a manifest allows. It is what lets a finding be
+  // judged outright instead of "possibly affected".
+  bool locked = 4;
 }

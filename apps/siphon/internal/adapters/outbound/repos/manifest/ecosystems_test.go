@@ -444,3 +444,134 @@ ignored_error_codes = [5574, 2018]
 		Expect(ok).To(BeFalse(), "only GitHub can be read")
 	})
 })
+
+var _ = Describe("Lockfiles", func() {
+	It("reads package-lock.json: installed versions, direct from the root entry", func() {
+		got := parse(manifest.PackageLock{}, "frontend/package-lock.json", `{
+		  "name": "frontend", "lockfileVersion": 3,
+		  "packages": {
+		    "": {"version": "1.0.0", "dependencies": {"axios": "^1.6.5", "react": "^18.2.0"}},
+		    "node_modules/axios": {"version": "1.13.6"},
+		    "node_modules/react": {"version": "18.3.1"},
+		    "node_modules/@floating-ui/core": {"version": "1.7.5"},
+		    "node_modules/typescript": {"version": "5.4.2", "dev": true},
+		    "node_modules/foo/node_modules/bar": {"version": "2.0.0"},
+		    "packages/ui": {"link": true, "resolved": "packages/ui"}
+		  }}`)
+
+		Expect(packageNames(got.Dependencies)).To(ConsistOf("@floating-ui/core", "axios", "bar", "react", "typescript"))
+		axios := named(got.Dependencies, "axios")
+		Expect(axios.Package.Version).To(Equal("1.13.6"))
+		Expect(axios.Locked).To(BeTrue())
+		Expect(axios.Direct).To(BeTrue())
+		Expect(named(got.Dependencies, "@floating-ui/core").Direct).To(BeFalse(), "installed, but not asked for")
+		Expect(named(got.Dependencies, "typescript").Direct).To(BeFalse(), "a development dependency")
+		Expect(named(got.Dependencies, "bar").Package.Version).To(Equal("2.0.0"), "a nested install")
+	})
+
+	It("reads pnpm-lock.yaml:each importer's dependencies and everything resolved", func() {
+		got := parse(manifest.PnpmLock{}, "pnpm-lock.yaml", `lockfileVersion: '9.0'
+
+importers:
+
+  .:
+    devDependencies:
+      turbo:
+        specifier: ^2.7.1
+        version: 2.7.1
+      eslint:
+        specifier: ^9.39.2
+        version: 9.39.2(jiti@2.6.1)
+
+  apps/web:
+    dependencies:
+      axios:
+        specifier: ^1.13.2
+        version: 1.13.2
+      ui:
+        specifier: workspace:*
+        version: link:../../packages/ui
+
+packages:
+
+  '@adraffy/ens-normalize@1.10.1':
+    resolution: {integrity: sha512-96Z2}
+
+  axios@1.13.2:
+    resolution: {integrity: sha512-aaaa}
+`)
+		axios := named(got.Dependencies, "axios")
+		Expect(axios.Package.Version).To(Equal("1.13.2"))
+		Expect(axios.Locked).To(BeTrue())
+		Expect(axios.Direct).To(BeTrue())
+		Expect(axios.ManifestPath).To(Equal("pnpm-lock.yaml (apps/web)"))
+		Expect(named(got.Dependencies, "eslint").Package.Version).To(Equal("9.39.2"), "the peer suffix is not part of the version")
+		Expect(named(got.Dependencies, "turbo").Direct).To(BeFalse())
+		Expect(named(got.Dependencies, "@adraffy/ens-normalize").Package.Version).To(Equal("1.10.1"), "transitive, at an exact version")
+		Expect(packageNames(got.Dependencies)).ToNot(ContainElement("ui"), "a workspace link is not a registry package")
+	})
+
+	It("reads Cargo.lock, skipping the workspace's own crates", func() {
+		got := parse(manifest.CargoLock{}, "Cargo.lock", `version = 3
+
+[[package]]
+name = "ledger-core"
+version = "0.1.0"
+
+[[package]]
+name = "serde"
+version = "1.0.197"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+`)
+		Expect(packageNames(got.Dependencies)).To(Equal([]string{"serde"}))
+		Expect(got.Dependencies[0].Package.Version).To(Equal("1.0.197"))
+		Expect(got.Dependencies[0].Locked).To(BeTrue())
+	})
+
+	It("reads poetry.lock, normalising names as PyPI does", func() {
+		got := parse(manifest.PoetryLock{}, "poetry.lock", `[[package]]
+name = "Flask"
+version = "3.0.2"
+
+[[package]]
+name = "python_dateutil"
+version = "2.9.0"
+`)
+		Expect(packageNames(got.Dependencies)).To(ConsistOf("flask", "python-dateutil"))
+		Expect(named(got.Dependencies, "flask").Package.Version).To(Equal("3.0.2"))
+		Expect(named(got.Dependencies, "flask").Locked).To(BeTrue())
+	})
+
+	It("reads composer.lock", func() {
+		got := parse(manifest.ComposerLock{}, "composer.lock", `{
+		  "packages": [{"name": "Laravel/Framework", "version": "v10.48.2"}],
+		  "packages-dev": [{"name": "phpunit/phpunit", "version": "10.5.10"}]}`)
+		Expect(named(got.Dependencies, "laravel/framework").Package.Version).To(Equal("v10.48.2"))
+		Expect(named(got.Dependencies, "laravel/framework").Locked).To(BeTrue())
+		Expect(named(got.Dependencies, "phpunit/phpunit").ManifestPath).To(Equal("composer.lock (dev)"))
+	})
+
+	It("marks Gemfile.lock versions as locked", func() {
+		got := parse(manifest.GemfileLock{}, "Gemfile.lock", `GEM
+  specs:
+    rack (2.2.6)
+
+DEPENDENCIES
+  rack
+`)
+		Expect(got.Dependencies[0].Locked).To(BeTrue())
+	})
+
+	It("reads a lockfile before the manifest beside it", func() {
+		found, _ := manifest.Discover([]string{
+			"package.json", "package-lock.json", "apps/web/package.json", "apps/web/pnpm-lock.yaml",
+		}, manifest.Parsers())
+
+		paths := []string{}
+		for _, f := range found {
+			paths = append(paths, f.Path)
+		}
+		Expect(paths).To(Equal([]string{
+			"package-lock.json", "package.json", "apps/web/pnpm-lock.yaml", "apps/web/package.json"}))
+	})
+})

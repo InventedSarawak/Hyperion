@@ -159,6 +159,43 @@ var _ = Describe("RepositorySnapshot published library", func() {
 	})
 })
 
+var _ = Describe("RepositorySnapshot duplicate dependencies", func() {
+	ref := func(name, version string) valueobject.PackageRef {
+		return valueobject.NewPackageRef("npm", name, version)
+	}
+
+	It("prefers the version a lockfile records over the range a manifest allows", func() {
+		snapshot := model.RepositorySnapshot{
+			Repository: model.Repository{Owner: "acme", Name: "app"},
+			Dependencies: []model.Dependency{
+				{Package: ref("axios", "^1.13.2"), Direct: true, ManifestPath: "package.json"},
+				{Package: ref("axios", "1.13.2"), Locked: true, ManifestPath: "pnpm-lock.yaml"},
+			},
+		}
+
+		got := snapshot.ValidDependencies()
+		Expect(got).To(HaveLen(1))
+		Expect(got[0].Package.Version).To(Equal("1.13.2"))
+		Expect(got[0].Locked).To(BeTrue())
+		Expect(got[0].Direct).To(BeTrue(), "the manifest still says it is a direct dependency")
+	})
+
+	It("keeps the locked version whichever order the files were read in", func() {
+		snapshot := model.RepositorySnapshot{
+			Repository: model.Repository{Owner: "acme", Name: "app"},
+			Dependencies: []model.Dependency{
+				{Package: ref("axios", "1.13.2"), Locked: true, ManifestPath: "pnpm-lock.yaml"},
+				{Package: ref("axios", "^1.13.2"), Direct: true, ManifestPath: "package.json"},
+			},
+		}
+
+		got := snapshot.ValidDependencies()
+		Expect(got).To(HaveLen(1))
+		Expect(got[0].Package.Version).To(Equal("1.13.2"))
+		Expect(got[0].Direct).To(BeTrue())
+	})
+})
+
 var _ = Describe("BlastRadius", func() {
 	It("distinguishes 'nothing exposed' from 'CVE not linked to any library'", func() {
 		unlinked := model.BlastRadius{CVEID: "CVE-2021-44228"}

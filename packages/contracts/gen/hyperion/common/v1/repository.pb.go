@@ -157,10 +157,14 @@ func (x *Repository) GetDefaultBranch() string {
 // Dependency is one edge out of a repository: the library it requires, and how
 // that requirement was declared.
 type Dependency struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Package       *PackageRef            `protobuf:"bytes,1,opt,name=package,proto3" json:"package,omitempty"`
-	Direct        bool                   `protobuf:"varint,2,opt,name=direct,proto3" json:"direct,omitempty"`                                // false for transitive requirements (go.mod "// indirect")
-	ManifestPath  string                 `protobuf:"bytes,3,opt,name=manifest_path,json=manifestPath,proto3" json:"manifest_path,omitempty"` // where it was declared, e.g. "go.mod"
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Package      *PackageRef            `protobuf:"bytes,1,opt,name=package,proto3" json:"package,omitempty"`
+	Direct       bool                   `protobuf:"varint,2,opt,name=direct,proto3" json:"direct,omitempty"`                                // false for transitive requirements (go.mod "// indirect")
+	ManifestPath string                 `protobuf:"bytes,3,opt,name=manifest_path,json=manifestPath,proto3" json:"manifest_path,omitempty"` // where it was declared, e.g. "go.mod"
+	// Locked marks a version read from a lockfile: the one actually installed,
+	// rather than the range a manifest allows. It is what lets a finding be
+	// judged outright instead of "possibly affected".
+	Locked        bool `protobuf:"varint,4,opt,name=locked,proto3" json:"locked,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -216,6 +220,13 @@ func (x *Dependency) GetManifestPath() string {
 	return ""
 }
 
+func (x *Dependency) GetLocked() bool {
+	if x != nil {
+		return x.Locked
+	}
+	return false
+}
+
 var File_hyperion_common_v1_repository_proto protoreflect.FileDescriptor
 
 const file_hyperion_common_v1_repository_proto_rawDesc = "" +
@@ -230,12 +241,13 @@ const file_hyperion_common_v1_repository_proto_rawDesc = "" +
 	"\x05owner\x18\x01 \x01(\tR\x05owner\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x10\n" +
 	"\x03url\x18\x03 \x01(\tR\x03url\x12%\n" +
-	"\x0edefault_branch\x18\x04 \x01(\tR\rdefaultBranch\"\x83\x01\n" +
+	"\x0edefault_branch\x18\x04 \x01(\tR\rdefaultBranch\"\x9b\x01\n" +
 	"\n" +
 	"Dependency\x128\n" +
 	"\apackage\x18\x01 \x01(\v2\x1e.hyperion.common.v1.PackageRefR\apackage\x12\x16\n" +
 	"\x06direct\x18\x02 \x01(\bR\x06direct\x12#\n" +
-	"\rmanifest_path\x18\x03 \x01(\tR\fmanifestPathB\xeb\x01\n" +
+	"\rmanifest_path\x18\x03 \x01(\tR\fmanifestPath\x12\x16\n" +
+	"\x06locked\x18\x04 \x01(\bR\x06lockedB\xeb\x01\n" +
 	"\x16com.hyperion.common.v1B\x0fRepositoryProtoP\x01ZVgithub.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/common/v1;commonv1\xa2\x02\x03HCX\xaa\x02\x12Hyperion.Common.V1\xca\x02\x12Hyperion\\Common\\V1\xe2\x02\x1eHyperion\\Common\\V1\\GPBMetadata\xea\x02\x14Hyperion::Common::V1b\x06proto3"
 
 var (

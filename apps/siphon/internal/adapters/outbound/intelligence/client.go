@@ -137,6 +137,7 @@ func toProtoRequest(s model.RepositorySnapshot) *intelv1.IngestDependenciesReque
 			Package:      toProtoPackageRef(d.Package),
 			Direct:       d.Direct,
 			ManifestPath: d.ManifestPath,
+			Locked:       d.Locked,
 		})
 	}
 

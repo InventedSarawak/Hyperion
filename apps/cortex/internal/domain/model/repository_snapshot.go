@@ -59,10 +59,29 @@ func (s RepositorySnapshot) DirectDependencies() []Dependency {
 }
 
 // ValidDependencies returns the dependencies worth writing, dropping any that
-// fail their own invariants and collapsing duplicates. A manifest can name the
-// same library twice (different constraint syntax, or once direct and once
-// indirect); the graph holds one edge, and a direct declaration wins because
-// it is the stronger statement about the repository's own code.
+// fail their own invariants and collapsing duplicates. A repository can name
+// the same library twice — in two manifests, or in a manifest and the lockfile
+// beside it — and the graph holds one edge; mergeDependency decides which
+// declaration it carries.
+// mergeDependency folds a second declaration of one library into the first.
+// A locked version wins over a declared range, because it is what is actually
+// installed and can be judged outright; failing that, a direct declaration
+// wins over an indirect one, being the stronger statement about the
+// repository's own code. The flags are the union either way: a library reached
+// both directly and transitively is still a direct dependency.
+func mergeDependency(kept, next Dependency) Dependency {
+	winner := kept
+	switch {
+	case next.Locked && !kept.Locked:
+		winner = next
+	case next.Direct && !kept.Direct && next.Locked == kept.Locked:
+		winner = next
+	}
+	winner.Direct = kept.Direct || next.Direct
+	winner.Locked = kept.Locked || next.Locked
+	return winner
+}
+
 func (s RepositorySnapshot) ValidDependencies() []Dependency {
 	seen := make(map[string]int, len(s.Dependencies))
 	out := make([]Dependency, 0, len(s.Dependencies))
@@ -72,9 +91,7 @@ func (s RepositorySnapshot) ValidDependencies() []Dependency {
 			continue
 		}
 		if at, ok := seen[d.Package.Key()]; ok {
-			if d.Direct && !out[at].Direct {
-				out[at] = d
-			}
+			out[at] = mergeDependency(out[at], d)
 			continue
 		}
 		seen[d.Package.Key()] = len(out)

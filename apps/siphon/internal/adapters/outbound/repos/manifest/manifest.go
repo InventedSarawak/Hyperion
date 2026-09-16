@@ -30,6 +30,7 @@ type Parser interface {
 // Parsers returns every manifest format siphon understands.
 func Parsers() []Parser {
 	return []Parser{
+		PackageLock{}, PnpmLock{}, CargoLock{}, PoetryLock{}, ComposerLock{},
 		GoMod{}, PackageJSON{},
 		Requirements{}, Pyproject{}, Pipfile{},
 		Cargo{},
@@ -90,6 +91,10 @@ func Discover(paths []string, parsers []Parser) (found []Found, dropped int) {
 		if di != dj {
 			return di < dj
 		}
+		// A lockfile before the manifest beside it: its versions are exact.
+		if li, lj := isLockfile(found[i].Parser), isLockfile(found[j].Parser); li != lj {
+			return li
+		}
 		return found[i].Path < found[j].Path
 	})
 	if len(found) > MaxManifests {
@@ -97,6 +102,12 @@ func Discover(paths []string, parsers []Parser) (found []Found, dropped int) {
 		found = found[:MaxManifests]
 	}
 	return found, dropped
+}
+
+// isLockfile reports whether a parser reads resolved versions.
+func isLockfile(p Parser) bool {
+	_, ok := p.(lockfileParser)
+	return ok
 }
 
 func inSkippedDir(filePath string) bool {

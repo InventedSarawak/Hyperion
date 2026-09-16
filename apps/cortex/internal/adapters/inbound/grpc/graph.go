@@ -157,6 +157,7 @@ func toDomainSnapshot(req *intelv1.IngestDependenciesRequest) model.RepositorySn
 			Package:      toDomainPackageRef(d.GetPackage()),
 			Direct:       d.GetDirect(),
 			ManifestPath: d.GetManifestPath(),
+			Locked:       d.GetLocked(),
 		})
 	}
 

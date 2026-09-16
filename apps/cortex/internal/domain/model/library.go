@@ -43,6 +43,10 @@ type Dependency struct {
 	Package      valueobject.PackageRef
 	Direct       bool   // false for transitive requirements (go.mod "// indirect")
 	ManifestPath string // where it was declared, e.g. "go.mod"
+	// Locked marks a version read from a lockfile: the one installed, rather
+	// than the range a manifest allows. It is what lets a finding be judged
+	// outright instead of "possibly affected".
+	Locked bool
 }
 
 // Validate enforces the entity's invariants.

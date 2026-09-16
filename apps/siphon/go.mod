@@ -14,7 +14,6 @@ require (
 	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
-	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 )
 
 require (
@@ -25,7 +24,7 @@ require (
 	github.com/google/pprof v0.0.0-20260402051712-545e8a4df936 // indirect
 	github.com/inventedsarawak/hyperion/packages/common v0.0.0-00010101000000-000000000000
 	github.com/inventedsarawak/hyperion/packages/contracts v0.0.0-00010101000000-000000000000
-	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/mod v0.35.0
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
