@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -268,5 +269,84 @@ var _ = Describe("Consumer progress", func() {
 			}
 		}
 		Expect(ingested).To(ConsistOf("CVE-2021-0001", "CVE-2021-0002"))
+	})
+})
+
+// interruptingIngester ingests one finding, then cancels the run the way a
+// Ctrl+C would, and records anything it is asked to do afterwards.
+type interruptingIngester struct {
+	mu     sync.Mutex
+	cancel context.CancelFunc
+	calls  int
+}
+
+func (i *interruptingIngester) Handle(_ context.Context, _ model.Vulnerability) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.calls++
+	if i.calls == 1 {
+		// Long enough for the reader to fill the lane behind this worker, so
+		// the cancellation lands with work already queued — the situation an
+		// interrupted backfill is always in.
+		time.Sleep(50 * time.Millisecond)
+		i.cancel()
+	}
+	return nil
+}
+
+func (i *interruptingIngester) handled() int {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.calls
+}
+
+// loggedLines parses whatever the consumer wrote to its JSON logger.
+func loggedLines(buf *bytes.Buffer) []map[string]any {
+	var out []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var entry map[string]any
+		Expect(json.Unmarshal([]byte(line), &entry)).To(Succeed())
+		out = append(out, entry)
+	}
+	return out
+}
+
+var _ = Describe("Consumer interrupted", func() {
+	// An interrupted run used to hand every queued finding to the ingester
+	// anyway, where each failed instantly against the dead context and was
+	// logged as an error — hundreds of lines that hid why it stopped.
+	It("drops what it had queued instead of failing each one against a dead context", func() {
+		var lines []string
+		for seq := 0; seq < 300; seq++ {
+			lines = append(lines, eventLine(fmt.Sprintf("CVE-2026-%04d", seq), commonv1.Severity_SEVERITY_HIGH))
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		var buf bytes.Buffer
+		ing := &interruptingIngester{cancel: cancel}
+
+		// One worker, so "what happened after the cancellation" is not a race.
+		n, err := consumer.NewConsumer(ing, consumer.WithWorkers(1), consumer.WithProgressEvery(0),
+			consumer.WithLogger(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))).
+			Run(ctx, strings.NewReader(strings.Join(lines, "\n")))
+
+		Expect(err).To(MatchError(context.Canceled))
+		Expect(n).To(Equal(1), "the one finding ingested before the interrupt")
+		Expect(ing.handled()).To(Equal(1), "no work begun after the context was cancelled")
+
+		var dropped map[string]any
+		for _, entry := range loggedLines(&buf) {
+			Expect(entry["msg"]).ToNot(Equal("ingest failed"), "shutdown is not a per-finding failure")
+			if entry["msg"] == "stopped before every finding read was ingested; the rest were dropped" {
+				dropped = entry
+			}
+		}
+		Expect(dropped).ToNot(BeNil(), "an interrupted run must say it left a gap")
+		Expect(dropped["dropped"]).To(BeNumerically(">", 0))
 	})
 })

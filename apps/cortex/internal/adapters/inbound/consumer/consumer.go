@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -82,6 +83,7 @@ func (c *Consumer) Run(ctx context.Context, r io.Reader) (int, error) {
 	var (
 		processed atomic.Int64
 		failed    atomic.Int64
+		dropped   atomic.Int64
 		wg        sync.WaitGroup
 		started   = time.Now()
 		lanes     = make([]chan model.Vulnerability, c.workers)
@@ -92,7 +94,24 @@ func (c *Consumer) Run(ctx context.Context, r io.Reader) (int, error) {
 		go func(lane <-chan model.Vulnerability) {
 			defer wg.Done()
 			for v := range lane {
+				// Shutting down: keep draining, so the reader is never left
+				// blocked on a full lane, but do not begin work a dead
+				// context will only refuse. These are counted rather than
+				// logged one line each — every lane is full when a backfill
+				// is interrupted, and hundreds of instant failures bury the
+				// reason it stopped.
+				if ctx.Err() != nil {
+					dropped.Add(1)
+					continue
+				}
 				if err := c.ingester.Handle(ctx, v); err != nil {
+					// The same shutdown, caught a moment later: this event
+					// was in flight when the context was cancelled. Not a
+					// failure of the event, and not worth an error line.
+					if errors.Is(err, context.Canceled) {
+						dropped.Add(1)
+						continue
+					}
 					failed.Add(1)
 					c.log.Error("ingest failed", "cve", v.CVEID, "error", err)
 					continue
@@ -124,6 +143,13 @@ func (c *Consumer) Run(ctx context.Context, r io.Reader) (int, error) {
 	wg.Wait()
 	if n := failed.Load(); n > 0 {
 		c.log.Warn("some findings could not be ingested", "failed", n, "ingested", processed.Load())
+	}
+	// Whatever was still queued when the context was cancelled was never
+	// stored. Say how many, so an interrupted run is known to have left a
+	// gap rather than assumed to have finished what it read.
+	if n := dropped.Load(); n > 0 {
+		c.log.Warn("stopped before every finding read was ingested; the rest were dropped",
+			"dropped", n, "ingested", processed.Load())
 	}
 	return int(processed.Load()), err
 }
