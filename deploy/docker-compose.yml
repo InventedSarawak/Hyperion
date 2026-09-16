@@ -72,7 +72,82 @@ services:
       timeout: 3s
       retries: 10
 
+  kafka:
+    image: apache/kafka:4.1.0
+    container_name: hyperion-kafka
+    environment:
+      # Single-node KRaft: this one process is both the broker and the
+      # controller quorum. ZooKeeper is gone as of Kafka 4.0 — there is no
+      # second container to run any more.
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # Three listeners, because "where is the broker" has three different
+      # answers here: the host (Go services run natively — see Rule 7 debt),
+      # another container (once they are containerised in v4), and the
+      # controller's own internal traffic. A client is told to reconnect to
+      # the ADVERTISED address, so a single listener would be reachable from
+      # exactly one of those places.
+      KAFKA_LISTENERS: HOST://:9092,DOCKER://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: HOST://localhost:9092,DOCKER://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: HOST:PLAINTEXT,DOCKER:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: DOCKER
+      # One broker, so nothing can be replicated anywhere: every replication
+      # factor must be 1 or the internal topics never come up.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      # A lone consumer should not wait out the 3s rebalance window on every
+      # start; local dev wants the group formed immediately.
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 6
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      # Retention is a laptop disk, not a data lake: a ten-year backfill is
+      # hundreds of thousands of records. relic (v4) owns cold storage.
+      KAFKA_LOG_RETENTION_HOURS: 168
+      # A long advisory (hundreds of references, a few thousand words of
+      # description) exceeds Kafka's 1MiB default. Matches
+      # kafka.MaxRecordBytes in packages/common/kafka.
+      KAFKA_MESSAGE_MAX_BYTES: 5242880
+      KAFKA_REPLICA_FETCH_MAX_BYTES: 5242880
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx512m"
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      # Listing topics proves the broker is accepting API calls, not merely
+      # that something is bound to the port.
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  # A GUI for the event backbone: topics, messages (decoded), consumer groups
+  # and lag. Read-only in practice and local-dev only — like everything else
+  # here, it has no authentication in front of it.
+  #
+  # Named kafka-console, not console: `console` is already Hyperion's Next.js
+  # dashboard, and two things called console in one repo is one too many.
+  kafka-console:
+    image: docker.redpanda.com/redpandadata/console:v3.12.0
+    container_name: hyperion-kafka-console
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      CONFIG_FILEPATH: /etc/hyperion/console.yaml
+    ports:
+      # 8080 inside, 8081 outside: nexus already holds 8080 on the host.
+      - "8081:8080"
+    volumes:
+      - ./kafka-console.yaml:/etc/hyperion/console.yaml:ro
+      - ../packages/contracts/proto:/etc/hyperion/proto:ro
+
 volumes:
   postgres_data:
   elasticsearch_data:
   neo4j_data:
+  kafka_data:

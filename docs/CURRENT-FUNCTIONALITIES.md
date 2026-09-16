@@ -9,20 +9,20 @@ For what is planned see [TODO.md](../TODO.md); for what was cut and why see
 > [CURRENT_PROGRESS.md](../CURRENT_PROGRESS.md). If a function here is not what the code
 > does, the document is wrong — fix it in the same change.
 >
-> Last updated: **2026-09-11**
+> Last updated: **2026-09-17**
 
 ---
 
 ## At a glance
 
 ```
-  feeds ──▶ siphon ──(pipe: SignalDiscovered)──▶ cortex ──▶ Postgres   (store of record)
-   (10)      │                                     │    ├──▶ Elasticsearch (search, alert percolator)
-             │                                     │    ├──▶ Neo4j     (dependency graph)
-             │  ◀──(gRPC: watchlist, scans)──────▶ │    └──▶ Redis     (alert dedupe)
-             ▼                                     ▲
-          GitHub (manifests)                       │ gRPC
-                                                 nexus (GraphQL gateway) ◀── deck (terminal UI)
+  feeds ──▶ siphon ──(SignalDiscovered)──▶ cortex ──▶ Postgres   (store of record)
+   (10)      │        pipe  or  Kafka        │    ├──▶ Elasticsearch (search, alert percolator)
+             │                               │    ├──▶ Neo4j     (dependency graph)
+             │  ◀──(gRPC: watchlist, scans)──┤    └──▶ Redis     (alert dedupe)
+             ▼                               ▲
+          GitHub (manifests)                 │ gRPC
+                                           nexus (GraphQL gateway) ◀── deck (terminal UI)
 ```
 
 | Service | Role                                                   | State   |
@@ -95,9 +95,21 @@ task backfill -- -backfill-sources osv                   # just the package data
 It exits when done (non-zero if a source could not be read in full). It can run while the
 rest of the stack is up; `task restart` does not interrupt it.
 
+**Stopping it early.** Ctrl+C is a supported way to end a run that is measured in hours.
+Siphon reports how much it published and exits clean, and cortex drops whatever was still
+queued behind its workers rather than failing each one against the cancelled context —
+it logs one line saying how many were dropped. Everything already stored stays stored, and
+re-running is safe: ingest merges, so a repeated finding costs time, not correctness.
+
+> `task backfill` itself still reports `exit status 1` after a Ctrl+C. That is `go run`,
+> which exits non-zero whenever the toolchain process is interrupted, whatever the program
+> it launched did. The services underneath exited cleanly.
+
 **Limits.** The NVD half takes roughly an hour (NVD serves a 2,000-record page in ~40s);
 the OSV half downloads ~300 MB. Records are published in the same event format as polling,
-so a backfill can raise alerts for old findings if a subscription matches them.
+so a backfill can raise alerts for old findings if a subscription matches them. An
+interrupted run leaves a gap rather than a clean resumption point: the events queued when
+it stopped are not stored, and the fix is to run the backfill again over that range.
 
 ### 1.3 Record identity
 
@@ -184,17 +196,70 @@ Exits non-zero if anything failed, so it works from cron or CI.
 active, how many records each returned and why any failed, and exits non-zero if an active
 source is broken. Publishes nothing.
 
+### 1.7 Transport: the event backbone
+
+**What it does.** Published events reach cortex over Kafka. A pipe remains for loading
+data on demand. Both are adapters behind siphon's `SignalPublisher` port, and the workflow
+that produces the events cannot tell which is in use.
+
+|             | **Kafka** (default)                                                            | **Pipe**                                                                                            |
+| :---------- | :----------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------- |
+| Turn on     | nothing — it is the default                                                    | `SIPHON_KAFKA_ENABLED=false` + `CORTEX_CONSUME_STDIN=true`, which `task ingest`/`task backfill` set |
+| Shape       | topic `hyperion.signals.v1`, 6 partitions                                      | `siphon \| cortex`, one pair of processes                                                           |
+| Durability  | records are retained 7 days and replayed from the last committed offset        | none: if cortex dies mid-stream those events are gone                                               |
+| Parallelism | one consumer goroutine per partition, across however many cortex processes run | `CORTEX_INGEST_WORKERS` inside one process                                                          |
+| Coupling    | independent: either can restart without the other noticing                     | both halves live and die together                                                                   |
+| Use it for  | the running system                                                             | `task ingest`, `task backfill`, running the chain in one command                                    |
+
+**How you use it.** `task up` runs both halves, so there is nothing to turn on. To watch
+it, or to drive either half by hand:
+
+```bash
+task topic:ui                 # the Kafka console at localhost:8081, in a browser
+task topic:lag                # how far behind ingest is, per partition
+task topic:tail -- -limit 5   # what is actually on the topic, decoded
+task topic:describe           # partitions, leaders, settings
+task run:siphon               # the publisher
+task run:cortex               # the consumer, and the gRPC API
+```
+
+**What it guarantees.**
+
+- **Per-finding order.** A record's key is the finding id, so every report of one CVE —
+  from any feed — lands on one partition and is merged by one consumer in arrival order.
+  This is the same rule the pipe enforces with worker sharding, one level lower.
+- **Nothing is lost on a crash.** Offsets are committed only after the records they cover
+  have been ingested. A cortex that dies mid-batch replays that batch on restart.
+- **A poll is not "done" until the broker has it.** Publishing is batched and
+  asynchronous, so the poll flushes before its watermark advances — otherwise a restart
+  would skip a window that was never actually published.
+- **A record that cannot be decoded is skipped**, logged, and committed past, so one bad
+  record cannot wedge every record behind it. A record that fails to _ingest_ is retried
+  and then **stops the consumer** rather than being dropped: a database outage must not
+  look like successful ingest.
+
+**Seeing it.** The Kafka console (Redpanda Console) runs at **localhost:8081** with the
+rest of the infrastructure, reading `packages/contracts/proto` so records render as
+decoded JSON rather than base64. Topics, live messages, consumer-group membership and
+per-partition lag, without a command. No authentication — local only.
+
+**Where it stops.** The topic carries advisory events only — repository scans still go to
+cortex as a synchronous gRPC call. There is no dead-letter topic, so a record that fails
+ingest permanently halts the consumer until someone intervenes. One broker, no
+replication, no authentication: local development only.
+
 ---
 
 ## 2. Intelligence (cortex)
 
 ### 2.1 Ingest and correlation
 
-**What it does.** Reads events from stdin and, per record: loads what is already stored,
+**What it does.** Reads events from the pipe or the signal topic (1.7) and, per record: loads what is already stored,
 **merges** the new observation into it, writes Postgres, re-indexes it in Elasticsearch,
 links it to its packages in Neo4j, and matches it against alert rules. Records are
 ingested on `CORTEX_INGEST_WORKERS` (default 8) parallel workers, sharded by id so one
-record's observations are always merged in order. A write that loses a race — another worker filing the same finding under a different id, a deadlock, a serialization failure — is re-read and merged again, up to three attempts.
+record's observations are always merged in order; over Kafka that sharding is the
+partition key instead, one goroutine per partition. A write that loses a race — another worker filing the same finding under a different id, a deadlock, a serialization failure — is re-read and merged again, up to three attempts.
 
 **Merge rules** (how two feeds' views of one finding combine):
 

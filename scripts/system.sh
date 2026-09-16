@@ -2,8 +2,8 @@
 #
 # Start, stop and inspect the whole Hyperion stack.
 #
-#   ./scripts/system.sh up       infra + cortex (gRPC) + nexus (GraphQL) + ingest loop
-#                                (HYPERION_INGEST=0 to skip the ingest loop)
+#   ./scripts/system.sh up       infra + cortex (gRPC) + nexus (GraphQL) + siphon (ingest)
+#                                (HYPERION_INGEST=0 to skip siphon)
 #   ./scripts/system.sh down     stop services, then infra
 #   ./scripts/system.sh restart  rebuild and restart services + ingest; infra keeps running
 #   ./scripts/system.sh status   what is running, with health checks
@@ -65,10 +65,13 @@ pid_of() {
 
 # --- continuous ingest -------------------------------------------------------
 #
-# The ingest loop is a *pair* of processes (siphon | cortex --consume-stdin),
-# not a single binary, so it cannot go in SERVICES with the port-bound ones.
-# setsid puts the pipeline in its own process group, which is what lets us
-# stop both halves later with one signal to the group.
+# siphon publishes to Kafka and cortex consumes the topic, so ingest is one
+# ordinary process rather than a pipeline of two. It is kept out of SERVICES
+# only because it binds no port, and every check there is written around one.
+#
+# The two halves are now independent: siphon keeps publishing while cortex is
+# down, and cortex resumes from its last committed offset when it returns.
+# Restarting either one no longer interrupts the other.
 
 ingest_enabled() { [[ "${HYPERION_INGEST:-1}" == "1" ]]; }
 
@@ -85,23 +88,19 @@ start_ingest() {
   log "building siphon..."
   ( cd "$ROOT/apps/siphon" && go build -o "$RUN_DIR/bin/siphon" ./cmd/worker )
 
-  log "starting ingest loop (siphon -> cortex)..."
-  # siphon's events go down the pipe; both services' logs go to ingest.log.
-  # The wrapper's own stdio is redirected too, not just the commands inside it:
-  # a detached child that keeps the caller's stdout open holds the pipe open,
-  # so `./system.sh up | grep ...` would never see EOF and would hang.
-  setsid bash -c "'$RUN_DIR/bin/siphon' 2>>'$RUN_DIR/ingest.log' \
-    | CORTEX_CONSUME_STDIN=true '$RUN_DIR/bin/cortex' >>'$RUN_DIR/ingest.log' 2>&1" \
-    </dev/null >>"$RUN_DIR/ingest.log" 2>&1 &
+  log "starting siphon (publishing to kafka)..."
+  # Detached with its own stdio: a child holding this script's stdout open
+  # would mean `./system.sh up | grep ...` never sees EOF and hangs.
+  setsid "$RUN_DIR/bin/siphon" </dev/null >>"$RUN_DIR/ingest.log" 2>&1 &
   echo $! >"$RUN_DIR/ingest.pid"
 
-  # Give the pipeline a moment to fail loudly (bad config, cortex missing)
-  # rather than reporting a PID that is already gone.
+  # Give it a moment to fail loudly (bad config, unreachable broker) rather
+  # than reporting a PID that is already gone.
   sleep 2
   if pid_of ingest >/dev/null; then
-    log "ready: ingest loop (pid $(pid_of ingest))"
+    log "ready: siphon (pid $(pid_of ingest))"
   else
-    log "WARNING: ingest loop exited immediately — see $RUN_DIR/ingest.log"
+    log "WARNING: siphon exited immediately — see $RUN_DIR/ingest.log"
   fi
 }
 
@@ -109,8 +108,10 @@ stop_ingest() {
   local pid
   pid="$(pid_of ingest)" || { rm -f "$RUN_DIR/ingest.pid"; return 0; }
 
-  log "stopping ingest loop (pid $pid)..."
-  # Negative PID signals the whole process group, so siphon AND cortex stop.
+  log "stopping siphon (pid $pid)..."
+  # Negative PID signals the whole process group. siphon is one process now,
+  # but a stale pid file from the old `siphon | cortex` pipeline names a group
+  # of two, and this stops both.
   kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
   sleep 1
   kill -KILL -"$pid" 2>/dev/null || true
@@ -118,13 +119,17 @@ stop_ingest() {
 }
 
 up() {
-  log "starting infrastructure (postgres, elasticsearch, neo4j, redis)..."
+  log "starting infrastructure (postgres, elasticsearch, neo4j, redis, kafka, console)..."
   $COMPOSE up -d
 
   wait_for "postgres" 60 docker exec hyperion-postgres pg_isready -U hyperion -d hyperion
   wait_for "elasticsearch" 120 curl -fsS http://localhost:9200/_cluster/health
   wait_for "neo4j" 120 docker exec hyperion-neo4j cypher-shell -u neo4j -p hyperion "RETURN 1"
   wait_for "redis" 60 docker exec hyperion-redis redis-cli ping
+  # Listing topics proves the broker is answering API calls: cortex creates the
+  # signal topic at startup and would fail against a port that merely listens.
+  wait_for "kafka" 120 docker exec hyperion-kafka \
+    /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
 
   mkdir -p "$RUN_DIR/bin"
 
@@ -159,15 +164,17 @@ up() {
   wait_for "cortex gRPC :50051" 60 bash -c 'exec 3<>/dev/tcp/127.0.0.1/50051'
   wait_for "nexus HTTP :8080" 60 curl -fsS http://localhost:8080/healthz
 
-  # Started last: it needs the cortex binary built above, and there is no
-  # point ingesting into a database that is not accepting connections yet.
+  # Started last: siphon publishes as fast as the feeds allow, and there is no
+  # point filling the topic before the consumer that drains it is up.
   start_ingest
 
   echo
   status
   echo
   log "GraphQL console: http://localhost:8080/playground"
-  log "ingest data:     task ingest"
+  log "kafka console:   http://localhost:8081"
+  log "ingest lag:      task topic:lag"
+  log "what is on the topic: task topic:tail -- -limit 5"
 }
 
 down() {
@@ -255,12 +262,31 @@ status() {
     printf '  %-16s %-10s %s\n' "redis" "DOWN" "not responding on :6379"
   fi
 
-  if pid_of ingest >/dev/null; then
-    printf '  %-16s %-10s %s\n' "ingest" "UP" "pid $(pid_of ingest), polling every ${SIPHON_POLL_INTERVAL:-10m}"
-  elif ingest_enabled; then
-    printf '  %-16s %-10s %s\n' "ingest" "DOWN" "-"
+  # Lag is the number that says whether ingest is keeping up: steady lag means
+  # slow, lag climbing without bound means stopped. A group that has never
+  # committed prints "-", which is not zero and must not be summed as if it were.
+  if docker exec hyperion-kafka /opt/kafka/bin/kafka-topics.sh \
+       --bootstrap-server localhost:9092 --list >/dev/null 2>&1; then
+    local lag
+    lag="$(docker exec hyperion-kafka /opt/kafka/bin/kafka-consumer-groups.sh \
+      --bootstrap-server localhost:9092 --describe --group intel-indexer 2>/dev/null \
+      | awk 'NR>1 && $6 ~ /^[0-9]+$/ {l+=$6; seen=1} END {print (seen ? l : "not committed yet")}')"
+    printf '  %-16s %-10s %s\n' "kafka" "UP" "broker on :9092, ingest lag ${lag:-unknown}"
+    if curl -fsS -o /dev/null http://localhost:8081/ 2>/dev/null; then
+      printf '  %-16s %-10s %s\n' "kafka-console" "UP" "http://localhost:8081"
+    else
+      printf '  %-16s %-10s %s\n' "kafka-console" "DOWN" "not responding on :8081"
+    fi
   else
-    printf '  %-16s %-10s %s\n' "ingest" "OFF" "HYPERION_INGEST=0"
+    printf '  %-16s %-10s %s\n' "kafka" "DOWN" "not answering on :9092"
+  fi
+
+  if pid_of ingest >/dev/null; then
+    printf '  %-16s %-10s %s\n' "siphon" "UP" "pid $(pid_of ingest), polling every ${SIPHON_POLL_INTERVAL:-10m}"
+  elif ingest_enabled; then
+    printf '  %-16s %-10s %s\n' "siphon" "DOWN" "-"
+  else
+    printf '  %-16s %-10s %s\n' "siphon" "OFF" "HYPERION_INGEST=0"
   fi
 
   local rows docs

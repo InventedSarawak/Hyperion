@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/inventedsarawak/hyperion/packages/common/config"
+	"github.com/inventedsarawak/hyperion/packages/common/kafka"
 )
 
 // Service is the config namespace for this microservice.
@@ -35,8 +36,26 @@ type Config struct {
 	GSD           GSDConfig
 
 	RepoScan RepoScanConfig
+	Kafka    KafkaConfig
 
 	loader *config.Loader
+}
+
+// KafkaConfig chooses where published events go.
+//
+// Kafka is the default: the running system needs durability and replay, which
+// a pipe cannot give it. Stdout is kept, not left behind — `task ingest` and
+// `task backfill` set SIPHON_KAFKA_ENABLED=false and pipe siphon into cortex,
+// which is still the simplest way to run the whole chain in one command. Both
+// are adapters behind the same port, which is the point of the hexagon: the
+// workflow above them cannot tell the difference.
+type KafkaConfig struct {
+	// Enabled publishes to Kafka instead of stdout.
+	Enabled bool
+	Brokers []string
+	Topic   string
+	// Partitions applies only when siphon has to create the topic.
+	Partitions int
 }
 
 // RepoScanConfig drives the supply-chain half of ingestion: reading tracked
@@ -226,6 +245,13 @@ func Load() Config {
 			BaseURL:       l.String("GITHUB_BASE_URL", DefaultGitHubBaseURL),
 			Token:         l.Secret("GITHUB_TOKEN"),
 			CortexAddr:    l.String("CORTEX_GRPC_ADDR", DefaultCortexGRPCAddr),
+		},
+
+		Kafka: KafkaConfig{
+			Enabled:    l.Bool("KAFKA_ENABLED", true),
+			Brokers:    l.List("KAFKA_BROKERS", []string{kafka.DefaultBroker}),
+			Topic:      l.String("KAFKA_TOPIC", kafka.TopicSignals),
+			Partitions: l.Int("KAFKA_PARTITIONS", kafka.DefaultPartitions),
 		},
 	}
 }

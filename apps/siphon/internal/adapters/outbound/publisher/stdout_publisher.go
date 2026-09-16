@@ -49,6 +49,12 @@ func (p *Stdout) Publish(_ context.Context, evt events.SignalDiscovered) error {
 	return nil
 }
 
+// Flush is a no-op: a write to the underlying writer has already happened by
+// the time Publish returns, so there is nothing buffered here to make durable.
+// The method exists because the port promises it — the Kafka publisher is the
+// one that genuinely batches.
+func (p *Stdout) Flush(context.Context) error { return nil }
+
 // --- mapping: domain -> wire contract ---
 
 func toProto(evt events.SignalDiscovered) *eventsv1.SignalDiscovered {

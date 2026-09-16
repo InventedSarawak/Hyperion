@@ -88,7 +88,8 @@ func main() {
 	}
 
 	// Compose the hexagon: outbound adapters -> use case -> inbound adapter.
-	pub := publisher.NewStdout(os.Stdout)
+	pub, closePub := buildPublisher(ctx, logger, cfg)
+	defer closePub()
 	poll := workflows.NewPollSources(clients, pub)
 	sched := scheduler.New(poll, cfg.PollInterval, cfg.Lookback)
 
@@ -107,6 +108,37 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("siphon stopped")
+}
+
+// buildPublisher chooses where published events go, and is the only place in
+// siphon that knows there is a choice.
+//
+// A configured broker that cannot be reached is fatal rather than a fallback
+// to stdout. Falling back would look like it worked: siphon runs detached,
+// so its stdout goes to a log file, and every finding would be written into
+// something nothing reads.
+func buildPublisher(ctx context.Context, logger *slog.Logger, cfg siphonconfig.Config) (ports.SignalPublisher, func()) {
+	if !cfg.Kafka.Enabled {
+		logger.Info("publishing signals to stdout (set SIPHON_KAFKA_ENABLED=true for the broker)")
+		return publisher.NewStdout(os.Stdout), func() {}
+	}
+
+	pub, err := publisher.NewKafka(ctx, publisher.KafkaConfig{
+		Brokers:    cfg.Kafka.Brokers,
+		Topic:      cfg.Kafka.Topic,
+		Partitions: int32(cfg.Kafka.Partitions),
+	}, logger)
+	if err != nil {
+		logger.Error("kafka publisher unavailable", "brokers", cfg.Kafka.Brokers, "error", err)
+		os.Exit(1)
+	}
+	return pub, func() {
+		// Close flushes: whatever the last poll buffered is sent before the
+		// process goes away.
+		if err := pub.Close(); err != nil {
+			logger.Error("kafka publisher did not flush cleanly", "error", err)
+		}
+	}
 }
 
 // startRepositoryScan runs the watchlist scanner in the background,
@@ -261,12 +293,23 @@ func runBackfill(ctx context.Context, logger *slog.Logger, cfg siphonconfig.Conf
 	}
 
 	logger.Info("backfill starting", "from", from.Format(time.DateOnly), "sources", sourcesFlag)
-	published, err := workflows.NewBackfill(backfillers, publisher.NewStdout(os.Stdout)).Run(ctx, from)
-	if err != nil {
+	pub, closePub := buildPublisher(ctx, logger, cfg)
+	defer closePub()
+
+	published, err := workflows.NewBackfill(backfillers, pub).Run(ctx, from)
+	switch {
+	// Ctrl+C is how a run measured in hours is meant to be cut short, so it
+	// reports what got out and exits clean — the same courtesy the poll loop
+	// already extends. Exiting non-zero here called every deliberate stop a
+	// failure.
+	case errors.Is(err, context.Canceled):
+		logger.Info("backfill stopped early", "published", published)
+	case err != nil:
 		logger.Error("backfill finished with errors", "published", published, "error", err)
 		os.Exit(1)
+	default:
+		logger.Info("backfill complete", "published", published)
 	}
-	logger.Info("backfill complete", "published", published)
 }
 
 // splitList parses a comma-separated flag value, ignoring empty entries.

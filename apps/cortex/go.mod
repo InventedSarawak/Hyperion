@@ -7,6 +7,7 @@ require (
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.4
 	github.com/onsi/ginkgo/v2 v2.31.0
 	github.com/onsi/gomega v1.42.0
+	github.com/redis/go-redis/v9 v9.22.0
 	google.golang.org/grpc v1.83.1
 	google.golang.org/protobuf v1.36.12
 )
@@ -17,8 +18,13 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/joho/godotenv v1.5.1 // indirect
-	github.com/redis/go-redis/v9 v9.22.0 // indirect
+	github.com/klauspost/compress v1.19.2 // indirect
+	github.com/pierrec/lz4/v4 v4.1.26 // indirect
+	github.com/twmb/franz-go v1.21.7 // indirect
+	github.com/twmb/franz-go/pkg/kadm v1.18.0 // indirect
+	github.com/twmb/franz-go/pkg/kmsg v1.13.1 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
+	golang.org/x/crypto v0.51.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 )
 

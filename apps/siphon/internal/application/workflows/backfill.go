@@ -96,7 +96,17 @@ func (b *Backfill) runSource(ctx context.Context, source ports.Backfiller, from 
 		}
 		return nil
 	})
-	return published, err
+	if err != nil {
+		return published, err
+	}
+
+	// The source is only reported as backfilled once the broker holds every
+	// event: a backfill runs for half an hour and is not repeated, so an
+	// unflushed tail would be history quietly missing from the store.
+	if err := b.publisher.Flush(ctx); err != nil {
+		return published, publishError{fmt.Errorf("backfill %s: flush: %w", kind, err)}
+	}
+	return published, nil
 }
 
 // publishError marks a failure to hand an event downstream, as opposed to a

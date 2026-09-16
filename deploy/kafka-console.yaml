@@ -1,0 +1,30 @@
+# Redpanda Console — a read-only window onto the event backbone for local
+# development. It speaks the Kafka protocol, so it works against the Apache
+# Kafka broker in this compose file; nothing here is Redpanda-specific.
+#
+# Docs: https://docs.redpanda.com/current/console/config/
+kafka:
+  brokers:
+    # The DOCKER listener, because Console is a container: the HOST listener
+    # advertises "localhost", which inside a container means the container.
+    - kafka:29092
+
+
+# Records are binary protobuf. Without this, every message shows as base64.
+# The .proto files are mounted straight from packages/contracts, so what
+# Console renders is what the contracts actually say — there is no second copy
+# to drift out of date.
+serde:
+  protobuf:
+    enabled: true
+    mappings:
+      - topicName: hyperion.signals.v1
+        valueProtoType: hyperion.events.v1.SignalDiscovered
+    fileSystem:
+      enabled: true
+      paths:
+        - /etc/hyperion/proto
+      refreshInterval: 5m
+
+server:
+  listenPort: 8080

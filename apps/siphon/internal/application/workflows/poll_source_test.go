@@ -31,6 +31,10 @@ func (f *fakeSource) Fetch(context.Context, time.Time) ([]model.SourceSignal, er
 type capturingPublisher struct {
 	published []events.SignalDiscovered
 	failOn    string
+	// flushErr, when set, fails the flush that ends a run — the case where
+	// every event was accepted but the broker never confirmed them.
+	flushErr error
+	flushes  int
 }
 
 func (c *capturingPublisher) Publish(_ context.Context, evt events.SignalDiscovered) error {
@@ -41,6 +45,11 @@ func (c *capturingPublisher) Publish(_ context.Context, evt events.SignalDiscove
 	return nil
 }
 
+func (c *capturingPublisher) Flush(context.Context) error {
+	c.flushes++
+	return c.flushErr
+}
+
 var _ = Describe("PollSource use case", func() {
 	var (
 		ctx = context.Background()
@@ -48,6 +57,34 @@ var _ = Describe("PollSource use case", func() {
 	)
 
 	BeforeEach(func() { pub = &capturingPublisher{} })
+
+	It("fails the run when the batch was accepted but never confirmed", func() {
+		pub.flushErr = errors.New("broker unreachable")
+		src := &fakeSource{
+			kind:    valueobject.SourceKindNVD,
+			signals: []model.SourceSignal{{CVEID: "CVE-2021-44228"}},
+		}
+
+		_, err := workflows.NewPollSource(src, pub).Run(ctx, time.Time{})
+
+		// The scheduler advances its watermark only on success. If an
+		// unconfirmed batch reported success, this window would never be
+		// fetched again and those findings would be lost.
+		Expect(err).To(MatchError(ContainSubstring("flush")))
+		Expect(pub.flushes).To(Equal(1))
+	})
+
+	It("flushes once the batch is published, so the caller knows it is durable", func() {
+		src := &fakeSource{
+			kind:    valueobject.SourceKindNVD,
+			signals: []model.SourceSignal{{CVEID: "CVE-2021-44228"}},
+		}
+
+		_, err := workflows.NewPollSource(src, pub).Run(ctx, time.Time{})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pub.flushes).To(Equal(1))
+	})
 
 	It("publishes every valid signal and reports the count", func() {
 		src := &fakeSource{

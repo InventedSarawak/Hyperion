@@ -1,7 +1,11 @@
 // Command server is cortex's entrypoint. It stores vulnerabilities in
 // Postgres, indexes them in Elasticsearch, and serves the intelligence gRPC
-// API. It can additionally ingest SignalDiscovered events from stdin
-// (siphon's stdout piped in) when CORTEX_CONSUME_STDIN=true.
+// API.
+//
+// It ingests SignalDiscovered events through one of two inbound adapters:
+// the Kafka consumer (CORTEX_KAFKA_ENABLED=true), which runs alongside the
+// API, or stdin (CORTEX_CONSUME_STDIN=true) for the pipe that `task ingest`
+// and `task backfill` use, which runs instead of it and exits at EOF.
 package main
 
 import (
@@ -36,6 +40,7 @@ import (
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/application/queries"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/ports"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/platform/config"
+	"github.com/inventedsarawak/hyperion/packages/common/kafka"
 )
 
 func main() {
@@ -113,12 +118,77 @@ func main() {
 		return
 	}
 
-	if !cfg.ServeGRPC {
-		logger.Error("nothing to do: enable CORTEX_SERVE_GRPC or CORTEX_CONSUME_STDIN")
+	if !cfg.ServeGRPC && !cfg.Kafka.Enabled {
+		logger.Error("nothing to do: enable CORTEX_SERVE_GRPC, CORTEX_KAFKA_ENABLED or CORTEX_CONSUME_STDIN")
 		os.Exit(1)
 	}
-	serveGRPC(ctx, logger, cfg, search, ingestDeps, blast, manageSubs, listAlerting, repo,
-		grpcadapter.NewWatchlistServer(manageWatchlist, listWatchlist), exposure)
+
+	// Ingest and the API share a process. Cancelling this context stops both,
+	// so a consumer that gives up takes the server down with it rather than
+	// leaving cortex serving data that has quietly stopped being updated.
+	runCtx, stopRun := context.WithCancel(ctx)
+	defer stopRun()
+
+	consumerFailed := make(chan struct{})
+	if cfg.Kafka.Enabled {
+		go func() {
+			if err := runKafkaConsumer(runCtx, logger, ingest, cfg); err != nil {
+				logger.Error("kafka ingest stopped", "error", err)
+				close(consumerFailed)
+				stopRun()
+				return
+			}
+			logger.Info("kafka ingest stopped")
+		}()
+	}
+
+	if cfg.ServeGRPC {
+		serveGRPC(runCtx, logger, cfg, search, ingestDeps, blast, manageSubs, listAlerting, repo,
+			grpcadapter.NewWatchlistServer(manageWatchlist, listWatchlist), exposure)
+	} else {
+		<-runCtx.Done()
+		logger.Info("cortex stopped")
+	}
+
+	// A consumer that died is a failed run, whatever the server did.
+	select {
+	case <-consumerFailed:
+		os.Exit(1)
+	default:
+	}
+}
+
+// runKafkaConsumer reads the signal topic until the context is cancelled.
+//
+// The topic is ensured here as well as in siphon so that cortex can be started
+// first: consuming a topic that does not exist yet simply waits, and creating
+// it means the group registers and its lag is visible from the first moment.
+func runKafkaConsumer(ctx context.Context, logger *slog.Logger, ingest *commands.IngestSignal, cfg config.Config) error {
+	clientCfg := kafka.Config{Brokers: cfg.Kafka.Brokers, ClientID: "cortex"}
+	if err := kafka.EnsureTopic(ctx, clientCfg, cfg.Kafka.Topic, int32(cfg.Kafka.Partitions)); err != nil {
+		return err
+	}
+
+	c, err := kafka.NewConsumer(clientCfg, cfg.Kafka.Topic, cfg.Kafka.Group,
+		kafka.WithConsumerLogger(logger))
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	handler := consumer.NewKafkaHandler(ingest, cfg.IngestProgressEvery, logger)
+
+	// Concurrency comes from the partitions, not from CORTEX_INGEST_WORKERS:
+	// the consumer runs one goroutine per partition it is assigned, and a
+	// second cortex process takes half of them.
+	logger.Info("cortex consuming signals from kafka",
+		"brokers", cfg.Kafka.Brokers, "topic", cfg.Kafka.Topic, "group", cfg.Kafka.Group)
+
+	if err := c.Run(ctx, handler); err != nil && !errors.Is(err, context.Canceled) {
+		return err
+	}
+	logger.Info("kafka ingest finished", "ingested_this_run", handler.Processed())
+	return nil
 }
 
 // buildDependencyGraph returns the Neo4j adapter when the server answers,
@@ -175,7 +245,10 @@ func runStdinConsumer(ctx context.Context, logger *slog.Logger, ingest *commands
 		os.Exit(1)
 	}
 
-	total, _ := repo.Count(ctx)
+	// Counted on a context the interrupt did not cancel: this line is the
+	// run's receipt, and a shutdown reporting "total_in_store: 0" would be
+	// alarming and wrong.
+	total, _ := repo.Count(context.WithoutCancel(ctx))
 	logger.Info("cortex stopped", "ingested_this_run", n, "total_in_store", total)
 }
 

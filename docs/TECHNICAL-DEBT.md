@@ -73,15 +73,46 @@ Containers have healthchecks but no `restart:` policy and no memory/CPU bounds
 
 ## 2. Data Flow & Correctness
 
-### 🔴 Transport is a Unix pipe, not a message bus
+### 🟢 ~~Transport is a Unix pipe, not a message bus~~ — REPAID (v3, 2026-09-17)
 
-`siphon | cortex` — siphon writes protojson to stdout, cortex reads stdin.
+Kafka is the transport: topic `hyperion.signals.v1`, 6 partitions, consumer group
+`intel-indexer`, records keyed by finding id. `task up` runs siphon and cortex as
+independent services over the broker; `scripts/system.sh` no longer builds a pipeline.
+It cost exactly what the hexagon promised — one new outbound adapter in siphon, one
+new inbound adapter in cortex, and no change to a domain type or a use case.
 
-- **Why:** it proved the whole contract boundary end-to-end without standing up Kafka.
-- **Cost:** no durability, no replay, no consumer groups, no backpressure. If cortex
-  dies mid-stream those events are gone. Producer and consumer must run as a pair.
-- **Fix in v3:** Kafka `raw-signals` topic. Only the publisher and consumer adapters
-  change — the domain and use cases do not (this is the payoff of the hexagon).
+- **What the system gained:** durability (7-day retention), replay from the last
+  committed offset, consumer groups, backpressure, and two services that no longer
+  have to live and die together.
+- **What remains of the pipe:** `task ingest` and `task backfill` still run
+  `siphon | cortex` deliberately — one command that loads data and reports what it
+  stored is genuinely the point there. They opt out explicitly.
+
+### 🟡 No dead-letter topic
+
+A record that fails to ingest is retried (5 attempts, doubling backoff) and then
+**stops the consumer** without committing.
+
+- **Why:** the alternative — logging and committing past it — silently loses data
+  during a database outage, which is the failure that matters most here. Stopping
+  loudly is the safe half of the trade.
+- **Cost:** a record that can never succeed halts ingest until someone intervenes.
+  Decode failures are already exempt (they are skipped as unprocessable), so this
+  needs a genuinely poisonous _ingest_, but the failure mode is real.
+- **Fix:** publish exhausted records to `hyperion.signals.v1.dlq` with the failure
+  attached, commit past them, and alert on the topic being non-empty.
+
+### 🟢 Topics are created by the services that use them
+
+`EnsureTopic` runs at startup in both siphon and cortex.
+
+- **Why:** the alternative during development is broker auto-creation, which gives
+  whatever partition count the broker defaults to — and partition count is the one
+  setting that cannot be lowered later.
+- **Cost:** topology is defined in application startup code rather than declared with
+  the infrastructure, so it is invisible to anyone reading `deploy/`.
+- **Fix in v4:** declare topics with the rest of the infrastructure, and drop the
+  startup call.
 
 ### 🟡 Ingestion watermark is in-memory only
 
@@ -315,6 +346,20 @@ port can query everything.
 - **Cost:** fine while both ends are on localhost; unacceptable the moment the
   services are on separate hosts.
 - **Fix in v4:** mTLS, or a service mesh handling transport security.
+
+### 🟡 Kafka runs plaintext with no authentication
+
+The broker listens PLAINTEXT on 9092 with no SASL, no TLS and no ACLs, and runs as a
+single node with replication factor 1.
+
+- **Why:** same trade as Postgres and Elasticsearch below — local development only.
+- **Cost:** anyone who can reach the port can read every advisory event or publish
+  forged ones. A single broker also means no durability against losing that broker.
+- **Fix in v4:** SASL/TLS and ACLs per service, and a replicated cluster.
+
+The Kafka console on `:8081` inherits this: no login, and anyone who reaches it can read
+every event on the topic. It is a development tool in the compose file, and must not be
+exposed anywhere shared.
 
 ### 🟡 Elasticsearch security disabled
 

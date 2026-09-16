@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/inventedsarawak/hyperion/packages/common/config"
+	"github.com/inventedsarawak/hyperion/packages/common/kafka"
 )
 
 // Service is the config namespace for this microservice.
@@ -23,6 +24,8 @@ const (
 	DefaultNeo4jDatabase    = "neo4j"
 	DefaultRedisAddr        = "localhost:6379"
 	DefaultSubscriptionIdx  = "hyperion-subscriptions"
+	// DefaultConsumerGroup names cortex's ingest group on the signal topic.
+	DefaultConsumerGroup = "intel-indexer"
 )
 
 // Config holds cortex's runtime settings.
@@ -60,7 +63,29 @@ type Config struct {
 	GitHubBaseURL string
 	GitHubToken   string
 
+	Kafka KafkaConfig
+
 	loader *config.Loader
+}
+
+// KafkaConfig drives the event-backbone consumer, which is how cortex is fed
+// by default.
+//
+// This is a second inbound adapter, not a second service: cortex consumes the
+// topic and serves the API in one process. ConsumeStdin remains for the pipe
+// (`task ingest`, `task backfill`) and takes precedence over this when set —
+// a piped run reads its events from stdin and exits at EOF.
+type KafkaConfig struct {
+	Enabled bool
+	Brokers []string
+	Topic   string
+	// Group is the consumer group. Every member of one group shares the
+	// partitions between them; a second group would read the same records
+	// again, independently — which is how relic (v4) will archive the same
+	// firehose without disturbing ingest.
+	Group string
+	// Partitions applies only when cortex has to create the topic.
+	Partitions int
 }
 
 // Load reads configuration from the environment, applying defaults.
@@ -104,6 +129,14 @@ func Load() Config {
 
 		GitHubBaseURL: l.String("GITHUB_BASE_URL", "https://api.github.com"),
 		GitHubToken:   l.Secret("GITHUB_TOKEN"),
+
+		Kafka: KafkaConfig{
+			Enabled:    l.Bool("KAFKA_ENABLED", true),
+			Brokers:    l.List("KAFKA_BROKERS", []string{kafka.DefaultBroker}),
+			Topic:      l.String("KAFKA_TOPIC", kafka.TopicSignals),
+			Group:      l.String("KAFKA_GROUP", DefaultConsumerGroup),
+			Partitions: l.Int("KAFKA_PARTITIONS", kafka.DefaultPartitions),
+		},
 	}
 }
 

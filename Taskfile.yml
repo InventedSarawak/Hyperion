@@ -62,7 +62,7 @@ tasks:
         done
 
   infra:up:
-    desc: Start local infrastructure (Postgres, Elasticsearch, Neo4j) via docker compose
+    desc: Start local infrastructure (Postgres, Elasticsearch, Neo4j, Redis, Kafka + console) via docker compose
     cmds:
       - docker compose -f deploy/docker-compose.yml up -d
 
@@ -72,13 +72,13 @@ tasks:
       - docker compose -f deploy/docker-compose.yml down {{.CLI_ARGS}}
 
   run:siphon:
-    desc: Run the ingestion worker (events to stdout, logs to stderr)
+    desc: Run the ingestion worker (publishes SignalDiscovered to the Kafka topic)
     dir: apps/siphon
     cmds:
       - go run ./cmd/worker
 
   run:cortex:
-    desc: Run the intelligence service (gRPC search API)
+    desc: Run the intelligence service (consumes the Kafka topic, serves the gRPC API)
     dir: apps/cortex
     cmds:
       - go run ./cmd/server
@@ -131,18 +131,20 @@ tasks:
   backfill:
     desc: 'Load history into cortex: NVD + OSV exports since a date (default 10 years). Override: task backfill -- -backfill-from 2019-01-01 -backfill-sources osv'
     cmds:
+      # A self-contained pipe on purpose: one command loads history and reports
+      # what was stored. Both halves opt out of the broker to do it.
       - |
         set -e
-        cd apps/siphon && go run ./cmd/worker -backfill {{.CLI_ARGS}} | \
-          (cd ../cortex && CORTEX_CONSUME_STDIN=true go run ./cmd/server)
+        cd apps/siphon && SIPHON_KAFKA_ENABLED=false go run ./cmd/worker -backfill {{.CLI_ARGS}} | \
+          (cd ../cortex && CORTEX_CONSUME_STDIN=true CORTEX_KAFKA_ENABLED=false go run ./cmd/server)
 
   ingest:
-    desc: Pipe one siphon poll straight into cortex (siphon | cortex)
+    desc: Pipe one siphon poll straight into cortex, bypassing Kafka (siphon | cortex)
     cmds:
       - |
         set -e
-        cd apps/siphon && go run ./cmd/worker 2>/dev/null | \
-          (cd ../cortex && CORTEX_CONSUME_STDIN=true go run ./cmd/server)
+        cd apps/siphon && SIPHON_KAFKA_ENABLED=false go run ./cmd/worker 2>/dev/null | \
+          (cd ../cortex && CORTEX_CONSUME_STDIN=true CORTEX_KAFKA_ENABLED=false go run ./cmd/server)
 
   test:go:integration:
     desc: Run Go tests including the Postgres/Elasticsearch/Neo4j/Redis integration suites
@@ -151,6 +153,7 @@ tasks:
       CORTEX_TEST_ELASTICSEARCH_URL: http://localhost:9200
       CORTEX_TEST_NEO4J_URI: bolt://localhost:7687
       CORTEX_TEST_REDIS_ADDR: localhost:6379
+      HYPERION_TEST_KAFKA_BROKERS: localhost:9092
     cmds:
       - ./scripts/test-go-files.sh
 
@@ -168,6 +171,31 @@ tasks:
       HYPERION_E2E_NEXUS_URL: http://localhost:8080/graphql
     cmds:
       - go test ./... {{.CLI_ARGS}}
+
+  topic:tail:
+    desc: 'Print what is on the signal topic, decoded: task topic:tail -- -limit 5 -from-start [-keys]'
+    dir: apps/cortex
+    cmds:
+      - go run ./cmd/tail {{.CLI_ARGS}}
+
+  topic:lag:
+    desc: Show how far behind the ingest consumer group is, per partition
+    cmds:
+      - |
+        docker exec hyperion-kafka /opt/kafka/bin/kafka-consumer-groups.sh \
+          --bootstrap-server localhost:9092 --describe --group intel-indexer
+
+  topic:ui:
+    desc: Open the Kafka console in a browser (topics, decoded messages, consumer lag)
+    cmds:
+      - '{{if eq OS "darwin"}}open{{else}}xdg-open{{end}} http://localhost:8081'
+
+  topic:describe:
+    desc: Show the signal topic's partitions and settings
+    cmds:
+      - |
+        docker exec hyperion-kafka /opt/kafka/bin/kafka-topics.sh \
+          --bootstrap-server localhost:9092 --describe --topic hyperion.signals.v1
 
   codegen:
     desc: Generate Go code from protobuf contracts (buf + local protoc-gen plugins)

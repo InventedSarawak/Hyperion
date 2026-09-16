@@ -148,18 +148,29 @@ Registered in `docs/TECHNICAL-DEBT.md`. Highest-value items, roughly in order:
 
 ### Infrastructure Upgrade
 
-- [ ] Add **Apache Kafka** & Zookeeper to `docker-compose.yml`
-- [ ] Add **Redis** (for caching/deduplication)
-- [ ] Create `packages/common/kafka` (Producer/Consumer wrappers)
+- [x] Add **Apache Kafka** to `docker-compose.yml` — 4.1.0 in **KRaft** mode, single
+      node, healthchecked. (No ZooKeeper: it was removed in Kafka 4.0.)
+- [x] Add **Redis** (for caching/deduplication) — landed with alerting, 2026-09-09
+- [x] Create `packages/common/kafka` (Producer/Consumer wrappers) — franz-go, with a
+      protobuf codec, group-free `Tail` for debugging, `EnsureTopic`, and lag reporting
 
 ### Refactor: Event-Driven Architecture
 
-- [ ] **Ingestion Worker:** Stop writing to DB directly.
-  - [ ] Create `KafkaProducer` adapter
-  - [ ] Push events to topic `raw-signals`
-- [ ] **Intelligence Service:**
-  - [ ] Create `KafkaConsumer` adapter (Group: `intel-indexer`)
-  - [ ] Process events: `Kafka -> Elastic/Neo4j`
+- [x] **Ingestion Worker:** publish to the broker instead of stdout
+  - [x] Create `KafkaProducer` adapter (`adapters/outbound/publisher/kafka_publisher.go`)
+  - [x] Push events to topic `hyperion.signals.v1`, keyed by finding id
+  - [x] `SignalPublisher` port gained `Flush`, so a poll's watermark cannot advance past
+        events the broker never acknowledged
+- [x] **Intelligence Service:**
+  - [x] Create `KafkaConsumer` adapter (Group: `intel-indexer`) — runs alongside the gRPC API
+  - [x] Process events: `Kafka -> Postgres/Elastic/Neo4j`
+- [x] **Make it the default (2026-09-17):** `task up` runs siphon and cortex as
+      independent services over the broker. The pipe survives only where it is wanted —
+      `task ingest` and `task backfill`, which opt out explicitly
+- [ ] **Repository scans:** publish `DependencyObserved` instead of the synchronous
+      `IngestDependencies` gRPC call (registered in TECHNICAL-DEBT.md)
+- [ ] Dead-letter topic, so a permanently failing record does not halt ingest
+- [ ] Persist siphon's ingestion watermark (Redis `CheckpointStore`)
 
 ### Feature: Real-Time Alerts — DONE (2026-09-09)
 

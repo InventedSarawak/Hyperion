@@ -37,6 +37,11 @@ func NewPollSource(source ports.SourceClient, publisher ports.SignalPublisher) *
 // Run fetches signals discovered since `since`, wraps each valid one as a
 // SignalDiscovered event, and publishes it. It returns the number published.
 // Invalid signals are skipped; a publish failure stops the run and is returned.
+//
+// The run is not complete until the publisher has been flushed. On a broker,
+// Publish only buffers — returning success before the flush would let the
+// scheduler advance its watermark past events the broker never received, and
+// those signals would never be fetched again.
 func (p *PollSource) Run(ctx context.Context, since time.Time) (int, error) {
 	signals, err := p.source.Fetch(ctx, since)
 	if err != nil {
@@ -58,6 +63,10 @@ func (p *PollSource) Run(ctx context.Context, since time.Time) (int, error) {
 		// exactly what is wanted when following a single one through.
 		p.log.Debug("published", "source", p.source.Kind().String(), "id", sig.CVEID,
 			"kind", string(sig.Kind), "packages", len(sig.AffectedPackages))
+	}
+
+	if err := p.publisher.Flush(ctx); err != nil {
+		return published, fmt.Errorf("poll source %s: flush: %w", p.source.Kind(), err)
 	}
 	return published, nil
 }

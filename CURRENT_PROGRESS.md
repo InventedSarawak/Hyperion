@@ -5,7 +5,58 @@ before each commit; move superseded entries into the changelog at the bottom.
 
 ---
 
-## Latest Update — 2026-09-07
+## Latest Update — 2026-09-17
+
+### Overall status
+
+**v3: Hyperion runs on an event backbone.** siphon publishes to Kafka and cortex consumes
+it, with per-finding ordering, committed offsets and replay verified against a live
+broker. `task up` now starts them as **independent services** — siphon keeps publishing
+while cortex is down, and cortex resumes from its last committed offset when it returns.
+The `siphon | cortex` pipe survives only where it is wanted: `task ingest` and
+`task backfill`, which opt out explicitly.
+
+### What landed
+
+| Area           | What landed                                                                                                                                                                                                                                                                        |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Infrastructure | **Kafka 4.1.0 in KRaft mode** in compose — single node, no ZooKeeper (removed in Kafka 4.0), healthchecked, three listeners so the host, other containers and the controller each reach it correctly; 5 MiB max record size, because a long advisory exceeds Kafka's 1 MiB default |
+| Shared package | **`packages/common/kafka`** (franz-go): producer, consumer group, protobuf codec, `EnsureTopic`, group-free `Tail`, lag reporting. Only this package imports a Kafka client — services depend on its `Message`/`Handler` types                                                     |
+| siphon         | `kafka_publisher.go` beside the stdout publisher, both behind `SignalPublisher`. Records keyed by **finding id**                                                                                                                                                                   |
+| Port change    | `SignalPublisher` gained **`Flush`**: publishing is batched, so a poll must confirm durability before the scheduler advances its watermark, or a restart skips a window that was never published                                                                                   |
+| cortex         | `KafkaHandler` reusing the stdin consumer's proto→domain mapping; runs **alongside** the gRPC API, and a consumer that gives up takes the server down with it                                                                                                                      |
+| Tooling        | `topic:tail` (decodes records to protojson), `topic:lag`, `topic:describe`; `task up` starts siphon as its own service and reports ingest lag in `task status`                                                                                                                     |
+
+### Verified end to end
+
+Live NVD → siphon → Kafka → cortex → Postgres/Elasticsearch/Neo4j:
+
+- **416 records** on `hyperion.signals.v1`, spread across all 6 partitions (52–82 each)
+- cortex consumed all 416 as group `intel-indexer`; **lag 0 on every partition** afterwards,
+  so a restart resumes rather than re-reads
+- 16 specs in `packages/common/kafka`, 4 of them against the real broker: per-key
+  ordering, commit-and-resume, poison-record skip, and failure-without-commit replay
+
+Two real defects surfaced in that testing and were fixed: every poll must re-allow group
+rebalancing or `Close` hangs forever, and lag read from a group that has not formed yet
+reports nothing, which must not be read as "caught up".
+
+**Then the switch itself was tested.** cortex was killed with `SIGKILL` before it had
+committed anything (`CURRENT-OFFSET` still `-`); on restart it re-read the whole topic —
+787 records, `ingested_this_run: 787` — and finished at `committed=787 end=787 LAG=0`.
+The full stack was then torn down and brought back up on the broker: every component up,
+lag 0, Postgres and Elasticsearch in agreement at 546,868, and a GraphQL query through
+nexus returning findings with cross-source provenance (`["package_feed","nvd"]`) intact.
+
+### What is deliberately not done
+
+- Repository scans still call cortex over synchronous gRPC
+- No dead-letter topic: a record that fails ingest past its retries halts the consumer
+- No streaming to deck, no load test — both still open in v3
+
+---
+
+## v2 complete — 2026-09-07
 
 ### Overall status
 
@@ -325,6 +376,12 @@ not started.**
 
 ## Changelog
 
+- **2026-09-17** — v3: Kafka 4.1 (KRaft) in compose, `packages/common/kafka` (franz-go
+  producer/consumer/codec/admin/tail), siphon Kafka publisher, cortex Kafka consumer
+  group `intel-indexer`, `Flush` on the `SignalPublisher` port, topic tooling, and
+  `task up` switched to run siphon and cortex as independent services over the broker.
+  The pipe remains for `task ingest` / `task backfill`. Verified by SIGKILL-and-replay
+  (787 records, lag 0) and a full stack restart.
 - **2026-09-09** — Real-time alerts: `Subscription`/`AlertRule`/`Alert` domain,
   Elasticsearch percolator for reverse search, Redis deduplication, `AlertingService` gRPC
   API, and alert raising wired into ingest. Redis added to compose.
