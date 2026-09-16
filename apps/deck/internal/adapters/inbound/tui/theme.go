@@ -1,8 +1,9 @@
 package tui
 
 import (
-	"github.com/inventedsarawak/hyperion/apps/deck/internal/domain/model"
 	"strings"
+
+	"github.com/inventedsarawak/hyperion/apps/deck/internal/domain/model"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -18,18 +19,17 @@ var (
 )
 
 var (
-	styleBrand   = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
-	styleTitle   = lipgloss.NewStyle().Bold(true).Foreground(colText)
-	styleDim     = lipgloss.NewStyle().Foreground(colMuted)
-	styleFaint   = lipgloss.NewStyle().Foreground(colFaint)
-	styleError   = lipgloss.NewStyle().Bold(true).Foreground(colAlarm)
-	styleSelect  = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
-	styleCVE     = lipgloss.NewStyle().Foreground(colAccent)
-	styleTree    = lipgloss.NewStyle().Foreground(lipgloss.Color("109"))
-	styleTabOn   = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
-	styleTabOff  = lipgloss.NewStyle().Foreground(colMuted)
-	stylePrompt  = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
-	_ = lipgloss.NewStyle().Foreground(colMuted)
+	styleBrand  = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
+	styleTitle  = lipgloss.NewStyle().Bold(true).Foreground(colText)
+	styleDim    = lipgloss.NewStyle().Foreground(colMuted)
+	styleFaint  = lipgloss.NewStyle().Foreground(colFaint)
+	styleError  = lipgloss.NewStyle().Bold(true).Foreground(colAlarm)
+	styleSelect = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
+	styleCVE    = lipgloss.NewStyle().Foreground(colAccent)
+	styleTree   = lipgloss.NewStyle().Foreground(lipgloss.Color("109"))
+	styleTabOn  = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
+	styleTabOff = lipgloss.NewStyle().Foreground(colMuted)
+	stylePrompt = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
 )
 
 // severityStyle colours a rating by how much it should alarm the reader.
