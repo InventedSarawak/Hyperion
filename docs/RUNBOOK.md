@@ -545,6 +545,14 @@ ingests merge to the same record, so the replay is invisible in the data. Verifi
 killing cortex with `SIGKILL` before it had committed anything: on restart it re-read the
 whole topic and finished at lag 0.
 
+**When ingest sets a record aside.** `task topic:dlq` lists what failed, with the reason,
+the attempt count and where it came from. An empty list is the healthy state, and the
+command returns immediately when there is nothing there. `task topic:dlq -- -replay`
+republishes them onto the signal topic unchanged, which is what to run after fixing
+whatever rejected them. If cortex stopped with `records in a row could not be processed`,
+that is the circuit breaker: something shared was broken, not the records — fix it and
+restart, and nothing will have been lost.
+
 **Which log is which.** `task logs` tails all three; individually,
 `.run/cortex.log` is the **consumer** (group joins, ingest progress, retries, skipped
 records), `.run/ingest.log` is **siphon** (per-source polls and what it published), and
@@ -577,29 +585,32 @@ logged instead, so one bad record cannot block the ones behind it.
 
 ## 8. Command reference
 
-| Command                    | What it does                                         |
-| :------------------------- | :--------------------------------------------------- |
-| `task up`                  | infra + cortex + nexus, with health gates            |
-| `task down`                | stop services, then infra (volumes kept)             |
-| `task restart`             | rebuild + restart services; infra keeps running      |
-| `task status`              | health, row/document/graph counts                    |
-| `task logs`                | tail cortex + nexus                                  |
-| `task ingest`              | one siphon poll piped into cortex, bypassing Kafka   |
-| `task backfill`            | load 10 years of NVD + OSV history, then exit        |
-| `task scan`                | scan every tracked repository now, then exit         |
-| `task blast -- <CVE>`      | blast radius for one CVE (needs `grpcurl`)           |
-| `task run:deck`            | the terminal UI                                      |
-| `task sources:check`       | probe all ten ingestion sources and report           |
-| `task run:siphon`          | ingestion worker, publishing to the signal topic     |
-| `task run:cortex`          | intelligence service: consumes the topic, serves API |
-| `task topic:tail`          | print the topic's events, decoded                    |
-| `task topic:lag`           | how far behind ingest is, per partition              |
-| `task topic:describe`      | the signal topic's partitions and settings           |
-| `task infra:up` / `:down`  | containers only                                      |
-| `task test:go`             | all Go tests                                         |
-| `task test:go:integration` | including Postgres / Elasticsearch / Neo4j / Kafka   |
-| `task build:go`            | compile every Go service                             |
-| `task codegen`             | regenerate Go from the protobuf contracts            |
+| Command                     | What it does                                         |
+| :-------------------------- | :--------------------------------------------------- |
+| `task up`                   | infra + cortex + nexus, with health gates            |
+| `task down`                 | stop services, then infra (volumes kept)             |
+| `task restart`              | rebuild + restart services; infra keeps running      |
+| `task status`               | health, row/document/graph counts                    |
+| `task logs`                 | tail cortex + nexus                                  |
+| `task ingest`               | one siphon poll piped into cortex, bypassing Kafka   |
+| `task backfill`             | load 10 years of NVD + OSV history, then exit        |
+| `task scan`                 | scan every tracked repository now, then exit         |
+| `task blast -- <CVE>`       | blast radius for one CVE (needs `grpcurl`)           |
+| `task run:deck`             | the terminal UI                                      |
+| `task sources:check`        | probe all ten ingestion sources and report           |
+| `task run:siphon`           | ingestion worker, publishing to the signal topic     |
+| `task run:cortex`           | intelligence service: consumes the topic, serves API |
+| `task topic:tail`           | print the topic's events, decoded                    |
+| `task topic:ui`             | open the Kafka console at :8081                      |
+| `task topic:dlq`            | records ingest could not process, and why            |
+| `task topic:dlq -- -replay` | put those records back on the signal topic           |
+| `task topic:lag`            | how far behind ingest is, per partition              |
+| `task topic:describe`       | the signal topic's partitions and settings           |
+| `task infra:up` / `:down`   | containers only                                      |
+| `task test:go`              | all Go tests                                         |
+| `task test:go:integration`  | including Postgres / Elasticsearch / Neo4j / Kafka   |
+| `task build:go`             | compile every Go service                             |
+| `task codegen`              | regenerate Go from the protobuf contracts            |
 
 ## Watching ingest
 
