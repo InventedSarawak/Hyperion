@@ -26,6 +26,14 @@ func NewPollSources(clients []ports.SourceClient, publisher ports.SignalPublishe
 	return &PollSources{pollers: pollers, log: slog.Default()}
 }
 
+// WithDedupe applies the same suppression to every source's poll.
+func (p *PollSources) WithDedupe(store ports.DedupeStore, window time.Duration) *PollSources {
+	for _, poller := range p.pollers {
+		poller.WithDedupe(store, window)
+	}
+	return p
+}
+
 // Run polls every source in turn and reports the total number of events
 // published across all of them.
 func (p *PollSources) Run(ctx context.Context, since time.Time) (int, error) {

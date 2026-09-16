@@ -21,6 +21,10 @@ type PollSource struct {
 	publisher ports.SignalPublisher
 	now       func() time.Time
 	log       *slog.Logger
+
+	// dedupe, when set, suppresses observations already published.
+	dedupe       ports.DedupeStore
+	dedupeWindow time.Duration
 }
 
 // NewPollSource wires the use case with its outbound ports. Concrete adapters
@@ -32,6 +36,22 @@ func NewPollSource(source ports.SourceClient, publisher ports.SignalPublisher) *
 		now:       time.Now,
 		log:       slog.Default(),
 	}
+}
+
+// WithDedupe suppresses publishing an observation that has already been
+// published inside the window.
+//
+// A poll re-reads a whole window every time, so most of what it finds is
+// something it already published — at a 10m interval over a 2h lookback, each
+// advisory is seen about twelve times. Only the first is worth sending.
+func (p *PollSource) WithDedupe(store ports.DedupeStore, window time.Duration) *PollSource {
+	if store != nil {
+		p.dedupe = store
+		if window > 0 {
+			p.dedupeWindow = window
+		}
+	}
+	return p
 }
 
 // Run fetches signals discovered since `since`, wraps each valid one as a
@@ -49,12 +69,18 @@ func (p *PollSource) Run(ctx context.Context, since time.Time) (int, error) {
 	}
 
 	discoveredAt := p.now()
-	published := 0
+	published, suppressed := 0, 0
 	for _, sig := range signals {
 		if err := sig.Validate(); err != nil {
 			continue // skip malformed signals rather than abort the batch
 		}
 		evt := events.NewSignalDiscovered(p.source.Kind(), sig, discoveredAt, "")
+
+		if !p.worthPublishing(ctx, evt) {
+			suppressed++
+			continue
+		}
+
 		if err := p.publisher.Publish(ctx, evt); err != nil {
 			return published, fmt.Errorf("poll source %s: publish %s: %w", p.source.Kind(), sig.CVEID, err)
 		}
@@ -68,7 +94,32 @@ func (p *PollSource) Run(ctx context.Context, since time.Time) (int, error) {
 	if err := p.publisher.Flush(ctx); err != nil {
 		return published, fmt.Errorf("poll source %s: flush: %w", p.source.Kind(), err)
 	}
+	if suppressed > 0 {
+		p.log.Info("suppressed observations already published",
+			"source", p.source.Kind().String(), "suppressed", suppressed, "published", published)
+	}
 	return published, nil
+}
+
+// worthPublishing reports whether this observation has not been published
+// before. With no dedupe store, everything is worth publishing.
+//
+// A store that errors also answers yes. Publishing a duplicate costs a record
+// and a merge that changes nothing; suppressing a real signal because Redis
+// was briefly unreachable loses it until the advisory is next amended. Those
+// are not comparable, so this fails open.
+func (p *PollSource) worthPublishing(ctx context.Context, evt events.SignalDiscovered) bool {
+	if p.dedupe == nil {
+		return true
+	}
+
+	first, err := p.dedupe.FirstSeen(ctx, evt.Fingerprint(), p.dedupeWindow)
+	if err != nil {
+		p.log.Warn("dedupe store unavailable; publishing without it",
+			"source", p.source.Kind().String(), "id", evt.Signal.CVEID, "error", err)
+		return true
+	}
+	return first
 }
 
 // Kind reports which source this use case polls.

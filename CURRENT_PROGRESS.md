@@ -57,6 +57,15 @@ nexus returning findings with cross-source provenance (`["package_feed","nvd"]`)
   than the lookback used to skip everything published in between. Redis being unreachable
   is a warning, not a stop.
 
+- **Observations deduplicated (2026-09-17).** A `DedupeStore` port on Redis, applied in
+  the poll workflow: each observation is fingerprinted by **content** — id, title,
+  description, scores, references, aliases, kind, dates, affected packages — and an
+  identical one inside the window (24h) is not published again. One 3h NVD window re-read
+  from scratch: 885 suppressed, 25 published. Keying on the `SignalID` alone would have
+  suppressed corrections, which is why the digest covers content rather than identity.
+  New trap, documented: wiping cortex's stores no longer refills them from the next poll —
+  clear `hyperion:siphon:seen:*` or backfill.
+
 ### What is deliberately not done
 
 - Repository scans still call cortex over synchronous gRPC

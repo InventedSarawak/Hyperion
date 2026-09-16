@@ -59,6 +59,27 @@ outage longer than the lookback used to skip everything published in between, pe
 Redis being unreachable is a warning, not a stop: siphon falls back to the in-memory
 watermark and keeps polling. `SIPHON_CHECKPOINT_ENABLED=false` turns persistence off.
 
+**Deduplication.** Even with a watermark, a window is re-read whenever a poll fails or a
+feed re-reports an unchanged record, so most of what a poll finds is something it has
+already published. Each observation is fingerprinted — a digest of its id, title,
+description, scores, references, aliases, kind, dates and affected packages — and a
+fingerprint already stored in Redis (`hyperion:siphon:seen:*`, default 24h) is not
+published again. Measured against one 3h NVD window re-read from scratch: **885 suppressed,
+25 published**.
+
+The fingerprint covers content, not just identity, so a **correction is still published** —
+a score the advisory did not carry yesterday, or a newly named affected package, changes
+the fingerprint. Suppressing those would be worse than the duplicates it avoids. List order
+is normalised first, so a feed returning the same references shuffled does not look new.
+
+> **After wiping cortex's databases**, clear the fingerprints too
+> (`redis-cli --scan --pattern 'hyperion:siphon:seen:*' | xargs redis-cli DEL`) or run
+> `task backfill` — otherwise siphon will not republish what it has already sent, and the
+> empty store stays empty until each advisory is next amended.
+
+As with the watermark, a store that errors fails open: the observation is published.
+`SIPHON_DEDUPE_ENABLED=false` turns suppression off entirely.
+
 **How to use.** `task up` runs it for you, detached (`HYPERION_INGEST=0` skips it).
 `task ingest` runs one poll in the foreground, piped into cortex, so you can watch it.
 

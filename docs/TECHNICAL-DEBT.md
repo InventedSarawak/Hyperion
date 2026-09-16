@@ -129,15 +129,26 @@ re-fetched before, 59 after.
 - **Degraded mode:** Redis unreachable is a warning, not a stop; siphon falls
   back to the in-memory watermark and keeps polling.
 
-### 🟡 No dedupe store
+### 🟢 ~~No dedupe store~~ — REPAID (v3, 2026-09-17)
 
-`DedupeStore` is designed but not implemented. Deduplication happens implicitly at
-the cortex upsert.
+`DedupeStore` is implemented on Redis and applied in the poll workflow. Each
+observation is fingerprinted (a digest of its content, not just its id) and an
+identical one inside the window is not published again. Measured on one 3h NVD
+window re-read from scratch: 885 suppressed, 25 published.
 
-- **Cost:** siphon republishes unchanged signals on every poll; cortex does a
-  read-modify-write per event regardless. Wasteful, and it will not scale to a real
-  firehose.
-- **Fix in v3:** Redis-backed `DedupeStore` keyed on the domain `SignalID`.
+- **Why a content fingerprint:** the `SignalID` is source + id, so suppressing
+  on it would drop _corrections_ — a score the advisory did not carry
+  yesterday, a newly named affected package. Those must still be published.
+- **New operational trap:** wiping cortex's databases no longer refills them
+  from the next poll, because siphon remembers having published those records.
+  Clear `hyperion:siphon:seen:*` or run a backfill. Documented in
+  CURRENT-FUNCTIONALITIES 1.1 and `.env.sample`.
+- **Fails open:** a store that errors publishes the observation anyway. A
+  duplicate costs a merge that changes nothing; a suppressed signal is lost
+  until the advisory is next amended.
+- **Not applied to the backfill:** it is a one-off load of hundreds of
+  thousands of records, and fingerprinting them all would fill Redis to no
+  purpose.
 
 ### 🟡 Single global lookback across sources of wildly different cadence
 

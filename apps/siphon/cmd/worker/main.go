@@ -16,6 +16,7 @@ import (
 
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/inbound/scheduler"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/checkpoint"
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/dedupe"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/intelligence"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/publisher"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/repos/githubrepo"
@@ -91,7 +92,10 @@ func main() {
 	// Compose the hexagon: outbound adapters -> use case -> inbound adapter.
 	pub, closePub := buildPublisher(ctx, logger, cfg)
 	defer closePub()
-	poll := workflows.NewPollSources(clients, pub)
+	seen, closeDedupe := buildDedupeStore(ctx, logger, cfg)
+	defer closeDedupe()
+
+	poll := workflows.NewPollSources(clients, pub).WithDedupe(seen, cfg.Dedupe.Window)
 
 	checkpoints, closeCheckpoints := buildCheckpointStore(ctx, logger, cfg)
 	defer closeCheckpoints()
@@ -142,6 +146,30 @@ func buildCheckpointStore(ctx context.Context, logger *slog.Logger, cfg siphonco
 	}
 
 	logger.Info("ingestion watermark persisted to redis", "addr", cfg.Checkpoint.RedisAddr)
+	return store, func() { _ = store.Close() }
+}
+
+// buildDedupeStore returns the store that suppresses republishing unchanged
+// observations, or nil when there is none.
+//
+// As with the watermark, Redis being unreachable is a warning: publishing
+// every observation is what siphon did before this existed, and it is correct
+// — merely wasteful.
+func buildDedupeStore(ctx context.Context, logger *slog.Logger, cfg siphonconfig.Config) (ports.DedupeStore, func()) {
+	if !cfg.Dedupe.Enabled {
+		logger.Info("dedupe disabled (SIPHON_DEDUPE_ENABLED=false); every observation is published")
+		return nil, func() {}
+	}
+
+	store, err := dedupe.Connect(ctx, cfg.Dedupe.RedisAddr)
+	if err != nil {
+		logger.Warn("redis unavailable; every observation will be published, including unchanged ones",
+			"addr", cfg.Dedupe.RedisAddr, "error", err)
+		return nil, func() {}
+	}
+
+	logger.Info("suppressing observations already published",
+		"addr", cfg.Dedupe.RedisAddr, "window", cfg.Dedupe.Window.String())
 	return store, func() { _ = store.Close() }
 }
 

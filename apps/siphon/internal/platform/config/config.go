@@ -13,6 +13,7 @@ import (
 	"github.com/inventedsarawak/hyperion/packages/common/kafka"
 
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/checkpoint"
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/dedupe"
 )
 
 // Service is the config namespace for this microservice.
@@ -40,6 +41,7 @@ type Config struct {
 	RepoScan   RepoScanConfig
 	Kafka      KafkaConfig
 	Checkpoint CheckpointConfig
+	Dedupe     DedupeConfig
 
 	loader *config.Loader
 }
@@ -51,6 +53,19 @@ type Config struct {
 type CheckpointConfig struct {
 	Enabled   bool
 	RedisAddr string
+}
+
+// DedupeConfig suppresses republishing observations that have not changed.
+//
+// The Window is a cost boundary, not a correctness one: forgetting early means
+// publishing something unchanged again, which is merely wasteful. It is worth
+// knowing that clearing the store (or waiting out the window) is what makes
+// siphon republish everything it has seen — after wiping cortex's databases,
+// do one or the other, or run a backfill.
+type DedupeConfig struct {
+	Enabled   bool
+	RedisAddr string
+	Window    time.Duration
 }
 
 // KafkaConfig chooses where published events go.
@@ -262,6 +277,14 @@ func Load() Config {
 		Checkpoint: CheckpointConfig{
 			Enabled:   l.Bool("CHECKPOINT_ENABLED", true),
 			RedisAddr: l.String("REDIS_ADDR", checkpoint.DefaultAddr),
+		},
+
+		Dedupe: DedupeConfig{
+			Enabled:   l.Bool("DEDUPE_ENABLED", true),
+			RedisAddr: l.String("REDIS_ADDR", dedupe.DefaultAddr),
+			// Comfortably longer than any lookback window, so an advisory is
+			// published once rather than on every poll that still sees it.
+			Window: l.Duration("DEDUPE_WINDOW", 24*time.Hour),
 		},
 
 		Kafka: KafkaConfig{

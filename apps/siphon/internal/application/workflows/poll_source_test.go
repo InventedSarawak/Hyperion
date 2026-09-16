@@ -50,6 +50,116 @@ func (c *capturingPublisher) Flush(context.Context) error {
 	return c.flushErr
 }
 
+// fakeDedupe is a stand-in DedupeStore (outbound port). It reports each
+// fingerprint as new exactly once, which is what a real store does.
+type fakeDedupe struct {
+	seen map[string]bool
+	err  error
+	// calls counts FirstSeen calls, to prove suppression happened at the
+	// workflow rather than by accident downstream.
+	calls int
+}
+
+func newFakeDedupe() *fakeDedupe { return &fakeDedupe{seen: map[string]bool{}} }
+
+func (f *fakeDedupe) FirstSeen(_ context.Context, key string, _ time.Duration) (bool, error) {
+	f.calls++
+	if f.err != nil {
+		return false, f.err
+	}
+	if f.seen[key] {
+		return false, nil
+	}
+	f.seen[key] = true
+	return true, nil
+}
+
+var _ = Describe("PollSource dedupe", func() {
+	var (
+		ctx    = context.Background()
+		pub    *capturingPublisher
+		seen   *fakeDedupe
+		signal = model.SourceSignal{CVEID: "CVE-2021-44228", Title: "Log4Shell"}
+	)
+
+	BeforeEach(func() {
+		pub = &capturingPublisher{}
+		seen = newFakeDedupe()
+	})
+
+	It("publishes an observation the first time and suppresses it after", func() {
+		src := &fakeSource{kind: valueobject.SourceKindNVD, signals: []model.SourceSignal{signal}}
+		poll := workflows.NewPollSource(src, pub).WithDedupe(seen, time.Hour)
+
+		first, err := poll.Run(ctx, time.Time{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(first).To(Equal(1))
+
+		// A poll re-reads its whole window, so the same advisory comes back
+		// on the next pass. It should not go out again.
+		second, err := poll.Run(ctx, time.Time{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(second).To(BeZero())
+		Expect(pub.published).To(HaveLen(1))
+	})
+
+	It("publishes again when the observation has changed", func() {
+		src := &fakeSource{kind: valueobject.SourceKindNVD, signals: []model.SourceSignal{signal}}
+		poll := workflows.NewPollSource(src, pub).WithDedupe(seen, time.Hour)
+		_, err := poll.Run(ctx, time.Time{})
+		Expect(err).NotTo(HaveOccurred())
+
+		// The feed amends the advisory: a score it did not carry before.
+		// Suppressing this would mean the correction never reaches cortex.
+		corrected := signal
+		corrected.Scores = []model.CVSS{{Version: "3.1", BaseScore: 10, Severity: model.SeverityCritical}}
+		src.signals = []model.SourceSignal{corrected}
+
+		n, err := poll.Run(ctx, time.Time{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(n).To(Equal(1))
+		Expect(pub.published).To(HaveLen(2))
+	})
+
+	It("publishes when the store fails, rather than risking a suppressed signal", func() {
+		seen.err = errors.New("redis is down")
+		src := &fakeSource{kind: valueobject.SourceKindNVD, signals: []model.SourceSignal{signal}}
+
+		n, err := workflows.NewPollSource(src, pub).WithDedupe(seen, time.Hour).Run(ctx, time.Time{})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(n).To(Equal(1))
+		Expect(pub.published).To(HaveLen(1))
+	})
+
+	It("publishes everything when there is no store at all", func() {
+		src := &fakeSource{kind: valueobject.SourceKindNVD, signals: []model.SourceSignal{signal}}
+		poll := workflows.NewPollSource(src, pub)
+
+		_, err := poll.Run(ctx, time.Time{})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = poll.Run(ctx, time.Time{})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(pub.published).To(HaveLen(2))
+		Expect(seen.calls).To(BeZero())
+	})
+
+	It("still flushes when every observation was suppressed", func() {
+		src := &fakeSource{kind: valueobject.SourceKindNVD, signals: []model.SourceSignal{signal}}
+		poll := workflows.NewPollSource(src, pub).WithDedupe(seen, time.Hour)
+		_, err := poll.Run(ctx, time.Time{})
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = poll.Run(ctx, time.Time{})
+
+		// The scheduler advances its watermark on a successful poll, and a
+		// poll that published nothing is still a successful poll.
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pub.flushes).To(Equal(2))
+	})
+})
+
 var _ = Describe("PollSource use case", func() {
 	var (
 		ctx = context.Background()
