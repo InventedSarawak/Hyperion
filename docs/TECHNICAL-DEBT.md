@@ -265,12 +265,30 @@ boot, which is the failure the register exists to prevent.
 - **What remains:** no down-migrations and no CLI. `goose` or `golang-migrate`
   would bring both; this is the register they were wanted for.
 
-### 🟢 No Elasticsearch alias or reindex strategy
+### 🟢 ~~No Elasticsearch alias or reindex strategy~~ — REPAID (v3, 2026-09-17)
 
-Documents are written straight to a fixed index name.
+`hyperion-vulnerabilities` is an alias onto a numbered concrete index. A mapping
+change is now `task index:swap`: build the next index alongside the live one,
+copy the documents server-side, refresh, and move the alias in a single atomic
+request. Readers see the old index until the instant they see the new one.
 
-- **Cost:** a mapping change requires deleting and rebuilding the index with downtime.
-- **Fix in v3:** write through an alias, reindex into a new concrete index, flip atomically.
+Migrated live: 547,973 documents, `hyperion-vulnerabilities` -> alias onto
+`hyperion-vulnerabilities-000001`, search unaffected throughout.
+
+Three real bugs surfaced while building it, all now fixed:
+
+- **`scores.base_score` was never declared in the mapping**, so Elasticsearch
+  inferred it from whichever document arrived first. A first score of exactly
+  10 makes it a `long`, and every later 9.8 is then rejected outright. Whether
+  a fresh install could store decimal scores was a coin toss.
+- **The copy read only what was searchable**, so anything written in the second
+  before a swap was silently left behind. The source is refreshed first now.
+- **The destination was not refreshed before the alias moved**, so there was a
+  moment when the alias pointed at an index answering nothing.
+
+- **What remains:** a document written to the old index between the copy and
+  the alias move is not carried across. `task reindex` rebuilds from Postgres
+  and settles it; quiescing ingest for the few seconds a swap takes avoids it.
 
 ---
 

@@ -49,6 +49,8 @@ import (
 func main() {
 	reindex := flag.Bool("reindex", false,
 		"rebuild the search index from Postgres, then exit (after a mapping change, or to repair drift)")
+	swapIndex := flag.Bool("swap-index", false,
+		"rebuild the search index under the current mapping alongside the live one, then move the alias onto it, then exit")
 	flag.Parse()
 
 	cfg := config.Load()
@@ -119,6 +121,11 @@ func main() {
 	blast := queries.NewCalculateBlastRadius(graph, cfg.BlastRadiusMaxDepth).WithResolver(repo)
 	exposure := queries.NewRepositoryExposure(graph, repo, cfg.BlastRadiusMaxDepth)
 	listWatchlist.WithExposure(exposure)
+
+	if *swapIndex {
+		runSwapIndex(ctx, logger, index)
+		return
+	}
 
 	if *reindex {
 		runReindex(ctx, logger, repo, index)
@@ -428,6 +435,30 @@ func buildDedupeStore(ctx context.Context, logger *slog.Logger, cfg config.Confi
 	}
 	logger.Info("redis ready", "addr", cfg.RedisAddr)
 	return store, func() { _ = store.Close() }
+}
+
+// runSwapIndex rebuilds the index under the current mapping and moves the alias.
+//
+// Separate from -reindex because they repair different things. This copies
+// documents server-side from the live index, which is fast and is what a
+// mapping change needs; -reindex rebuilds from Postgres, which is slower and is
+// what you want when the documents themselves are wrong or incomplete.
+func runSwapIndex(ctx context.Context, logger *slog.Logger, index ports.SearchIndex) {
+	swapper, ok := index.(interface {
+		Swap(context.Context) (string, string, error)
+	})
+	if !ok {
+		logger.Error("swapping the index needs Elasticsearch, and it is unreachable")
+		os.Exit(1)
+	}
+
+	logger.Info("rebuilding the search index alongside the live one")
+	from, to, err := swapper.Swap(ctx)
+	if err != nil {
+		logger.Error("index swap failed; the live index is untouched", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("search index swapped", "from", from, "to", to)
 }
 
 // runReindex rebuilds the search index from Postgres and exits non-zero on

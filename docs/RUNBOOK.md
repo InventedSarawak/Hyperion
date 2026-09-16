@@ -586,6 +586,14 @@ ingests merge to the same record, so the replay is invisible in the data. Verifi
 killing cortex with `SIGKILL` before it had committed anything: on restart it re-read the
 whole topic and finished at lag 0.
 
+**Changing the search mapping.** `task index:swap` builds the next index alongside the
+live one, copies the documents server-side, and moves the alias onto it atomically —
+search keeps answering from the old index until the instant it answers from the new. Use
+it after changing a field type, which Elasticsearch cannot do in place. `task reindex` is
+the other tool: it rebuilds from Postgres, which is slower but is what you want when the
+documents themselves are wrong rather than their mapping. A document written in the few
+seconds a swap takes is not carried across; `task reindex` settles that.
+
 **When ingest sets a record aside.** `task topic:dlq` lists what failed, with the reason,
 the attempt count and where it came from. An empty list is the healthy state, and the
 command returns immediately when there is nothing there. `task topic:dlq -- -replay`

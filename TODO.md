@@ -222,9 +222,11 @@ what flows is right. Everything else stays where it is; the reasoning is below.
       `schema_migrations` register with checksums, each file applied once in its own
       transaction; the graph keeps the same register as `(:SchemaMigration)` nodes.
       Editing an applied migration is refused. Down-migrations still absent.
-- [ ] **Elasticsearch alias and reindex strategy** (🟢). Write through an alias, reindex
-      into a new concrete index, flip atomically — so a mapping change stops meaning
-      delete-and-rebuild with downtime.
+- [x] **Elasticsearch alias and reindex strategy (2026-09-17)** (🟢). The index name is
+      an alias onto a numbered index; `task index:swap` builds the next one alongside,
+      copies server-side and moves the alias atomically. Migrated 547,973 documents live
+      with search unaffected. Found and fixed an undeclared `scores.base_score` mapping
+      that made decimal scores a coin toss on a fresh install.
 - [ ] **Triage malware rather than hiding it** (🟡 _Malware is ingested in full but only
       hidden_). ~220,000 `MAL-` records sit in the store costing index space, and a broad
       subscription rule can match them. The graph can already answer "does a tracked
