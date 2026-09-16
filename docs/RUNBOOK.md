@@ -497,3 +497,42 @@ legitimately return nothing. Confirm with `task sources:check`.
 | `task test:go:integration` | including Postgres / Elasticsearch / Neo4j suites  |
 | `task build:go`            | compile every Go service                           |
 | `task codegen`             | regenerate Go from the protobuf contracts          |
+
+## Watching ingest
+
+Both halves of the pipe say what they are doing, and how much to say is a
+setting rather than a rebuild.
+
+| Setting                        | Default | Does                                                               |
+| :----------------------------- | :------ | :----------------------------------------------------------------- |
+| `CORTEX_INGEST_PROGRESS_EVERY` | 1000    | findings between cortex's `ingest progress` lines; 0 silences them |
+| `CORTEX_LOG_LEVEL`             | info    | `debug` names every finding as it lands                            |
+| `SIPHON_LOG_LEVEL`             | info    | `debug` names every signal as it is published                      |
+
+At the default level a long run reports progress rather than going quiet:
+
+```json
+{
+  "level": "INFO",
+  "msg": "ingest progress",
+  "ingested": 20000,
+  "failed": 0,
+  "per_second": 181,
+  "latest": "CVE-2026-12345"
+}
+```
+
+`failed` counts findings that could not be stored; the reasons are logged as
+they happen, and a run that ends with any failures says so once more at the end.
+`per_second` is the rate since the run began — useful for telling a slow
+backfill from a stalled one.
+
+To follow a single finding through, turn the level up for one run:
+
+```bash
+SIPHON_LOG_LEVEL=debug CORTEX_LOG_LEVEL=debug task ingest
+```
+
+That logs a line per signal published and a line per finding ingested, which is
+far too much for a backfill of hundreds of thousands and exactly right when
+something specific is missing.
