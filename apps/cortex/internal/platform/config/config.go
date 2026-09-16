@@ -26,6 +26,8 @@ const (
 	DefaultSubscriptionIdx  = "hyperion-subscriptions"
 	// DefaultConsumerGroup names cortex's ingest group on the signal topic.
 	DefaultConsumerGroup = "intel-indexer"
+	// DefaultDependencyGroup names cortex's group on the dependency topic.
+	DefaultDependencyGroup = "intel-graph"
 )
 
 // Config holds cortex's runtime settings.
@@ -94,6 +96,11 @@ type KafkaConfig struct {
 	DeadLetterEnabled bool
 	DeadLetterTopic   string
 	MaxConsecutiveDLQ int
+
+	// DependencyTopic carries repository manifest reads, on its own consumer
+	// group: a backlog of advisories must not hold up the supply-chain graph.
+	DependencyTopic string
+	DependencyGroup string
 }
 
 // Load reads configuration from the environment, applying defaults.
@@ -148,6 +155,9 @@ func Load() Config {
 			DeadLetterEnabled: l.Bool("KAFKA_DLQ_ENABLED", true),
 			DeadLetterTopic:   l.String("KAFKA_DLQ_TOPIC", ""),
 			MaxConsecutiveDLQ: l.Int("KAFKA_DLQ_MAX_CONSECUTIVE", 10),
+
+			DependencyTopic: l.String("KAFKA_DEPENDENCY_TOPIC", kafka.TopicDependencies),
+			DependencyGroup: l.String("KAFKA_DEPENDENCY_GROUP", DefaultDependencyGroup),
 		},
 	}
 }

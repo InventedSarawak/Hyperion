@@ -256,17 +256,27 @@ Documents are written straight to a fixed index name.
 
 ## 3. Dependency Graph & Supply Chain (v2)
 
-### 🟡 Dependency reporting is a synchronous gRPC call
+### 🟢 ~~Dependency reporting is a synchronous gRPC call~~ — REPAID (v3, 2026-09-17)
 
-siphon calls `IntelligenceService.IngestDependencies` directly. The advisory path
-publishes events; this one blocks on a reply.
+siphon publishes `DependencyObserved` to `hyperion.dependencies.v1`, keyed by
+repository full name; cortex consumes it as group `intel-graph` and writes the
+graph edges. Verified by scanning with cortex stopped: the scan succeeded, and
+cortex applied the observation when it came back.
 
-- **Why:** v2 has no message bus. "Send to the intelligence service" was the
-  shape the roadmap called for, and a real RPC proved the contract end to end.
-- **Cost:** a scan fails when cortex is down, with no replay. siphon and cortex
-  are coupled at runtime in a way the event path deliberately is not.
-- **Fix in v3:** publish `DependencyObserved` to Kafka. Only the outbound
-  adapter changes — the workflow and domain do not.
+- **What changed beyond the adapter:** the `DependencyPublisher` port used to
+  return the number of edges cortex wrote, which only an RPC can answer. A port
+  that promises what one of its adapters cannot deliver is not a port, so it now
+  returns an error alone and the workflow reports what it _read_. That is the
+  honest number for siphon to know.
+- **Its own topic and group,** not the signal topic: a backlog of advisories
+  must not hold up the supply-chain graph, and a consumer of one has no use for
+  the other.
+- **No dead-letter topic on this path,** deliberately. A manifest read that
+  cannot be written is almost always the graph being unavailable — the case that
+  should stop and be retried — and a later read of the same repository
+  supersedes the one that failed.
+- **The RPC remains** for callers that want the edge count synchronously, and as
+  the fallback when the broker is unreachable.
 
 ### 🟡 Library-to-library edges reach only as far as the watchlist
 

@@ -176,17 +176,122 @@ func (x *SignalDiscovered) GetRawRef() string {
 	return ""
 }
 
+// DependencyObserved is emitted by siphon when it reads a repository's
+// dependency manifests. cortex consumes it and writes the graph edges.
+//
+// It carries an observation rather than a command: siphon reports what a
+// manifest said, and what the graph does about it is cortex's business. That
+// is the difference from the IngestDependencies RPC it replaces — a scan no
+// longer fails because cortex is restarting, and a scan that happens while
+// cortex is down is replayed rather than lost.
+type DependencyObserved struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// observation_id is a stable dedupe key for one read of one repository.
+	ObservationId string         `protobuf:"bytes,1,opt,name=observation_id,json=observationId,proto3" json:"observation_id,omitempty"`
+	Repository    *v1.Repository `protobuf:"bytes,2,opt,name=repository,proto3" json:"repository,omitempty"`
+	Author        *v1.Author     `protobuf:"bytes,3,opt,name=author,proto3" json:"author,omitempty"`
+	// publishes is the library the repository itself ships, when its manifest
+	// names one — this is what makes the graph transitive.
+	Publishes     *v1.PackageRef         `protobuf:"bytes,4,opt,name=publishes,proto3" json:"publishes,omitempty"`
+	Dependencies  []*v1.Dependency       `protobuf:"bytes,5,rep,name=dependencies,proto3" json:"dependencies,omitempty"`
+	ObservedAt    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DependencyObserved) Reset() {
+	*x = DependencyObserved{}
+	mi := &file_hyperion_events_v1_signal_events_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DependencyObserved) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DependencyObserved) ProtoMessage() {}
+
+func (x *DependencyObserved) ProtoReflect() protoreflect.Message {
+	mi := &file_hyperion_events_v1_signal_events_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DependencyObserved.ProtoReflect.Descriptor instead.
+func (*DependencyObserved) Descriptor() ([]byte, []int) {
+	return file_hyperion_events_v1_signal_events_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *DependencyObserved) GetObservationId() string {
+	if x != nil {
+		return x.ObservationId
+	}
+	return ""
+}
+
+func (x *DependencyObserved) GetRepository() *v1.Repository {
+	if x != nil {
+		return x.Repository
+	}
+	return nil
+}
+
+func (x *DependencyObserved) GetAuthor() *v1.Author {
+	if x != nil {
+		return x.Author
+	}
+	return nil
+}
+
+func (x *DependencyObserved) GetPublishes() *v1.PackageRef {
+	if x != nil {
+		return x.Publishes
+	}
+	return nil
+}
+
+func (x *DependencyObserved) GetDependencies() []*v1.Dependency {
+	if x != nil {
+		return x.Dependencies
+	}
+	return nil
+}
+
+func (x *DependencyObserved) GetObservedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ObservedAt
+	}
+	return nil
+}
+
 var File_hyperion_events_v1_signal_events_proto protoreflect.FileDescriptor
 
 const file_hyperion_events_v1_signal_events_proto_rawDesc = "" +
 	"\n" +
-	"&hyperion/events/v1/signal_events.proto\x12\x12hyperion.events.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a&hyperion/common/v1/vulnerability.proto\"\x8a\x02\n" +
+	"&hyperion/events/v1/signal_events.proto\x12\x12hyperion.events.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a hyperion/common/v1/package.proto\x1a#hyperion/common/v1/repository.proto\x1a&hyperion/common/v1/vulnerability.proto\"\x8a\x02\n" +
 	"\x10SignalDiscovered\x12\x1b\n" +
 	"\tsignal_id\x18\x01 \x01(\tR\bsignalId\x126\n" +
 	"\x06source\x18\x02 \x01(\x0e2\x1e.hyperion.events.v1.SourceKindR\x06source\x12G\n" +
 	"\rvulnerability\x18\x03 \x01(\v2!.hyperion.common.v1.VulnerabilityR\rvulnerability\x12?\n" +
 	"\rdiscovered_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\fdiscoveredAt\x12\x17\n" +
-	"\araw_ref\x18\x05 \x01(\tR\x06rawRef*\xaf\x02\n" +
+	"\araw_ref\x18\x05 \x01(\tR\x06rawRef\"\xee\x02\n" +
+	"\x12DependencyObserved\x12%\n" +
+	"\x0eobservation_id\x18\x01 \x01(\tR\robservationId\x12>\n" +
+	"\n" +
+	"repository\x18\x02 \x01(\v2\x1e.hyperion.common.v1.RepositoryR\n" +
+	"repository\x122\n" +
+	"\x06author\x18\x03 \x01(\v2\x1a.hyperion.common.v1.AuthorR\x06author\x12<\n" +
+	"\tpublishes\x18\x04 \x01(\v2\x1e.hyperion.common.v1.PackageRefR\tpublishes\x12B\n" +
+	"\fdependencies\x18\x05 \x03(\v2\x1e.hyperion.common.v1.DependencyR\fdependencies\x12;\n" +
+	"\vobserved_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"observedAt*\xaf\x02\n" +
 	"\n" +
 	"SourceKind\x12\x1b\n" +
 	"\x17SOURCE_KIND_UNSPECIFIED\x10\x00\x12\x13\n" +
@@ -216,22 +321,32 @@ func file_hyperion_events_v1_signal_events_proto_rawDescGZIP() []byte {
 }
 
 var file_hyperion_events_v1_signal_events_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_hyperion_events_v1_signal_events_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_hyperion_events_v1_signal_events_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_hyperion_events_v1_signal_events_proto_goTypes = []any{
 	(SourceKind)(0),               // 0: hyperion.events.v1.SourceKind
 	(*SignalDiscovered)(nil),      // 1: hyperion.events.v1.SignalDiscovered
-	(*v1.Vulnerability)(nil),      // 2: hyperion.common.v1.Vulnerability
-	(*timestamppb.Timestamp)(nil), // 3: google.protobuf.Timestamp
+	(*DependencyObserved)(nil),    // 2: hyperion.events.v1.DependencyObserved
+	(*v1.Vulnerability)(nil),      // 3: hyperion.common.v1.Vulnerability
+	(*timestamppb.Timestamp)(nil), // 4: google.protobuf.Timestamp
+	(*v1.Repository)(nil),         // 5: hyperion.common.v1.Repository
+	(*v1.Author)(nil),             // 6: hyperion.common.v1.Author
+	(*v1.PackageRef)(nil),         // 7: hyperion.common.v1.PackageRef
+	(*v1.Dependency)(nil),         // 8: hyperion.common.v1.Dependency
 }
 var file_hyperion_events_v1_signal_events_proto_depIdxs = []int32{
 	0, // 0: hyperion.events.v1.SignalDiscovered.source:type_name -> hyperion.events.v1.SourceKind
-	2, // 1: hyperion.events.v1.SignalDiscovered.vulnerability:type_name -> hyperion.common.v1.Vulnerability
-	3, // 2: hyperion.events.v1.SignalDiscovered.discovered_at:type_name -> google.protobuf.Timestamp
-	3, // [3:3] is the sub-list for method output_type
-	3, // [3:3] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	3, // 1: hyperion.events.v1.SignalDiscovered.vulnerability:type_name -> hyperion.common.v1.Vulnerability
+	4, // 2: hyperion.events.v1.SignalDiscovered.discovered_at:type_name -> google.protobuf.Timestamp
+	5, // 3: hyperion.events.v1.DependencyObserved.repository:type_name -> hyperion.common.v1.Repository
+	6, // 4: hyperion.events.v1.DependencyObserved.author:type_name -> hyperion.common.v1.Author
+	7, // 5: hyperion.events.v1.DependencyObserved.publishes:type_name -> hyperion.common.v1.PackageRef
+	8, // 6: hyperion.events.v1.DependencyObserved.dependencies:type_name -> hyperion.common.v1.Dependency
+	4, // 7: hyperion.events.v1.DependencyObserved.observed_at:type_name -> google.protobuf.Timestamp
+	8, // [8:8] is the sub-list for method output_type
+	8, // [8:8] is the sub-list for method input_type
+	8, // [8:8] is the sub-list for extension type_name
+	8, // [8:8] is the sub-list for extension extendee
+	0, // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_hyperion_events_v1_signal_events_proto_init() }
@@ -245,7 +360,7 @@ func file_hyperion_events_v1_signal_events_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_hyperion_events_v1_signal_events_proto_rawDesc), len(file_hyperion_events_v1_signal_events_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   1,
+			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

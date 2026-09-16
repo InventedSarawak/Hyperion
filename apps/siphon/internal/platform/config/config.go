@@ -83,6 +83,9 @@ type KafkaConfig struct {
 	Topic   string
 	// Partitions applies only when siphon has to create the topic.
 	Partitions int
+	// DependencyTopic carries repository manifest reads. When Kafka is on,
+	// scans are published here instead of being sent to cortex over gRPC.
+	DependencyTopic string
 }
 
 // RepoScanConfig drives the supply-chain half of ingestion: reading tracked
@@ -288,10 +291,11 @@ func Load() Config {
 		},
 
 		Kafka: KafkaConfig{
-			Enabled:    l.Bool("KAFKA_ENABLED", true),
-			Brokers:    l.List("KAFKA_BROKERS", []string{kafka.DefaultBroker}),
-			Topic:      l.String("KAFKA_TOPIC", kafka.TopicSignals),
-			Partitions: l.Int("KAFKA_PARTITIONS", kafka.DefaultPartitions),
+			Enabled:         l.Bool("KAFKA_ENABLED", true),
+			Brokers:         l.List("KAFKA_BROKERS", []string{kafka.DefaultBroker}),
+			Topic:           l.String("KAFKA_TOPIC", kafka.TopicSignals),
+			Partitions:      l.Int("KAFKA_PARTITIONS", kafka.DefaultPartitions),
+			DependencyTopic: l.String("KAFKA_DEPENDENCY_TOPIC", kafka.TopicDependencies),
 		},
 	}
 }

@@ -32,12 +32,12 @@ type fakePublisher struct {
 	err       error
 }
 
-func (f *fakePublisher) Publish(_ context.Context, s model.RepositorySnapshot) (int, error) {
+func (f *fakePublisher) Publish(_ context.Context, s model.RepositorySnapshot) error {
 	if f.err != nil {
-		return 0, f.err
+		return f.err
 	}
 	f.published = append(f.published, s)
-	return len(s.Dependencies), nil
+	return nil
 }
 
 func snapshotFor(owner, name string, deps ...string) model.RepositorySnapshot {

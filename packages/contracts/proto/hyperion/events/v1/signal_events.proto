@@ -3,6 +3,8 @@ syntax = "proto3";
 package hyperion.events.v1;
 
 import "google/protobuf/timestamp.proto";
+import "hyperion/common/v1/package.proto";
+import "hyperion/common/v1/repository.proto";
 import "hyperion/common/v1/vulnerability.proto";
 
 // SourceKind identifies the upstream feed a signal originated from.
@@ -29,4 +31,24 @@ message SignalDiscovered {
   hyperion.common.v1.Vulnerability vulnerability = 3;
   google.protobuf.Timestamp discovered_at = 4;
   string raw_ref = 5; // pointer to the archived raw payload (e.g. object key)
+}
+
+// DependencyObserved is emitted by siphon when it reads a repository's
+// dependency manifests. cortex consumes it and writes the graph edges.
+//
+// It carries an observation rather than a command: siphon reports what a
+// manifest said, and what the graph does about it is cortex's business. That
+// is the difference from the IngestDependencies RPC it replaces — a scan no
+// longer fails because cortex is restarting, and a scan that happens while
+// cortex is down is replayed rather than lost.
+message DependencyObserved {
+  // observation_id is a stable dedupe key for one read of one repository.
+  string observation_id = 1;
+  hyperion.common.v1.Repository repository = 2;
+  hyperion.common.v1.Author author = 3;
+  // publishes is the library the repository itself ships, when its manifest
+  // names one — this is what makes the graph transitive.
+  hyperion.common.v1.PackageRef publishes = 4;
+  repeated hyperion.common.v1.Dependency dependencies = 5;
+  google.protobuf.Timestamp observed_at = 6;
 }

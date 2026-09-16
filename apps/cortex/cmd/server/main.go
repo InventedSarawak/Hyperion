@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 
 	"google.golang.org/grpc"
@@ -130,15 +131,31 @@ func main() {
 	defer stopRun()
 
 	consumerFailed := make(chan struct{})
+	var failOnce sync.Once
+	fail := func(what string, err error) {
+		logger.Error(what+" stopped", "error", err)
+		failOnce.Do(func() { close(consumerFailed) })
+		stopRun()
+	}
+
 	if cfg.Kafka.Enabled {
+		// Two topics, two groups, two goroutines: advisories and manifest
+		// reads are unrelated work, and a backlog of one must not hold up the
+		// other.
 		go func() {
 			if err := runKafkaConsumer(runCtx, logger, ingest, cfg); err != nil {
-				logger.Error("kafka ingest stopped", "error", err)
-				close(consumerFailed)
-				stopRun()
+				fail("kafka ingest", err)
 				return
 			}
 			logger.Info("kafka ingest stopped")
+		}()
+
+		go func() {
+			if err := runDependencyConsumer(runCtx, logger, ingestDeps, cfg); err != nil {
+				fail("dependency ingest", err)
+				return
+			}
+			logger.Info("dependency ingest stopped")
 		}()
 	}
 
@@ -156,6 +173,38 @@ func main() {
 		os.Exit(1)
 	default:
 	}
+}
+
+// runDependencyConsumer reads repository manifest observations until the
+// context is cancelled.
+//
+// It has no dead-letter topic of its own: a manifest read that cannot be
+// written is almost always the graph being unavailable, which is exactly the
+// case that should stop and be retried rather than be set aside. A repeat
+// observation of the same repository supersedes the one that failed anyway.
+func runDependencyConsumer(ctx context.Context, logger *slog.Logger, ingestDeps *commands.IngestDependency, cfg config.Config) error {
+	clientCfg := kafka.Config{Brokers: cfg.Kafka.Brokers, ClientID: "cortex-graph"}
+	if err := kafka.EnsureTopic(ctx, clientCfg, cfg.Kafka.DependencyTopic, kafka.DefaultPartitions); err != nil {
+		return err
+	}
+
+	c, err := kafka.NewConsumer(clientCfg, cfg.Kafka.DependencyTopic, cfg.Kafka.DependencyGroup,
+		kafka.WithConsumerLogger(logger))
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	handler := consumer.NewDependencyHandler(ingestDeps, logger)
+
+	logger.Info("cortex consuming dependency observations from kafka",
+		"brokers", cfg.Kafka.Brokers, "topic", cfg.Kafka.DependencyTopic, "group", cfg.Kafka.DependencyGroup)
+
+	if err := c.Run(ctx, handler); err != nil && !errors.Is(err, context.Canceled) {
+		return err
+	}
+	logger.Info("dependency ingest finished", "repositories_observed", handler.Observed())
+	return nil
 }
 
 // runKafkaConsumer reads the signal topic until the context is cancelled.

@@ -24,6 +24,13 @@ import (
 // consumers can run at the same time instead of one migration cutting over.
 const TopicSignals = "hyperion.signals.v1"
 
+// TopicDependencies carries hyperion.events.v1.DependencyObserved — one record
+// per read of one repository's manifests. Separate from the signal topic
+// because the two have nothing to do with each other operationally: a backlog
+// of advisories should not delay the supply-chain graph, and a consumer of one
+// has no use for the other.
+const TopicDependencies = "hyperion.dependencies.v1"
+
 // DefaultBroker is where the local docker-compose broker listens.
 const DefaultBroker = "localhost:9092"
 

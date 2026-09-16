@@ -75,6 +75,15 @@ nexus returning findings with cross-source provenance (`["package_feed","nvd"]`)
   uncommitted. `task topic:dlq` reads it, `task topic:dlq -- -replay` puts records back
   (verified live: 3168 -> 3170 records on the signal topic after a replay).
 
+- **Repository scans moved onto the bus (2026-09-17).** A new `DependencyObserved`
+  contract, published to `hyperion.dependencies.v1` keyed by repository, consumed by
+  cortex as group `intel-graph` — its own topic and group so a backlog of advisories
+  cannot hold up the supply-chain graph. The `DependencyPublisher` port stopped returning
+  "edges written", which only an RPC can answer; siphon now reports what it read.
+  Verified by scanning `charmbracelet/bubbletea` with **cortex stopped**: the scan
+  succeeded, and cortex wrote the edges when it came back. That scan would previously
+  have failed outright.
+
 ### What is deliberately not done
 
 - Repository scans still call cortex over synchronous gRPC

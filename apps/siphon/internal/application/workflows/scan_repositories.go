@@ -155,11 +155,13 @@ func scanAndPublish(
 		return 0, scanErr
 	}
 
-	written, err := publisher.Publish(ctx, snapshot)
-	if err != nil {
+	if err := publisher.Publish(ctx, snapshot); err != nil {
 		return 0, errors.Join(scanErr, err)
 	}
-	return written, scanErr
+	// What siphon can report is what it read. Over the event bus the edges are
+	// written later, by cortex, and asking for that number back is exactly the
+	// coupling this path was moved off.
+	return len(snapshot.Dependencies), scanErr
 }
 
 // splitRepository parses an "owner/name" watchlist entry.

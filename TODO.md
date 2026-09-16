@@ -167,8 +167,10 @@ Registered in `docs/TECHNICAL-DEBT.md`. Highest-value items, roughly in order:
 - [x] **Make it the default (2026-09-17):** `task up` runs siphon and cortex as
       independent services over the broker. The pipe survives only where it is wanted —
       `task ingest` and `task backfill`, which opt out explicitly
-- [ ] **Repository scans:** publish `DependencyObserved` instead of the synchronous
-      `IngestDependencies` gRPC call (registered in TECHNICAL-DEBT.md)
+- [x] **Repository scans publish `DependencyObserved` (2026-09-17):** topic
+      `hyperion.dependencies.v1`, keyed by repository, consumed by cortex as group
+      `intel-graph`. Verified by scanning with cortex stopped — the scan succeeded and
+      cortex applied it on restart. The gRPC path remains as the no-broker fallback
 - [x] **Redis `DedupeStore` (2026-09-17):** observations are fingerprinted by content and
       an unchanged one is not republished. One 3h NVD window re-read: 885 suppressed,
       25 published. A corrected score or a new affected package still publishes

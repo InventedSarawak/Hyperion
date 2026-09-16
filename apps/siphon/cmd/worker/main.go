@@ -225,7 +225,11 @@ func startRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphoncon
 	}
 
 	repos := githubrepo.New(cfg.RepoScan.BaseURL, cfg.RepoScan.Token)
-	scan := workflows.NewScanWatchlist(client, repos, client, cfg.RepoScan.Interval, cfg.RepoScan.RetryInterval)
+
+	// Where manifest reads go. Over the broker a scan no longer fails because
+	// cortex is restarting, and one taken while it was down is replayed.
+	deps, closeDeps := buildDependencyPublisher(ctx, logger, cfg, client)
+	scan := workflows.NewScanWatchlist(client, repos, deps, cfg.RepoScan.Interval, cfg.RepoScan.RetryInterval)
 
 	logger.Info("watchlist scanner starting",
 		"check_every", cfg.RepoScan.WatchInterval.String(),
@@ -244,7 +248,43 @@ func startRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphoncon
 		}
 	}()
 
-	return func() { _ = client.Close() }
+	return func() {
+		closeDeps()
+		_ = client.Close()
+	}
+}
+
+// buildDependencyPublisher chooses how manifest reads reach cortex: the topic
+// when there is a broker, the gRPC client otherwise.
+//
+// Unlike the signal publisher, an unreachable broker here falls back to gRPC
+// rather than exiting. Scanning is the secondary job — siphon's primary work
+// is advisories, and it kept scanning over gRPC for all of v2.
+func buildDependencyPublisher(
+	ctx context.Context,
+	logger *slog.Logger,
+	cfg siphonconfig.Config,
+	fallback ports.DependencyPublisher,
+) (ports.DependencyPublisher, func()) {
+	if !cfg.Kafka.Enabled {
+		return fallback, func() {}
+	}
+
+	pub, err := publisher.NewKafkaDependencies(ctx, publisher.KafkaDependenciesConfig{
+		Brokers:    cfg.Kafka.Brokers,
+		Topic:      cfg.Kafka.DependencyTopic,
+		Partitions: int32(cfg.Kafka.Partitions),
+	}, logger)
+	if err != nil {
+		logger.Warn("kafka unavailable for dependency observations; reporting over grpc instead",
+			"brokers", cfg.Kafka.Brokers, "error", err)
+		return fallback, func() {}
+	}
+	return pub, func() {
+		if err := pub.Close(); err != nil {
+			logger.Error("dependency publisher did not flush cleanly", "error", err)
+		}
+	}
 }
 
 // reportSources logs the status of every documented ingestion source, so it is
@@ -302,10 +342,15 @@ func runRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphonconfi
 
 	repos := githubrepo.New(cfg.RepoScan.BaseURL, cfg.RepoScan.Token)
 
+	// A one-off scan reports the same way the scheduled one does: over the
+	// topic when there is a broker, over gRPC otherwise.
+	deps, closeDeps := buildDependencyPublisher(ctx, logger, cfg, client)
+	defer closeDeps()
+
 	var scan scheduler.Poller
 	switch {
 	case repoFlag != "" || orgFlag != "":
-		scan = workflows.NewScanRepositories(repos, repos, client, workflows.Targets{
+		scan = workflows.NewScanRepositories(repos, repos, deps, workflows.Targets{
 			Repositories:  splitList(repoFlag),
 			Organizations: splitList(orgFlag),
 			PerOwnerLimit: cfg.RepoScan.PerOwnerLimit,
@@ -313,16 +358,18 @@ func runRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphonconfi
 		logger.Info("scanning named repositories", "repositories", repoFlag, "organizations", orgFlag)
 	default:
 		// Zero intervals make every tracked repository due.
-		scan = workflows.NewScanWatchlist(client, repos, client, 0, 0)
+		scan = workflows.NewScanWatchlist(client, repos, deps, 0, 0)
 		logger.Info("scanning every repository on the watchlist")
 	}
 
-	written, err := scan.Run(ctx, time.Time{})
+	reported, err := scan.Run(ctx, time.Time{})
 	if err != nil {
-		logger.Error("repository scan finished with errors", "written", written, "error", err)
+		logger.Error("repository scan finished with errors", "reported", reported, "error", err)
 		os.Exit(1)
 	}
-	logger.Info("repository scan complete", "dependency_edges_written", written)
+	// Dependencies reported, not edges written: over the topic the writing
+	// happens in cortex, afterwards.
+	logger.Info("repository scan complete", "dependencies_reported", reported)
 }
 
 // runBackfill publishes the history of the chosen sources from a date, and

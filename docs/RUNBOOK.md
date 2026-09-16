@@ -490,8 +490,14 @@ legitimately return nothing. Confirm with `task sources:check`.
 
 ## 7a. The event backbone
 
-Advisories reach cortex over Kafka: siphon publishes `SignalDiscovered` to
-`hyperion.signals.v1`, cortex consumes it as group `intel-indexer`. `task up` runs both,
+Two topics carry everything siphon observes:
+
+| Topic                      | Carries                                                               | Consumer group  |
+| :------------------------- | :-------------------------------------------------------------------- | :-------------- |
+| `hyperion.signals.v1`      | advisories (`SignalDiscovered`), keyed by finding id                  | `intel-indexer` |
+| `hyperion.dependencies.v1` | repository manifest reads (`DependencyObserved`), keyed by repository | `intel-graph`   |
+
+They are separate so a backlog of advisories cannot hold up the supply-chain graph. `task up` runs both,
 so there is nothing to turn on. To run them by hand, in two terminals:
 
 ```bash

@@ -295,8 +295,15 @@ rest of the infrastructure, reading `packages/contracts/proto` so records render
 decoded JSON rather than base64. Topics, live messages, consumer-group membership and
 per-partition lag, without a command. No authentication — local only.
 
-**Where it stops.** The topic carries advisory events only — repository scans still go to
-cortex as a synchronous gRPC call. There is no dead-letter topic, so a record that fails
+**A second topic.** Repository manifest reads are published to
+`hyperion.dependencies.v1` as `DependencyObserved`, keyed by repository full name, and
+consumed by cortex as group `intel-graph`. Separate from the signal topic on purpose: a
+backlog of advisories must not hold up the supply-chain graph. A scan therefore no longer
+fails because cortex is restarting — verified by scanning with cortex stopped, then
+watching it apply the observation on restart. If the broker is unreachable, scans fall
+back to the gRPC call.
+
+**Where it stops.** There is no dead-letter topic, so a record that fails
 ingest permanently halts the consumer until someone intervenes. One broker, no
 replication, no authentication: local development only.
 
