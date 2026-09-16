@@ -43,11 +43,24 @@ For what is planned see [TODO.md](../TODO.md); for what was cut and why see
 ### 1.1 Continuous polling
 
 **What it does.** Every `SIPHON_POLL_INTERVAL` (default 10m) siphon asks each active
-source for what changed in the last `SIPHON_LOOKBACK` (default 2h), turns each record into
-a `SignalDiscovered` event and writes it to stdout, which is piped into cortex.
+source for what changed since its **watermark**, turns each record into a
+`SignalDiscovered` event and publishes it to the Kafka topic (1.7).
+
+**The watermark** is how far ingestion has read. It advances only when a poll succeeds —
+never past a window that failed — and is stored in Redis under
+`hyperion:siphon:watermark:advisories`, without an expiry, so it survives a restart. On
+start siphon resumes from it and logs how far behind it is; with nothing stored it falls
+back to `SIPHON_LOOKBACK` (default 2h).
+
+That difference is large in practice: restarting with a 2h lookback re-fetched 526 records
+where resuming from a 54-second-old watermark fetched 59. It also closes a real gap — an
+outage longer than the lookback used to skip everything published in between, permanently.
+
+Redis being unreachable is a warning, not a stop: siphon falls back to the in-memory
+watermark and keeps polling. `SIPHON_CHECKPOINT_ENABLED=false` turns persistence off.
 
 **How to use.** `task up` runs it for you, detached (`HYPERION_INGEST=0` skips it).
-`task ingest` runs one pipeline in the foreground so you can watch it.
+`task ingest` runs one poll in the foreground, piped into cortex, so you can watch it.
 
 **The ten sources**
 
@@ -68,10 +81,10 @@ GitHub is read in **three passes** — everything, then `type=reviewed` (the onl
 advisories that name packages), then `type=malware` (compromised releases, which GitHub
 never returns unless asked by name). Duplicates across passes are dropped.
 
-**Limits.** The lookback is one global window; slow feeds (Exploit-DB, OSINT) return
-nothing at 2h. The watermark is in memory, so a restart re-reads the lookback and a crash
-longer than it loses records. NVD rejects windows over 120 days, so polling can never
-reach history — that is what the backfill is for.
+**Limits.** The lookback is one global window, and so is the watermark: slow feeds
+(Exploit-DB, OSINT) return nothing at 2h, and one source falling behind cannot be tracked
+separately from the rest. NVD rejects windows over 120 days, so polling can never reach
+history — that is what the backfill is for.
 
 ### 1.2 Backfill (history)
 

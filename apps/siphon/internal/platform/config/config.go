@@ -11,6 +11,8 @@ import (
 
 	"github.com/inventedsarawak/hyperion/packages/common/config"
 	"github.com/inventedsarawak/hyperion/packages/common/kafka"
+
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/checkpoint"
 )
 
 // Service is the config namespace for this microservice.
@@ -35,10 +37,20 @@ type Config struct {
 	Shodan        ShodanConfig
 	GSD           GSDConfig
 
-	RepoScan RepoScanConfig
-	Kafka    KafkaConfig
+	RepoScan   RepoScanConfig
+	Kafka      KafkaConfig
+	Checkpoint CheckpointConfig
 
 	loader *config.Loader
+}
+
+// CheckpointConfig controls whether the ingestion watermark outlives the
+// process. With it off, every restart reaches back exactly one Lookback — which
+// re-reads what was already read, and misses anything published during an
+// outage longer than that window.
+type CheckpointConfig struct {
+	Enabled   bool
+	RedisAddr string
 }
 
 // KafkaConfig chooses where published events go.
@@ -245,6 +257,11 @@ func Load() Config {
 			BaseURL:       l.String("GITHUB_BASE_URL", DefaultGitHubBaseURL),
 			Token:         l.Secret("GITHUB_TOKEN"),
 			CortexAddr:    l.String("CORTEX_GRPC_ADDR", DefaultCortexGRPCAddr),
+		},
+
+		Checkpoint: CheckpointConfig{
+			Enabled:   l.Bool("CHECKPOINT_ENABLED", true),
+			RedisAddr: l.String("REDIS_ADDR", checkpoint.DefaultAddr),
 		},
 
 		Kafka: KafkaConfig{

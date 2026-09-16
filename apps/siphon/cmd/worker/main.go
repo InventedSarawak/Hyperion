@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/inbound/scheduler"
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/checkpoint"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/intelligence"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/publisher"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/repos/githubrepo"
@@ -91,7 +92,12 @@ func main() {
 	pub, closePub := buildPublisher(ctx, logger, cfg)
 	defer closePub()
 	poll := workflows.NewPollSources(clients, pub)
-	sched := scheduler.New(poll, cfg.PollInterval, cfg.Lookback)
+
+	checkpoints, closeCheckpoints := buildCheckpointStore(ctx, logger, cfg)
+	defer closeCheckpoints()
+
+	sched := scheduler.New(poll, cfg.PollInterval, cfg.Lookback).
+		WithCheckpoint(checkpoints, advisoryWatermark)
 
 	// The supply-chain scan runs alongside on its own, much slower schedule.
 	stopScan := startRepositoryScan(ctx, logger, cfg)
@@ -108,6 +114,35 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("siphon stopped")
+}
+
+// advisoryWatermark names the advisory poll's stored watermark. The watchlist
+// scanner has none: a manifest read is about what a repository says now, not
+// about how far through time it has read.
+const advisoryWatermark = "advisories"
+
+// buildCheckpointStore returns the store that makes the watermark outlive the
+// process, or nil when there is none.
+//
+// Redis being unreachable is a warning, not a stop: ingestion still works
+// without it, exactly as it did before there was a checkpoint at all. Refusing
+// to poll because the bookmark is unavailable would turn a small degradation
+// into an outage.
+func buildCheckpointStore(ctx context.Context, logger *slog.Logger, cfg siphonconfig.Config) (ports.CheckpointStore, func()) {
+	if !cfg.Checkpoint.Enabled {
+		logger.Info("ingestion watermark is in-memory only (SIPHON_CHECKPOINT_ENABLED=false); a restart re-reads the lookback window")
+		return nil, func() {}
+	}
+
+	store, err := checkpoint.Connect(ctx, cfg.Checkpoint.RedisAddr)
+	if err != nil {
+		logger.Warn("redis unavailable; the ingestion watermark will not survive a restart",
+			"addr", cfg.Checkpoint.RedisAddr, "error", err)
+		return nil, func() {}
+	}
+
+	logger.Info("ingestion watermark persisted to redis", "addr", cfg.Checkpoint.RedisAddr)
+	return store, func() { _ = store.Close() }
 }
 
 // buildPublisher chooses where published events go, and is the only place in

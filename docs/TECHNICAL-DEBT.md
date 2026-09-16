@@ -114,16 +114,20 @@ A record that fails to ingest is retried (5 attempts, doubling backoff) and then
 - **Fix in v4:** declare topics with the rest of the infrastructure, and drop the
   startup call.
 
-### 🟡 Ingestion watermark is in-memory only
+### 🟢 ~~Ingestion watermark is in-memory only~~ — REPAID (v3, 2026-09-17)
 
-`scheduler.since` is a struct field. Restarting siphon resets it to
-`now - SIPHON_LOOKBACK`.
+The watermark is persisted to Redis (`hyperion:siphon:watermark:advisories`, no
+expiry) through a `CheckpointStore` port, so a restart resumes where the last
+successful poll finished. Measured on a restart with a 2h lookback: 526 records
+re-fetched before, 59 after.
 
-- **Cost:** every restart re-fetches the whole lookback window, wasting rate-limit
-  budget. Correctness is saved only because cortex upserts by CVE id — the duplicate
-  work is invisible but real. A crash longer than the lookback window **loses signals**.
-- **Fix in v3:** the `CheckpointStore` port already sketched in
-  `docs/PROJECT-STRUCTURE.md`, backed by Redis or Postgres.
+- **What it fixed:** an outage longer than the lookback window used to skip
+  everything published in between, permanently. That gap is closed.
+- **What remains:** one watermark for all ten sources, so a single slow source
+  cannot be tracked separately — the same shape as the global-lookback entry
+  below, and worth fixing together.
+- **Degraded mode:** Redis unreachable is a warning, not a stop; siphon falls
+  back to the in-memory watermark and keeps polling.
 
 ### 🟡 No dedupe store
 

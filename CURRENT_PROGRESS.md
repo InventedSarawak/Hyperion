@@ -48,6 +48,15 @@ The full stack was then torn down and brought back up on the broker: every compo
 lag 0, Postgres and Elasticsearch in agreement at 546,868, and a GraphQL query through
 nexus returning findings with cross-source provenance (`["package_feed","nvd"]`) intact.
 
+### Since then
+
+- **Ingestion watermark persisted (2026-09-17).** A `CheckpointStore` port with a Redis
+  adapter; the scheduler resumes from the stored watermark and advances it only on a
+  successful poll. Restarting with a 2h lookback used to re-fetch 526 records; resuming
+  from a 54-second-old watermark fetched 59. It also closes a real gap — an outage longer
+  than the lookback used to skip everything published in between. Redis being unreachable
+  is a warning, not a stop.
+
 ### What is deliberately not done
 
 - Repository scans still call cortex over synchronous gRPC

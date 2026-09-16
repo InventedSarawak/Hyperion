@@ -170,7 +170,9 @@ Registered in `docs/TECHNICAL-DEBT.md`. Highest-value items, roughly in order:
 - [ ] **Repository scans:** publish `DependencyObserved` instead of the synchronous
       `IngestDependencies` gRPC call (registered in TECHNICAL-DEBT.md)
 - [ ] Dead-letter topic, so a permanently failing record does not halt ingest
-- [ ] Persist siphon's ingestion watermark (Redis `CheckpointStore`)
+- [x] **Persist siphon's ingestion watermark (2026-09-17):** `CheckpointStore` port +
+      Redis adapter; the scheduler resumes from the stored watermark and only advances
+      it on a successful poll. Restart re-fetch: 526 records -> 59
 
 ### Feature: Real-Time Alerts — DONE (2026-09-09)
 
