@@ -42,3 +42,6 @@ questions.md
 
 # Local process state from scripts/system.sh
 .run/
+
+# Binaries from `go build ./...` in a command module
+tests/load/load
