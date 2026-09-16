@@ -129,19 +129,18 @@ the record moves to the CVE (see CURRENT-FUNCTIONALITIES 1.3).
 - **Fix:** derive the alert id from the subscription and the finding's first-stored id,
   or dedupe on every id the finding carries.
 
-### 🟡 Versions are judged from manifests, not lockfiles
+### 🟢 Two lockfile formats are still unread
 
-Version matching compares what a manifest declares with an advisory's affected range. A
-declared range such as `^5.11.0` allows many versions, so a finding whose fix falls inside
-that range can only be "possibly affected".
+A version matters twice over: what a manifest allows ("^1.13.2") can only ever be judged
+"possibly affected", while what a lockfile installs (1.13.2) settles it outright.
 
-- **Why:** the scanner reads manifests (`package.json`, `pyproject.toml`, `Cargo.toml` …),
-  which say what is allowed, not what is installed; of the lockfiles only `Gemfile.lock` is
-  read. (`go.mod` and exact `==` pins are already exact.)
-- **Cost:** most npm findings read "possibly affected"; which way each one goes depends on
-  the installed version, which only the lockfile records.
-- **Fix:** read `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `poetry.lock` and
-  `Cargo.lock`, and judge the installed versions instead.
+- **Resolved (2026-09-16):** `package-lock.json`, `pnpm-lock.yaml`, `Cargo.lock`,
+  `poetry.lock`, `composer.lock` and `Gemfile.lock` are read alongside their manifests, and
+  a locked version wins over a declared range. They also carry the transitive dependencies,
+  where most exposure actually sits.
+- **What remains:** `yarn.lock` (its own text format) and NuGet's `packages.lock.json` are
+  not read, so those versions are still ranges. `go.mod` and pinned `==` requirements were
+  already exact.
 
 ### 🟡 NuGet and RubyGems names must match the advisory's spelling
 
