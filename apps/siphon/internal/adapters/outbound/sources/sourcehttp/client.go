@@ -21,6 +21,15 @@ import (
 // maxRetries bounds the backoff loop for throttled/transient responses.
 const maxRetries = 4
 
+// ErrNotFound reports a 404. It is a sentinel because "this file is not in
+// this repository" is a normal, expected answer when probing for optional
+// resources — callers need to tell it apart from a genuine failure.
+var ErrNotFound = errors.New("not found")
+
+// ErrConflict reports a 409. GitHub answers it for the tree of a repository
+// with no commits, which is an expected state rather than a failure.
+var ErrConflict = errors.New("conflict")
+
 // Client is a polite HTTP client: it paces requests and retries throttling.
 type Client struct {
 	http    *http.Client
@@ -46,6 +55,18 @@ func WithTimeout(d time.Duration) Option {
 	return func(c *Client) {
 		if d > 0 {
 			c.http.Timeout = d
+		}
+	}
+}
+
+// WithRateLimit overrides the pacing a client was built with. It exists so a
+// caller can tune one source independently of the default its adapter picked —
+// and so tests against a local httptest server do not have to sit out delays
+// that only make sense against a real, rate-limited API.
+func WithRateLimit(d time.Duration) Option {
+	return func(c *Client) {
+		if d > 0 {
+			c.limiter = rate.NewLimiter(rate.Every(d), 1)
 		}
 	}
 }
@@ -140,6 +161,10 @@ func (c *Client) once(ctx context.Context, url string) ([]byte, bool, error) {
 
 	switch {
 	case resp.StatusCode == http.StatusOK:
+	case resp.StatusCode == http.StatusNotFound:
+		return nil, false, fmt.Errorf("%w: %s", ErrNotFound, url)
+	case resp.StatusCode == http.StatusConflict:
+		return nil, false, fmt.Errorf("%w: %s", ErrConflict, url)
 	case quotaExhausted(resp):
 		// The request budget is spent: retrying cannot succeed before the reset,
 		// and each retry would also burn the limiter delay, stalling the whole

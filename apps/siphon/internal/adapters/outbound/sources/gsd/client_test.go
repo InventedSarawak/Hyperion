@@ -45,7 +45,7 @@ var _ = Describe("GSD/OSV adapter", func() {
 		Expect(got).To(HaveLen(1))
 
 		Expect(got[0].CVEID).To(Equal("CVE-2026-1111"))
-		Expect(got[0].Title).To(ContainSubstring("OSV/GSD"))
+		Expect(got[0].Title).ToNot(ContainSubstring("OSV/GSD")) // provenance is the source, not the title
 		Expect(got[0].Description).To(Equal("Detailed description."))
 		Expect(got[0].References).To(ContainElement("https://example.test/osv"))
 	})

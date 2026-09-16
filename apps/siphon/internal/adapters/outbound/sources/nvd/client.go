@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -130,33 +131,157 @@ func (c *Client) Kind() valueobject.SourceKind { return valueobject.SourceKindNV
 // result set is drained (or maxPages is reached). A zero `since` fetches the
 // most recent page without a date filter.
 func (c *Client) Fetch(ctx context.Context, since time.Time) ([]model.SourceSignal, error) {
-	var (
-		signals    []model.SourceSignal
-		startIndex int
-		pages      int
-	)
+	var filter *dateFilter
+	if !since.IsZero() {
+		start, end := clampWindow(since, time.Now())
+		filter = &dateFilter{startParam: "lastModStartDate", endParam: "lastModEndDate", start: start, end: end}
+	}
 
-	for {
-		page, total, err := c.fetchPage(ctx, since, startIndex)
-		if err != nil {
-			return signals, err
-		}
+	var signals []model.SourceSignal
+	err := c.walk(ctx, filter, c.maxPages, func(page []model.SourceSignal) error {
 		signals = append(signals, page...)
+		return nil
+	})
+	return signals, err
+}
+
+// Backfill walks every CVE *published* from `from` until now, handing each
+// page to emit as it arrives.
+//
+// It exists because Fetch cannot reach history: NVD rejects any date range
+// wider than 120 days, so a years-long lookback is silently clamped to the
+// last four months. Backfill instead walks consecutive 120-day windows, and it
+// filters on publication rather than modification — the question a backfill
+// answers is "what was disclosed in this period", and last-modified would
+// drag in decade-old records every time NVD touched their metadata.
+//
+// Pages are emitted rather than collected: ten years is roughly 280,000
+// records, which should flow through, not pile up in memory. The page bound
+// does not apply — a backfill that stops early leaves a hole nobody sees.
+//
+// Windows are fetched a few at a time. NVD takes ~40s to serve one 2,000-row
+// page, so a serial walk spends almost all its time waiting on the server,
+// not on the rate limit; the shared limiter still spaces every request. emit
+// is never called concurrently.
+func (c *Client) Backfill(ctx context.Context, from time.Time, emit func([]model.SourceSignal) error) error {
+	windows := backfillWindows(from, time.Now())
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var (
+		mu      sync.Mutex // serializes emit and guards the error state
+		emitErr error      // the consumer failed: stop everything
+		failed  []error    // windows that could not be read: report, carry on
+		wg      sync.WaitGroup
+		next    = make(chan dateFilter)
+	)
+	serialEmit := func(page []model.SourceSignal) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if err := emit(page); err != nil {
+			if emitErr == nil {
+				emitErr = err
+				cancel()
+			}
+			return err
+		}
+		return nil
+	}
+
+	for range min(backfillConcurrency, len(windows)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for w := range next {
+				err := c.walk(ctx, &w, 0, serialEmit)
+				if err == nil || ctx.Err() != nil {
+					continue
+				}
+				// One window NVD would not serve, even after retries, is a
+				// hole to report, not a reason to abandon the other nine
+				// years. The error names the window so it can be re-run.
+				mu.Lock()
+				failed = append(failed, fmt.Errorf("%s..%s: %w",
+					w.start.Format(time.DateOnly), w.end.Format(time.DateOnly), err))
+				mu.Unlock()
+			}
+		}()
+	}
+
+feed:
+	for _, w := range windows {
+		select {
+		case next <- w:
+		case <-ctx.Done():
+			break feed
+		}
+	}
+	close(next)
+	wg.Wait()
+
+	switch {
+	case emitErr != nil:
+		return emitErr
+	case ctx.Err() != nil:
+		return ctx.Err()
+	case len(failed) > 0:
+		return fmt.Errorf("nvd backfill: %d window(s) incomplete, re-run from the earliest: %w",
+			len(failed), errors.Join(failed...))
+	}
+	return nil
+}
+
+// backfillConcurrency is how many publication windows are in flight at once.
+const backfillConcurrency = 4
+
+// backfillWindows splits [from, now) into consecutive ranges no wider than
+// NVD allows, with no gaps between them.
+func backfillWindows(from, now time.Time) []dateFilter {
+	var out []dateFilter
+	for start := from; start.Before(now); start = start.Add(maxWindow) {
+		end := start.Add(maxWindow)
+		if end.After(now) {
+			end = now
+		}
+		out = append(out, dateFilter{startParam: "pubStartDate", endParam: "pubEndDate", start: start, end: end})
+	}
+	return out
+}
+
+// dateFilter selects one of NVD's two date ranges — last-modified for
+// incremental polling, published for a backfill. Both share the 120-day cap.
+type dateFilter struct {
+	startParam, endParam string
+	start, end           time.Time
+}
+
+// walk pages through one query, handing each page to emit, until the result
+// set is drained or maxPages (when positive) is reached.
+func (c *Client) walk(ctx context.Context, filter *dateFilter, maxPages int, emit func([]model.SourceSignal) error) error {
+	startIndex, pages := 0, 0
+	for {
+		page, total, err := c.fetchPage(ctx, filter, startIndex)
+		if err != nil {
+			return err
+		}
+		if err := emit(page); err != nil {
+			return err
+		}
 		pages++
 
 		startIndex += c.pageSize
 		if startIndex >= total || len(page) == 0 {
-			break
+			return nil
 		}
-		if c.maxPages > 0 && pages >= c.maxPages {
-			break
+		if maxPages > 0 && pages >= maxPages {
+			return nil
 		}
 	}
-	return signals, nil
 }
 
 // fetchPage retrieves one page and reports the total result count.
-func (c *Client) fetchPage(ctx context.Context, since time.Time, startIndex int) ([]model.SourceSignal, int, error) {
+func (c *Client) fetchPage(ctx context.Context, filter *dateFilter, startIndex int) ([]model.SourceSignal, int, error) {
 	u, err := url.Parse(c.baseURL)
 	if err != nil {
 		return nil, 0, fmt.Errorf("nvd: parse base url: %w", err)
@@ -167,10 +292,9 @@ func (c *Client) fetchPage(ctx context.Context, since time.Time, startIndex int)
 	if startIndex > 0 {
 		q.Set("startIndex", strconv.Itoa(startIndex))
 	}
-	if !since.IsZero() {
-		start, end := clampWindow(since, time.Now())
-		q.Set("lastModStartDate", start.UTC().Format(nvdTimeLayout))
-		q.Set("lastModEndDate", end.UTC().Format(nvdTimeLayout))
+	if filter != nil {
+		q.Set(filter.startParam, filter.start.UTC().Format(nvdTimeLayout))
+		q.Set(filter.endParam, filter.end.UTC().Format(nvdTimeLayout))
 	}
 	u.RawQuery = q.Encode()
 
@@ -247,9 +371,21 @@ func (c *Client) doOnce(ctx context.Context, endpoint string) (*apiResponse, boo
 
 	var payload apiResponse
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, false, fmt.Errorf("nvd: decode response: %w", err)
+		// A page is several megabytes streamed over a minute, and the
+		// connection can drop partway ("connection reset by peer"). That is a
+		// transport failure worth retrying; only a body that arrived whole and
+		// is not valid NVD JSON is final.
+		return nil, !isMalformedJSON(err), fmt.Errorf("nvd: decode response: %w", err)
 	}
 	return &payload, false, nil
+}
+
+// isMalformedJSON reports whether a decode failed on the content itself rather
+// than on reading it.
+func isMalformedJSON(err error) bool {
+	var syntax *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	return errors.As(err, &syntax) || errors.As(err, &typeErr)
 }
 
 // clampWindow keeps the requested range inside NVD's 120-day maximum.
@@ -308,10 +444,13 @@ type nvdCvssMetric struct {
 
 // --- mapping: NVD wire -> domain ---
 
+// toSourceSignal leaves the title empty on purpose: NVD records have no title,
+// only a description. Filling it with the CVE id looked harmless but was
+// treated downstream as a real title — it hid the description in every list,
+// and it overwrote the genuine titles GitHub and vendors had supplied.
 func toSourceSignal(cve nvdCVE) model.SourceSignal {
 	return model.SourceSignal{
 		CVEID:       cve.ID,
-		Title:       cve.ID,
 		Description: englishDescription(cve.Descriptions),
 		Scores:      toScores(cve.Metrics),
 		References:  toReferences(cve.References),
@@ -332,12 +471,21 @@ func englishDescription(ds []nvdLangValue) string {
 	return ""
 }
 
+// toReferences keeps each URL once. NVD lists a reference once per
+// organization that submitted it, so the same link often appears two or three
+// times in a row.
 func toReferences(refs []nvdReference) []string {
+	seen := make(map[string]struct{}, len(refs))
 	out := make([]string, 0, len(refs))
 	for _, r := range refs {
-		if r.URL != "" {
-			out = append(out, r.URL)
+		if r.URL == "" {
+			continue
 		}
+		if _, dup := seen[r.URL]; dup {
+			continue
+		}
+		seen[r.URL] = struct{}{}
+		out = append(out, r.URL)
 	}
 	return out
 }

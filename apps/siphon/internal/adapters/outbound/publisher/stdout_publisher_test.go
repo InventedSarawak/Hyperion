@@ -9,6 +9,7 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/encoding/protojson"
 
+	commonv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/common/v1"
 	eventsv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/events/v1"
 
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/publisher"
@@ -47,6 +48,21 @@ var _ = Describe("Stdout Publisher", func() {
 		Expect(got.GetVulnerability().GetScores()[0].GetBaseScore()).To(Equal(10.0))
 		Expect(got.GetVulnerability().GetPublishedAt().AsTime().Year()).To(Equal(2021))
 	})
+
+	It("carries every id the finding is known by, and its kind", func() {
+		var buf bytes.Buffer
+		evt := events.NewSignalDiscovered(
+			valueobject.SourceKindGitHubAdvisory,
+			model.SourceSignal{CVEID: "GHSA-fw8c-xr5c-95f9", Aliases: []string{"MAL-2026-2307"}, Kind: model.KindMalware},
+			time.Now(), "",
+		)
+		Expect(publisher.NewStdout(&buf).Publish(context.Background(), evt)).To(Succeed())
+
+		var got eventsv1.SignalDiscovered
+		Expect(protojson.Unmarshal(buf.Bytes(), &got)).To(Succeed())
+		Expect(got.GetVulnerability().GetAliases()).To(Equal([]string{"MAL-2026-2307"}))
+		Expect(got.GetVulnerability().GetKind()).To(Equal(commonv1.FindingKind_FINDING_KIND_MALWARE))
+	})
 })
 
 var _ = Describe("source kind coverage", func() {
@@ -70,5 +86,52 @@ var _ = Describe("source kind coverage", func() {
 			seen[got.GetSource()] = kind
 		}
 		Expect(seen).To(HaveLen(len(valueobject.AllSourceKinds())))
+	})
+})
+
+var _ = Describe("Stdout Publisher affected packages", func() {
+	It("carries the affected packages onto the wire", func() {
+		var buf bytes.Buffer
+		evt := events.NewSignalDiscovered(
+			valueobject.SourceKindGitHubAdvisory,
+			model.SourceSignal{
+				CVEID: "CVE-2021-44228",
+				AffectedPackages: []valueobject.PackageRef{
+					valueobject.NewPackageRef("maven", "org.apache.logging.log4j:log4j-core", ">= 2.0.1, < 2.15.0"),
+					valueobject.NewPackageRef("conda", "unmodelled-registry", ""),
+					{Ecosystem: valueobject.EcosystemNPM}, // no name: dropped
+				},
+			},
+			time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+			"",
+		)
+
+		Expect(publisher.NewStdout(&buf).Publish(context.Background(), evt)).To(Succeed())
+
+		var got eventsv1.SignalDiscovered
+		Expect(protojson.Unmarshal(buf.Bytes(), &got)).To(Succeed())
+
+		pkgs := got.GetVulnerability().GetAffectedPackages()
+		Expect(pkgs).To(HaveLen(2))
+		Expect(pkgs[0].GetEcosystem()).To(Equal(commonv1.Ecosystem_ECOSYSTEM_MAVEN))
+		Expect(pkgs[0].GetName()).To(Equal("org.apache.logging.log4j:log4j-core"))
+		Expect(pkgs[0].GetVersion()).To(Equal(">= 2.0.1, < 2.15.0"))
+
+		// A registry we do not model still travels by name, unspecified.
+		Expect(pkgs[1].GetEcosystem()).To(Equal(commonv1.Ecosystem_ECOSYSTEM_UNSPECIFIED))
+		Expect(pkgs[1].GetName()).To(Equal("unmodelled-registry"))
+	})
+
+	It("omits the field entirely when the source names no packages", func() {
+		var buf bytes.Buffer
+		evt := events.NewSignalDiscovered(
+			valueobject.SourceKindNVD,
+			model.SourceSignal{CVEID: "CVE-2021-44228"},
+			time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+			"",
+		)
+
+		Expect(publisher.NewStdout(&buf).Publish(context.Background(), evt)).To(Succeed())
+		Expect(buf.String()).ToNot(ContainSubstring("affectedPackages"))
 	})
 })

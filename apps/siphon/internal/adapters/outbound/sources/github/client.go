@@ -64,11 +64,48 @@ func New(baseURL, token string, opts ...sourcehttp.Option) *Client {
 func (c *Client) Kind() valueobject.SourceKind { return valueobject.SourceKindGitHubAdvisory }
 
 // Fetch returns advisories updated at or after `since`, walking pages.
+//
+// It makes two passes. The unfiltered feed is dominated by "unreviewed"
+// advisories — automated NVD imports that carry no affected-package data at
+// all — so a recency-sorted window buries the handful of reviewed advisories
+// that do. Since those are the only ones that link a CVE to a library, and
+// blast radius is worthless without that link, the reviewed feed is asked for
+// explicitly rather than hoped for.
+//
+// Duplicates between the passes are dropped, so the extra request costs one
+// page of quota and no repeated work downstream.
 func (c *Client) Fetch(ctx context.Context, since time.Time) ([]model.SourceSignal, error) {
+	var (
+		signals []model.SourceSignal
+		seen    = make(map[string]struct{})
+	)
+
+	for _, advisoryType := range []string{"", typeReviewed, typeMalware} {
+		batch, err := c.fetchPass(ctx, since, advisoryType, seen)
+		signals = append(signals, batch...)
+		if err != nil {
+			return signals, err
+		}
+	}
+	return signals, nil
+}
+
+// typeReviewed selects the advisories GitHub curates by hand, which are the
+// ones carrying ecosystem package linkage.
+const typeReviewed = "reviewed"
+
+// typeMalware selects compromised or malicious package releases — the axios
+// compromise (GHSA-fw8c-xr5c-95f9) is one. GitHub never includes them unless
+// asked by name, and they rarely carry a CVE, so without this pass the most
+// urgent class of supply-chain finding never arrived at all.
+const typeMalware = "malware"
+
+// fetchPass walks the pages of one feed, skipping advisories already seen.
+func (c *Client) fetchPass(ctx context.Context, since time.Time, advisoryType string, seen map[string]struct{}) ([]model.SourceSignal, error) {
 	var signals []model.SourceSignal
 
 	for page := 1; page <= c.maxPages; page++ {
-		endpoint, err := c.pageURL(since, page)
+		endpoint, err := c.pageURL(since, page, advisoryType)
 		if err != nil {
 			return signals, err
 		}
@@ -78,6 +115,15 @@ func (c *Client) Fetch(ctx context.Context, since time.Time) ([]model.SourceSign
 			return signals, fmt.Errorf("github advisory: %w", err)
 		}
 		for _, a := range batch {
+			if a.Type == "" {
+				a.Type = advisoryType // the pass asked for this type by name
+			}
+			if key := dedupeKey(a); key != "" {
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+			}
 			signals = append(signals, toSourceSignal(a))
 		}
 		if len(batch) < c.pageSize {
@@ -87,9 +133,19 @@ func (c *Client) Fetch(ctx context.Context, since time.Time) ([]model.SourceSign
 	return signals, nil
 }
 
+// dedupeKey identifies an advisory across the two passes. The GHSA id is the
+// stable one; the CVE id is a fallback for records that somehow lack it.
+func dedupeKey(a advisory) string {
+	if a.GHSAID != "" {
+		return a.GHSAID
+	}
+	return a.CVEID
+}
+
 // pageURL builds one request URL. GitHub's `modified` filter takes an
-// ISO-8601 range expression, e.g. ">=2024-01-02T03:04:05Z".
-func (c *Client) pageURL(since time.Time, page int) (string, error) {
+// ISO-8601 range expression, e.g. ">=2024-01-02T03:04:05Z". An empty
+// advisoryType asks for every type.
+func (c *Client) pageURL(since time.Time, page int, advisoryType string) (string, error) {
 	u, err := url.Parse(c.baseURL + "/advisories")
 	if err != nil {
 		return "", fmt.Errorf("github advisory: parse base url: %w", err)
@@ -100,6 +156,9 @@ func (c *Client) pageURL(since time.Time, page int) (string, error) {
 	q.Set("page", strconv.Itoa(page))
 	q.Set("sort", "updated")
 	q.Set("direction", "desc")
+	if advisoryType != "" {
+		q.Set("type", advisoryType)
+	}
 	if !since.IsZero() {
 		q.Set("modified", ">="+since.UTC().Format(time.RFC3339))
 	}
@@ -113,6 +172,7 @@ func (c *Client) pageURL(since time.Time, page int) (string, error) {
 type advisory struct {
 	GHSAID      string `json:"ghsa_id"`
 	CVEID       string `json:"cve_id"`
+	Type        string `json:"type"` // reviewed, unreviewed or malware
 	HTMLURL     string `json:"html_url"`
 	Summary     string `json:"summary"`
 	Description string `json:"description"`
@@ -124,16 +184,35 @@ type advisory struct {
 		VectorString string  `json:"vector_string"`
 	} `json:"cvss"`
 	References []string `json:"references"`
+	// Vulnerabilities lists the ecosystem packages this advisory affects.
+	// GitHub is the richest source of this linkage, which is what connects
+	// an advisory to the repositories that depend on the package.
+	Vulnerabilities []struct {
+		Package struct {
+			Ecosystem string `json:"ecosystem"`
+			Name      string `json:"name"`
+		} `json:"package"`
+		VulnerableVersionRange string `json:"vulnerable_version_range"`
+	} `json:"vulnerabilities"`
 }
 
 // --- mapping: GitHub wire -> domain ---
 
 func toSourceSignal(a advisory) model.SourceSignal {
-	// Prefer the CVE id so records reconcile with other sources; fall back to
-	// the GHSA id for advisories that have no CVE assigned.
-	id := a.CVEID
-	if id == "" {
+	// Lead with the CVE id so records reconcile with other sources, and keep
+	// the GHSA as an alias: it is how GitHub, OSV and the advisory's own page
+	// refer to it. Advisories with no CVE lead with the GHSA.
+	id, aliases := a.CVEID, []string(nil)
+	switch {
+	case id == "":
 		id = a.GHSAID
+	case a.GHSAID != "":
+		aliases = []string{a.GHSAID}
+	}
+
+	kind := model.KindVulnerability
+	if a.Type == typeMalware {
+		kind = model.KindMalware
 	}
 
 	references := a.References
@@ -142,24 +221,58 @@ func toSourceSignal(a advisory) model.SourceSignal {
 	}
 
 	var scores []model.CVSS
-	if a.CVSS.Score > 0 || a.CVSS.VectorString != "" {
+	switch severity := toSeverity(a.Severity); {
+	case a.CVSS.Score > 0 || a.CVSS.VectorString != "":
 		scores = append(scores, model.CVSS{
 			Version:   cvssVersion(a.CVSS.VectorString),
 			BaseScore: a.CVSS.Score,
 			Vector:    a.CVSS.VectorString,
-			Severity:  toSeverity(a.Severity),
+			Severity:  severity,
 		})
+	case severity != model.SeverityUnknown:
+		// Malware advisories are rated but never scored: there is no CVSS
+		// vector for "this release is a remote-access trojan". Dropping the
+		// rating would list the axios compromise as UNKNOWN.
+		scores = append(scores, model.CVSS{Severity: severity})
 	}
 
 	return model.SourceSignal{
-		CVEID:       id,
-		Title:       a.Summary,
-		Description: a.Description,
-		Scores:      scores,
-		References:  references,
-		PublishedAt: parseTime(a.PublishedAt),
-		ModifiedAt:  parseTime(a.UpdatedAt),
+		CVEID:            id,
+		Aliases:          aliases,
+		Kind:             kind,
+		Title:            a.Summary,
+		Description:      a.Description,
+		Scores:           scores,
+		References:       references,
+		PublishedAt:      parseTime(a.PublishedAt),
+		ModifiedAt:       parseTime(a.UpdatedAt),
+		AffectedPackages: toAffectedPackages(a),
 	}
+}
+
+// toAffectedPackages maps the advisory's affected packages onto domain
+// references, collapsing the repeats GitHub emits when one package is listed
+// once per vulnerable version range.
+func toAffectedPackages(a advisory) []valueobject.PackageRef {
+	seen := make(map[string]struct{}, len(a.Vulnerabilities))
+	out := make([]valueobject.PackageRef, 0, len(a.Vulnerabilities))
+
+	for _, v := range a.Vulnerabilities {
+		if v.Package.Name == "" {
+			continue
+		}
+		ref := valueobject.NewPackageRef(v.Package.Ecosystem, v.Package.Name, v.VulnerableVersionRange)
+		key := ref.Ecosystem.String() + ":" + ref.Name
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, ref)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // cvssVersion reads the version prefix out of a CVSS vector string.

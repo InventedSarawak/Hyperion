@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package hyperion.alerting.v1;
+
+import "google/protobuf/timestamp.proto";
+import "hyperion/common/v1/package.proto";
+import "hyperion/common/v1/vulnerability.proto";
+
+// AlertingService is cortex's subscription and alert API. Subscribers describe
+// what they want to hear about once; every incoming vulnerability is matched
+// against every rule (reverse search), so nobody has to poll.
+service AlertingService {
+  rpc CreateSubscription(CreateSubscriptionRequest) returns (CreateSubscriptionResponse);
+  rpc ListSubscriptions(ListSubscriptionsRequest) returns (ListSubscriptionsResponse);
+  rpc DeleteSubscription(DeleteSubscriptionRequest) returns (DeleteSubscriptionResponse);
+  // ListAlerts returns what has already matched, newest first.
+  rpc ListAlerts(ListAlertsRequest) returns (ListAlertsResponse);
+}
+
+// AlertRule is what a subscriber wants to hear about. Every populated
+// condition must hold, so conditions narrow rather than widen. A rule with no
+// conditions at all is rejected: it would match every vulnerability ever
+// ingested, which is the alert fatigue this platform exists to prevent.
+message AlertRule {
+  string term = 1; // free text over cve id, title and description
+  hyperion.common.v1.Severity min_severity = 2; // UNSPECIFIED = any severity
+  // Match when the vulnerability affects any of these libraries. Version is
+  // ignored: a rule tracks a library, not a pin.
+  repeated hyperion.common.v1.PackageRef packages = 3;
+  repeated hyperion.common.v1.Ecosystem ecosystems = 4;
+}
+
+// Subscription is one subscriber's standing interest.
+message Subscription {
+  string id = 1;
+  string tenant = 2; // owner; per-tenant isolation arrives with auth in v4
+  string name = 3;
+  AlertRule rule = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+// Alert is one vulnerability matching one subscription.
+message Alert {
+  string id = 1;
+  string subscription_id = 2;
+  string subscription_name = 3;
+  string tenant = 4;
+  string cve_id = 5;
+  // The matching vulnerability, resolved on read. Alerts store only the CVE
+  // id, so a later correction to the record is reflected rather than frozen.
+  hyperion.common.v1.Vulnerability vulnerability = 6;
+  string reason = 7; // which conditions matched, for display
+  google.protobuf.Timestamp created_at = 8;
+}
+
+message CreateSubscriptionRequest {
+  string tenant = 1;
+  string name = 2;
+  AlertRule rule = 3;
+}
+
+message CreateSubscriptionResponse {
+  Subscription subscription = 1;
+}
+
+message ListSubscriptionsRequest {
+  string tenant = 1; // empty lists every tenant's, until auth scopes it (v4)
+}
+
+message ListSubscriptionsResponse {
+  repeated Subscription subscriptions = 1;
+}
+
+message DeleteSubscriptionRequest {
+  string id = 1;
+}
+
+message DeleteSubscriptionResponse {
+  bool deleted = 1;
+}
+
+message ListAlertsRequest {
+  string tenant = 1;
+  string subscription_id = 2; // optional filter
+  int32 limit = 3;
+}
+
+message ListAlertsResponse {
+  repeated Alert alerts = 1;
+}

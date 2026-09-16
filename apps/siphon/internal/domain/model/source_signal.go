@@ -5,6 +5,8 @@ package model
 import (
 	"errors"
 	"time"
+
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/valueobject"
 )
 
 // Severity is the domain's qualitative rating for a score.
@@ -27,21 +29,43 @@ type CVSS struct {
 	Severity  Severity
 }
 
+// FindingKind separates flaws in legitimate software from packages published
+// to do harm. Only advisory feeds that track malware (GitHub, OSV) ever say
+// the latter; everything else reports vulnerabilities.
+type FindingKind string
+
+const (
+	KindVulnerability FindingKind = "vulnerability"
+	KindMalware       FindingKind = "malware"
+)
+
 // SourceSignal is the normalized, source-agnostic form of one vulnerability
 // signal after siphon has parsed an upstream feed. It is a domain type: it
 // knows nothing about NVD JSON, protobuf, or Kafka.
 type SourceSignal struct {
-	CVEID       string
+	// CVEID is the id the source leads with: a CVE when the finding has one,
+	// else a GHSA, else a MAL, else whatever the feed numbered it. The name
+	// predates GHSA and MAL support.
+	CVEID string
+	// Aliases are the other ids the source knows the finding by. Keeping them
+	// is what lets cortex recognise one finding reported under different ids.
+	Aliases     []string
+	Kind        FindingKind
 	Title       string
 	Description string
 	Scores      []CVSS
 	References  []string
 	PublishedAt time.Time
 	ModifiedAt  time.Time
+	// AffectedPackages are the libraries the source names as vulnerable.
+	// Only advisory-shaped feeds (GitHub Advisory, OSV) supply these; they
+	// are what lets cortex connect a CVE into the dependency graph, so a
+	// feed that omits them yields a finding with no blast radius.
+	AffectedPackages []valueobject.PackageRef
 }
 
-// ErrMissingCVEID is returned when a signal lacks its canonical identifier.
-var ErrMissingCVEID = errors.New("source signal: cve id is required")
+// ErrMissingCVEID is returned when a signal lacks an identifier.
+var ErrMissingCVEID = errors.New("source signal: an id is required")
 
 // Validate enforces the entity's invariants.
 func (s SourceSignal) Validate() error {

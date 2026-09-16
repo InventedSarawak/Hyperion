@@ -14,15 +14,18 @@ import (
 
 	commonv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/common/v1"
 	intelv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/intelligence/v1"
+	watchlistv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/watchlist/v1"
 
 	"github.com/inventedsarawak/hyperion/apps/nexus/internal/domain/model"
 )
 
-// Client wraps the generated gRPC stub.
+// Client wraps the generated gRPC stubs. Both services live in cortex, so
+// they share one connection.
 type Client struct {
-	conn   *grpc.ClientConn
-	stub   intelv1.IntelligenceServiceClient
-	timout time.Duration
+	conn      *grpc.ClientConn
+	stub      intelv1.IntelligenceServiceClient
+	watchlist watchlistv1.WatchlistServiceClient
+	timout    time.Duration
 }
 
 // Dial opens a connection to cortex. Local development uses plaintext; TLS
@@ -32,24 +35,35 @@ func Dial(addr string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("grpc: dial %s: %w", addr, err)
 	}
-	return &Client{conn: conn, stub: intelv1.NewIntelligenceServiceClient(conn), timout: 10 * time.Second}, nil
+	return &Client{
+		conn:      conn,
+		stub:      intelv1.NewIntelligenceServiceClient(conn),
+		watchlist: watchlistv1.NewWatchlistServiceClient(conn),
+		timout:    10 * time.Second,
+	}, nil
 }
 
 // Close releases the connection.
 func (c *Client) Close() error { return c.conn.Close() }
 
 // Search calls cortex and maps the response back into nexus view models.
-func (c *Client) Search(ctx context.Context, query string, pageSize int, pageToken string) (model.SearchResult, error) {
+func (c *Client) Search(ctx context.Context, query string, sort model.SearchSort, kinds []model.FindingKind, pageSize int, pageToken string) (model.SearchResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timout)
 	defer cancel()
 
+	wireSort := intelv1.SearchSort_SEARCH_SORT_RELEVANCE
+	if sort == model.SortNewest {
+		wireSort = intelv1.SearchSort_SEARCH_SORT_NEWEST
+	}
 	resp, err := c.stub.Search(ctx, &intelv1.SearchRequest{
+		Sort:      wireSort,
+		Kinds:     wireKinds(kinds),
 		Query:     query,
 		PageSize:  int32(pageSize),
 		PageToken: pageToken,
 	})
 	if err != nil {
-		return model.SearchResult{}, fmt.Errorf("grpc: search: %w", err)
+		return model.SearchResult{}, describe(err)
 	}
 
 	hits := make([]model.SearchHit, 0, len(resp.GetResults()))
@@ -59,21 +73,72 @@ func (c *Client) Search(ctx context.Context, query string, pageSize int, pageTok
 			Score:         r.GetScore(),
 		})
 	}
-	return model.SearchResult{Hits: hits, NextPageToken: resp.GetNextPageToken()}, nil
+	return model.SearchResult{
+		Hits:              hits,
+		NextPageToken:     resp.GetNextPageToken(),
+		TotalResults:      resp.GetTotalResults(),
+		TotalIsLowerBound: resp.GetTotalIsLowerBound(),
+	}, nil
+}
+
+// wireKinds maps the kinds a search asks for onto the wire enum.
+func wireKinds(kinds []model.FindingKind) []commonv1.FindingKind {
+	out := make([]commonv1.FindingKind, 0, len(kinds))
+	for _, k := range kinds {
+		switch k {
+		case model.KindMalware:
+			out = append(out, commonv1.FindingKind_FINDING_KIND_MALWARE)
+		case model.KindVulnerability:
+			out = append(out, commonv1.FindingKind_FINDING_KIND_VULNERABILITY)
+		}
+	}
+	return out
 }
 
 // --- mapping: wire contract -> nexus view model ---
 
+func fromWireKind(k commonv1.FindingKind) model.FindingKind {
+	if k == commonv1.FindingKind_FINDING_KIND_MALWARE {
+		return model.KindMalware
+	}
+	return model.KindVulnerability
+}
+
 func toViewModel(v *commonv1.Vulnerability) model.Vulnerability {
 	return model.Vulnerability{
 		CVEID:       v.GetCveId(),
+		Aliases:     v.GetAliases(),
+		Kind:        fromWireKind(v.GetKind()),
 		Title:       v.GetTitle(),
 		Description: v.GetDescription(),
 		Scores:      toViewScores(v.GetScores()),
 		References:  v.GetReferences(),
 		PublishedAt: fromTimestamp(v.GetPublishedAt()),
 		ModifiedAt:  fromTimestamp(v.GetModifiedAt()),
+		Sources:     v.GetSources(),
+
+		AffectedPackages: toAffectedPackages(v.GetAffectedPackages()),
 	}
+}
+
+func toAffectedPackages(refs []*commonv1.PackageRef) []model.AffectedPackage {
+	out := make([]model.AffectedPackage, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, model.AffectedPackage{Package: packageLabel(r), VersionRange: r.GetVersion()})
+	}
+	return out
+}
+
+// Vulnerability fetches one finding in full.
+func (c *Client) Vulnerability(ctx context.Context, id string) (model.Vulnerability, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timout)
+	defer cancel()
+
+	resp, err := c.stub.GetVulnerability(ctx, &intelv1.GetVulnerabilityRequest{CveId: id})
+	if err != nil {
+		return model.Vulnerability{}, describe(err)
+	}
+	return toViewModel(resp.GetVulnerability()), nil
 }
 
 func toViewScores(scores []*commonv1.Cvss) []model.CVSS {
@@ -112,4 +177,137 @@ func fromTimestamp(ts *timestamppb.Timestamp) time.Time {
 		return time.Time{}
 	}
 	return ts.AsTime()
+}
+
+// BlastRadius calls cortex and maps the traversal into gateway view models.
+func (c *Client) BlastRadius(ctx context.Context, cveID string, maxDepth, limit int) (model.BlastRadius, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timout)
+	defer cancel()
+
+	resp, err := c.stub.GetBlastRadius(ctx, &intelv1.GetBlastRadiusRequest{
+		CveId:    cveID,
+		MaxDepth: int32(maxDepth),
+		Limit:    int32(limit),
+	})
+	if err != nil {
+		return model.BlastRadius{}, describe(err)
+	}
+
+	radius := model.BlastRadius{CVEID: resp.GetCveId()}
+	for _, p := range resp.GetVulnerablePackages() {
+		radius.VulnerablePackages = append(radius.VulnerablePackages, packageLabel(p))
+	}
+	for _, r := range resp.GetRepositories() {
+		repo := r.GetRepository()
+		radius.Repositories = append(radius.Repositories, model.ImpactedRepository{
+			Owner:      repo.GetOwner(),
+			Name:       repo.GetName(),
+			URL:        repo.GetUrl(),
+			AuthorName: r.GetAuthor().GetLogin(),
+			ViaPackage: packageLabel(r.GetViaPackage()),
+			Depth:      int(r.GetDepth()),
+			Direct:     r.GetDirect(),
+			Path:       r.GetPath(),
+
+			DeclaredVersion:  r.GetDeclaredVersion(),
+			AffectedVersions: r.GetAffectedVersions(),
+			Verdict:          verdictLabel(r.GetVerdict()),
+		})
+	}
+	return radius, nil
+}
+
+// RepositoryExposure asks cortex which vulnerabilities a repository has.
+func (c *Client) RepositoryExposure(ctx context.Context, fullName string, includeUnaffected bool) (model.RepositoryExposure, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timout)
+	defer cancel()
+
+	resp, err := c.stub.GetRepositoryExposure(ctx, &intelv1.GetRepositoryExposureRequest{
+		FullName:          fullName,
+		IncludeUnaffected: includeUnaffected,
+	})
+	if err != nil {
+		return model.RepositoryExposure{}, describe(err)
+	}
+	out := model.RepositoryExposure{
+		FullName: resp.GetFullName(),
+		Scanned:  resp.GetScanned(),
+		Summary:  toSummary(resp.GetSummary()),
+	}
+	for _, f := range resp.GetFindings() {
+		out.Findings = append(out.Findings, model.RepositoryFinding{
+			Vulnerability:    toViewModel(f.GetVulnerability()),
+			Package:          packageLabel(f.GetViaPackage()),
+			DeclaredVersion:  f.GetViaPackage().GetVersion(),
+			AffectedVersions: f.GetAffectedVersions(),
+			Verdict:          verdictLabel(f.GetVerdict()),
+			Depth:            int(f.GetDepth()),
+			Direct:           f.GetDirect(),
+			Path:             f.GetPath(),
+		})
+	}
+	return out, nil
+}
+
+// verdictLabel maps the wire verdict onto the gateway's.
+func verdictLabel(v commonv1.ExposureVerdict) string {
+	switch v {
+	case commonv1.ExposureVerdict_EXPOSURE_VERDICT_AFFECTED:
+		return model.VerdictAffected
+	case commonv1.ExposureVerdict_EXPOSURE_VERDICT_POSSIBLY_AFFECTED:
+		return model.VerdictPossiblyAffected
+	case commonv1.ExposureVerdict_EXPOSURE_VERDICT_NOT_AFFECTED:
+		return model.VerdictNotAffected
+	case commonv1.ExposureVerdict_EXPOSURE_VERDICT_UNKNOWN:
+		return model.VerdictUnknown
+	default:
+		return ""
+	}
+}
+
+// toSummary maps an exposure summary; a missing one is "not computed".
+func toSummary(s *commonv1.ExposureSummary) model.ExposureSummary {
+	return model.ExposureSummary{
+		Computed:         s.GetComputed(),
+		CriticalAffected: int(s.GetCriticalAffected()),
+		CriticalPossible: int(s.GetCriticalPossible()),
+		HighAffected:     int(s.GetHighAffected()),
+		HighPossible:     int(s.GetHighPossible()),
+		Total:            int(s.GetTotal()),
+	}
+}
+
+// packageLabel renders a package reference the way the graph keys it,
+// e.g. "npm:fast-uri".
+func packageLabel(p *commonv1.PackageRef) string {
+	if p == nil {
+		return ""
+	}
+	if ecosystem := ecosystemLabel(p.GetEcosystem()); ecosystem != "" {
+		return ecosystem + ":" + p.GetName()
+	}
+	return p.GetName()
+}
+
+func ecosystemLabel(e commonv1.Ecosystem) string {
+	switch e {
+	case commonv1.Ecosystem_ECOSYSTEM_GO:
+		return "go"
+	case commonv1.Ecosystem_ECOSYSTEM_NPM:
+		return "npm"
+	case commonv1.Ecosystem_ECOSYSTEM_PYPI:
+		return "pypi"
+	case commonv1.Ecosystem_ECOSYSTEM_MAVEN:
+		return "maven"
+	case commonv1.Ecosystem_ECOSYSTEM_CARGO:
+		return "cargo"
+	case commonv1.Ecosystem_ECOSYSTEM_RUBYGEMS:
+		return "rubygems"
+	case commonv1.Ecosystem_ECOSYSTEM_NUGET:
+		return "nuget"
+	case commonv1.Ecosystem_ECOSYSTEM_PACKAGIST:
+		return "packagist"
+	default:
+		return ""
+	}
 }

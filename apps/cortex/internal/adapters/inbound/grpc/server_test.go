@@ -21,19 +21,45 @@ import (
 // stubSearcher stands in for the search use case.
 type stubSearcher struct {
 	gotQuery string
+	gotSort  model.SearchSort
+	gotKinds []model.FindingKind
 	gotSize  int
 	gotToken string
 	result   queries.Result
 	err      error
 }
 
-func (s *stubSearcher) Handle(_ context.Context, q string, size int, token string) (queries.Result, error) {
-	s.gotQuery, s.gotSize, s.gotToken = q, size, token
+func (s *stubSearcher) Handle(_ context.Context, q string, sort model.SearchSort, kinds []model.FindingKind, size int, token string) (queries.Result, error) {
+	s.gotQuery, s.gotSort, s.gotKinds, s.gotSize, s.gotToken = q, sort, kinds, size, token
 	return s.result, s.err
 }
 
 var _ = Describe("gRPC Server", func() {
 	ctx := context.Background()
+
+	It("passes the kinds asked for, and returns every id and the kind of each hit", func() {
+		stub := &stubSearcher{result: queries.Result{Hits: []model.SearchHit{{Vulnerability: model.Vulnerability{
+			CVEID: "GHSA-fw8c-xr5c-95f9", Aliases: []string{"MAL-2026-2307"}, Kind: model.KindMalware,
+		}}}}}
+
+		resp, err := grpcadapter.NewServer(stub, nil, nil, nil).Search(ctx, &intelv1.SearchRequest{
+			Query: "axios",
+			Kinds: []commonv1.FindingKind{commonv1.FindingKind_FINDING_KIND_MALWARE},
+		})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(stub.gotKinds).To(Equal([]model.FindingKind{model.KindMalware}))
+		got := resp.GetResults()[0].GetVulnerability()
+		Expect(got.GetAliases()).To(Equal([]string{"MAL-2026-2307"}))
+		Expect(got.GetKind()).To(Equal(commonv1.FindingKind_FINDING_KIND_MALWARE))
+	})
+
+	It("asks for every kind when the request names none", func() {
+		stub := &stubSearcher{}
+		_, err := grpcadapter.NewServer(stub, nil, nil, nil).Search(ctx, &intelv1.SearchRequest{Query: "axios"})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(stub.gotKinds).To(BeEmpty())
+	})
 
 	It("maps a domain result onto the wire contract", func() {
 		stub := &stubSearcher{result: queries.Result{
@@ -51,7 +77,7 @@ var _ = Describe("gRPC Server", func() {
 			NextPageToken: "25",
 		}}
 
-		resp, err := grpcadapter.NewServer(stub).Search(ctx, &intelv1.SearchRequest{
+		resp, err := grpcadapter.NewServer(stub, nil, nil, nil).Search(ctx, &intelv1.SearchRequest{
 			Query:    "log4j",
 			PageSize: 25,
 		})
@@ -71,7 +97,7 @@ var _ = Describe("gRPC Server", func() {
 
 	It("forwards the page token", func() {
 		stub := &stubSearcher{}
-		_, err := grpcadapter.NewServer(stub).Search(ctx, &intelv1.SearchRequest{Query: "log4j", PageToken: "50"})
+		_, err := grpcadapter.NewServer(stub, nil, nil, nil).Search(ctx, &intelv1.SearchRequest{Query: "log4j", PageToken: "50"})
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(stub.gotToken).To(Equal("50"))
@@ -80,9 +106,33 @@ var _ = Describe("gRPC Server", func() {
 	It("returns InvalidArgument when the use case rejects the request", func() {
 		stub := &stubSearcher{err: errors.New("query must not be empty")}
 
-		_, err := grpcadapter.NewServer(stub).Search(ctx, &intelv1.SearchRequest{})
+		_, err := grpcadapter.NewServer(stub, nil, nil, nil).Search(ctx, &intelv1.SearchRequest{})
 
 		Expect(err).To(HaveOccurred())
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+	})
+})
+
+var _ = Describe("gRPC Search sort and totals", func() {
+	ctx := context.Background()
+
+	It("maps NEWEST onto the domain sort, and returns the totals", func() {
+		stub := &stubSearcher{result: queries.Result{Total: 812, TotalIsLowerBound: false}}
+
+		resp, err := grpcadapter.NewServer(stub, nil, nil, nil).Search(ctx, &intelv1.SearchRequest{
+			Sort: intelv1.SearchSort_SEARCH_SORT_NEWEST,
+		})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(stub.gotSort).To(Equal(model.SortNewest))
+		Expect(resp.GetTotalResults()).To(Equal(int64(812)))
+	})
+
+	It("treats an unspecified sort as relevance", func() {
+		stub := &stubSearcher{}
+		_, err := grpcadapter.NewServer(stub, nil, nil, nil).Search(ctx, &intelv1.SearchRequest{Query: "log4j"})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(stub.gotSort).To(Equal(model.SortRelevance))
 	})
 })

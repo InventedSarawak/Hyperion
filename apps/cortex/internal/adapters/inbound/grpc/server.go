@@ -5,6 +5,7 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -16,25 +17,79 @@ import (
 
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/application/queries"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/model"
+	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/ports"
+	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/valueobject"
 )
 
 // Searcher is the use case this adapter drives (consumer-side interface).
 type Searcher interface {
-	Handle(ctx context.Context, query string, pageSize int, pageToken string) (queries.Result, error)
+	Handle(ctx context.Context, query string, sort model.SearchSort, kinds []model.FindingKind, pageSize int, pageToken string) (queries.Result, error)
+}
+
+// DependencyIngester records a repository's manifest in the dependency graph.
+type DependencyIngester interface {
+	Handle(ctx context.Context, snapshot model.RepositorySnapshot) (int, error)
+}
+
+// BlastRadiusCalculator answers which repositories a vulnerability reaches.
+type BlastRadiusCalculator interface {
+	Handle(ctx context.Context, cveID string, maxDepth, limit int) (model.BlastRadius, error)
+}
+
+// RepositoryExposureReader lists the findings one repository reaches.
+type RepositoryExposureReader interface {
+	Handle(ctx context.Context, fullName string, maxDepth int, includeUnaffected bool) (model.RepositoryExposure, error)
+}
+
+// VulnerabilityReader loads one finding from the store of record.
+type VulnerabilityReader interface {
+	GetByID(ctx context.Context, cveID string) (model.Vulnerability, error)
 }
 
 // Server implements intelv1.IntelligenceServiceServer.
 type Server struct {
 	intelv1.UnimplementedIntelligenceServiceServer
-	search Searcher
+	search   Searcher
+	deps     DependencyIngester
+	blast    BlastRadiusCalculator
+	vulns    VulnerabilityReader
+	exposure RepositoryExposureReader
 }
 
-// NewServer wires the gRPC adapter to the search use case.
-func NewServer(search Searcher) *Server { return &Server{search: search} }
+// NewServer wires the gRPC adapter to cortex's use cases. The graph use cases
+// may be nil when no graph backend is configured; the RPCs that need them then
+// report Unavailable rather than answering wrongly.
+func NewServer(search Searcher, deps DependencyIngester, blast BlastRadiusCalculator, vulns VulnerabilityReader) *Server {
+	return &Server{search: search, deps: deps, blast: blast, vulns: vulns}
+}
+
+// WithRepositoryExposure serves GetRepositoryExposure.
+func (s *Server) WithRepositoryExposure(r RepositoryExposureReader) *Server {
+	s.exposure = r
+	return s
+}
+
+// GetVulnerability returns one finding in full.
+func (s *Server) GetVulnerability(ctx context.Context, req *intelv1.GetVulnerabilityRequest) (*intelv1.GetVulnerabilityResponse, error) {
+	id := valueobject.NormalizeCVEID(req.GetCveId())
+	if id == "" {
+		return nil, status.Error(codes.InvalidArgument, msgNeedID)
+	}
+	v, err := s.vulns.GetByID(ctx, id)
+	switch {
+	case errors.Is(err, ports.ErrNotFound):
+		return nil, status.Errorf(codes.NotFound,
+			"no finding is known by %s — the id may be mistyped, or no feed has reported it yet", id)
+	case err != nil:
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return &intelv1.GetVulnerabilityResponse{Vulnerability: toProtoVulnerability(v)}, nil
+}
 
 // Search handles the RPC: proto request -> use case -> proto response.
 func (s *Server) Search(ctx context.Context, req *intelv1.SearchRequest) (*intelv1.SearchResponse, error) {
-	result, err := s.search.Handle(ctx, req.GetQuery(), int(req.GetPageSize()), req.GetPageToken())
+	result, err := s.search.Handle(ctx, req.GetQuery(), fromProtoSort(req.GetSort()),
+		fromProtoKinds(req.GetKinds()), int(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -48,22 +103,64 @@ func (s *Server) Search(ctx context.Context, req *intelv1.SearchRequest) (*intel
 	}
 
 	return &intelv1.SearchResponse{
-		Results:       results,
-		NextPageToken: result.NextPageToken,
+		Results:           results,
+		NextPageToken:     result.NextPageToken,
+		TotalResults:      result.Total,
+		TotalIsLowerBound: result.TotalIsLowerBound,
 	}, nil
 }
 
+// fromProtoSort maps the wire enum; unspecified means relevance.
+func fromProtoSort(s intelv1.SearchSort) model.SearchSort {
+	if s == intelv1.SearchSort_SEARCH_SORT_NEWEST {
+		return model.SortNewest
+	}
+	return model.SortRelevance
+}
+
+// fromProtoKinds maps the kinds a search asks for; none means every kind.
+func fromProtoKinds(kinds []commonv1.FindingKind) []model.FindingKind {
+	var out []model.FindingKind
+	for _, k := range kinds {
+		switch k {
+		case commonv1.FindingKind_FINDING_KIND_MALWARE:
+			out = append(out, model.KindMalware)
+		case commonv1.FindingKind_FINDING_KIND_VULNERABILITY, commonv1.FindingKind_FINDING_KIND_UNSPECIFIED:
+			out = append(out, model.KindVulnerability)
+		}
+	}
+	return out
+}
+
+// msgNeedID is the answer to a request that names no finding. Status
+// messages are written for the person at the other end: they reach deck and
+// the GraphQL console as they are.
+const msgNeedID = "enter a finding id — a CVE, GHSA or MAL id"
+
 // --- mapping: cortex domain -> wire contract ---
+
+func toProtoKind(k model.FindingKind) commonv1.FindingKind {
+	if k == model.KindMalware {
+		return commonv1.FindingKind_FINDING_KIND_MALWARE
+	}
+	return commonv1.FindingKind_FINDING_KIND_VULNERABILITY
+}
 
 func toProtoVulnerability(v model.Vulnerability) *commonv1.Vulnerability {
 	return &commonv1.Vulnerability{
 		CveId:       v.CVEID,
+		Aliases:     v.Aliases,
+		Kind:        toProtoKind(v.Kind),
 		Title:       v.Title,
 		Description: v.Description,
 		Scores:      toProtoScores(v.Scores),
 		References:  v.References,
 		PublishedAt: toTimestamp(v.PublishedAt),
 		ModifiedAt:  toTimestamp(v.ModifiedAt),
+		// These never reached the wire before, so no client could say which
+		// libraries a finding affects or which feeds reported it.
+		AffectedPackages: toProtoPackageRefs(v.AffectedPackages),
+		Sources:          v.Sources,
 	}
 }
 

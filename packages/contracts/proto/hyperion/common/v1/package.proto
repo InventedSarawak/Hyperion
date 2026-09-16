@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package hyperion.common.v1;
+
+// Ecosystem identifies the package registry a library is published to. The
+// same name can exist in several registries ("requests" on PyPI and RubyGems),
+// so a library is only identified by ecosystem AND name together.
+enum Ecosystem {
+  ECOSYSTEM_UNSPECIFIED = 0;
+  ECOSYSTEM_GO = 1;
+  ECOSYSTEM_NPM = 2;
+  ECOSYSTEM_PYPI = 3;
+  ECOSYSTEM_MAVEN = 4;
+  ECOSYSTEM_CARGO = 5;
+  ECOSYSTEM_RUBYGEMS = 6;
+  ECOSYSTEM_NUGET = 7;
+  ECOSYSTEM_PACKAGIST = 8;
+}
+
+// PackageRef names one library, optionally at one version. It is the join key
+// between the supply chain (what a repository depends on) and the threat feed
+// (what an advisory says is vulnerable).
+message PackageRef {
+  Ecosystem ecosystem = 1;
+  string name = 2; // registry-native name, e.g. "github.com/gin-gonic/gin"
+  string version = 3; // resolved version; empty when the range is unresolved
+}

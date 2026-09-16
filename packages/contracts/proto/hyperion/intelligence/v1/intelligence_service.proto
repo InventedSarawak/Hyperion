@@ -2,20 +2,53 @@ syntax = "proto3";
 
 package hyperion.intelligence.v1;
 
+import "google/protobuf/timestamp.proto";
+import "hyperion/common/v1/exposure.proto";
+import "hyperion/common/v1/package.proto";
+import "hyperion/common/v1/repository.proto";
 import "hyperion/common/v1/vulnerability.proto";
 
 // IntelligenceService is cortex's internal gRPC API. nexus (the gateway)
 // calls it to serve external GraphQL queries; cortex implements it against
-// its search index.
+// its search index and dependency graph.
 service IntelligenceService {
   // Search runs a full-text query over indexed vulnerabilities.
   rpc Search(SearchRequest) returns (SearchResponse);
+  // IngestDependencies records one repository's manifest as graph edges.
+  // siphon calls this after reading a go.mod / package.json.
+  rpc IngestDependencies(IngestDependenciesRequest) returns (IngestDependenciesResponse);
+  // GetBlastRadius answers "who is exposed to this CVE?" by walking the
+  // dependency graph outwards from the libraries the advisory names.
+  rpc GetBlastRadius(GetBlastRadiusRequest) returns (GetBlastRadiusResponse);
+  // GetVulnerability returns one finding in full, from the store of record
+  // rather than the search index — the index drops detail it does not search
+  // on, such as each affected package's version range.
+  rpc GetVulnerability(GetVulnerabilityRequest) returns (GetVulnerabilityResponse);
+  // GetRepositoryExposure is blast radius the other way round: the findings a
+  // repository reaches through its dependencies, each judged by comparing the
+  // version it declares with the versions the advisory says are affected.
+  rpc GetRepositoryExposure(GetRepositoryExposureRequest) returns (GetRepositoryExposureResponse);
+}
+
+// SearchSort orders search results.
+enum SearchSort {
+  SEARCH_SORT_UNSPECIFIED = 0; // treated as RELEVANCE
+  // Best match first. Equal scores fall back to newest, then CVE id, so the
+  // order — and therefore paging — is stable across requests.
+  SEARCH_SORT_RELEVANCE = 1;
+  // Most recently published first. The only sort that accepts an empty
+  // query: "the newest findings" is a bounded, paged read, not an index scan.
+  SEARCH_SORT_NEWEST = 2;
 }
 
 message SearchRequest {
-  string query = 1; // free-text, e.g. "log4j"
+  string query = 1; // free-text, e.g. "log4j"; may be empty with SEARCH_SORT_NEWEST
   int32 page_size = 2;
   string page_token = 3;
+  SearchSort sort = 4;
+  // Which kinds to return. Empty means every kind. An exact id lookup ignores
+  // this: asking for "MAL-2026-2307" by name always finds it.
+  repeated hyperion.common.v1.FindingKind kinds = 5;
 }
 
 message SearchResult {
@@ -25,5 +58,94 @@ message SearchResult {
 
 message SearchResponse {
   repeated SearchResult results = 1;
-  string next_page_token = 2;
+  string next_page_token = 2; // empty when there are no more results
+  // How many results the query matches in total, so a client can say
+  // "50 of 812". Elasticsearch stops counting at 10,000; beyond that this is a
+  // floor and total_is_lower_bound is set.
+  int64 total_results = 3;
+  bool total_is_lower_bound = 4;
+}
+
+message IngestDependenciesRequest {
+  hyperion.common.v1.Repository repository = 1;
+  repeated hyperion.common.v1.Dependency dependencies = 2;
+  hyperion.common.v1.Author author = 3; // the repository's owner, when known
+  google.protobuf.Timestamp observed_at = 4;
+  // The library this repository itself publishes, read from the manifest
+  // (go.mod's "module" line, package.json's "name"). Set it and the direct
+  // dependencies below become that library's dependencies too, which is what
+  // gives the graph its library-to-library edges — and blast radius its reach
+  // beyond the repositories we happen to have scanned.
+  hyperion.common.v1.PackageRef publishes = 5;
+}
+
+message IngestDependenciesResponse {
+  int32 dependencies_written = 1;
+}
+
+message GetBlastRadiusRequest {
+  string cve_id = 1;
+  int32 max_depth = 2; // DEPENDS_ON hops to traverse; 0 = server default
+  int32 limit = 3; // cap on returned repositories; 0 = server default
+}
+
+// ImpactedRepository is one repository the traversal reached, together with
+// the path that exposes it.
+message ImpactedRepository {
+  hyperion.common.v1.Repository repository = 1;
+  hyperion.common.v1.PackageRef via_package = 2; // the vulnerable library reached
+  hyperion.common.v1.Author author = 3;
+  int32 depth = 4; // hops from the repository to the vulnerable library
+  bool direct = 5; // true when the repository requires it in its own manifest
+  repeated string path = 6; // the chain, nearest first, for display
+  string declared_version = 7; // what the manifest asks for, e.g. "^5.11.0"
+  string affected_versions = 8; // what the advisory says is affected, e.g. "< 5.14.3"
+  hyperion.common.v1.ExposureVerdict verdict = 9;
+}
+
+message GetBlastRadiusResponse {
+  string cve_id = 1;
+  // Libraries the advisory names as vulnerable, whether or not anything
+  // depends on them. Empty means the CVE has no package linkage yet.
+  repeated hyperion.common.v1.PackageRef vulnerable_packages = 2;
+  repeated ImpactedRepository repositories = 3;
+  int32 total_repositories = 4;
+}
+
+message GetVulnerabilityRequest {
+  string cve_id = 1; // any id the finding is known by: CVE, GHSA, MAL, PYSEC…
+}
+
+message GetVulnerabilityResponse {
+  hyperion.common.v1.Vulnerability vulnerability = 1;
+}
+
+message GetRepositoryExposureRequest {
+  string full_name = 1; // "owner/name"
+  int32 max_depth = 2; // DEPENDS_ON hops to traverse; 0 = server default
+  // Also return findings the declared versions rule out. Off by default:
+  // hiding them is what version matching is for.
+  bool include_unaffected = 3;
+}
+
+// RepositoryFinding is one finding a repository reaches through one library.
+message RepositoryFinding {
+  hyperion.common.v1.Vulnerability vulnerability = 1;
+  // The vulnerable library; its version is what the repository declares.
+  hyperion.common.v1.PackageRef via_package = 2;
+  string affected_versions = 3; // what the advisory says is affected
+  hyperion.common.v1.ExposureVerdict verdict = 4;
+  int32 depth = 5; // DEPENDS_ON hops from the repository to the library
+  bool direct = 6; // true when the repository's own manifest names it
+  repeated string path = 7; // the chain, nearest first, for display
+}
+
+message GetRepositoryExposureResponse {
+  string full_name = 1;
+  // Worst first: by verdict, then severity.
+  repeated RepositoryFinding findings = 2;
+  hyperion.common.v1.ExposureSummary summary = 3;
+  // False when the graph has no such repository — not scanned yet, or no
+  // manifest it could read — so an empty list means "unknown", not "safe".
+  bool scanned = 4;
 }

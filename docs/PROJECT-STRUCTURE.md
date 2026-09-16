@@ -2,7 +2,8 @@
 
 > Some directories below are placeholders for planned work. See
 > [TECHNICAL-DEBT.md](./TECHNICAL-DEBT.md) for what is genuinely implemented versus
-> scaffolded, and the shortcuts taken to get here.
+> scaffolded, and the shortcuts taken to get here. To actually run any of it, see
+> [RUNBOOK.md](./RUNBOOK.md).
 
 ## Service Codenames
 
@@ -317,19 +318,38 @@ apps/console/
 ```
 packages/contracts/proto/
 ├── hyperion/events/v1/
-│   ├── signal_events.proto
-│   ├── intelligence_events.proto
-│   └── billing_events.proto
+│   ├── signal_events.proto           # ✅ SignalDiscovered, SourceKind (all 10)
+│   ├── intelligence_events.proto     # planned
+│   └── billing_events.proto          # planned
 ├── hyperion/ingestion/v1/
-│   └── ingestion_service.proto
+│   └── ingestion_service.proto       # planned
 ├── hyperion/intelligence/v1/
-│   └── intelligence_service.proto
+│   └── intelligence_service.proto    # ✅ Search, IngestDependencies, GetBlastRadius
 ├── hyperion/copilot/v1/
-│   └── copilot_service.proto
+│   └── copilot_service.proto         # planned (v5)
 ├── hyperion/billing/v1/
-│   └── credits_service.proto
+│   └── credits_service.proto         # planned (v4)
 └── hyperion/common/v1/
-    ├── vulnerability.proto
-    ├── package.proto
-    └── tenant.proto
+    ├── vulnerability.proto           # ✅ Vulnerability, Cvss, Severity, affected_packages
+    ├── package.proto                 # ✅ PackageRef, Ecosystem
+    ├── repository.proto              # ✅ Repository, Author, Dependency
+    └── tenant.proto                  # planned (v4)
 ```
+
+## The Dependency Graph (v2)
+
+cortex keeps the supply chain in Neo4j. Relational storage answers _what is this
+CVE?_; the graph answers _who does it reach?_
+
+```
+(:Author {login})-[:MAINTAINS]->(:Repository {full_name})
+(:Repository)-[:DEPENDS_ON {version, direct, manifest_path}]->(:Library {key})
+(:Repository)-[:PUBLISHES]->(:Library)
+(:Library)-[:DEPENDS_ON]->(:Library)
+(:Library)-[:AFFECTED_BY {affected_version}]->(:Vulnerability {cve_id})
+```
+
+A `Library` is keyed on **ecosystem + name, without a version** (`npm:lodash`), so every
+dependant converges on one node; the pinned version lives on the edge. A scanned
+repository that publishes a module contributes that module's _direct_ requirements as
+library-to-library edges, which is what makes the `DEPENDS_ON*1..n` traversal recursive.

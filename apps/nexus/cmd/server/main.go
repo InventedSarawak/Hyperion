@@ -36,8 +36,12 @@ func main() {
 	defer intelligence.Close()
 
 	search := queries.NewSearchVulnerabilities(intelligence)
+	blast := queries.NewGetBlastRadius(intelligence)
 
-	schema, err := graphqladapter.NewSchema(search)
+	schema, err := graphqladapter.NewSchema(search, blast,
+		graphqladapter.WithVulnerability(queries.NewGetVulnerability(intelligence)),
+		graphqladapter.WithWatchlist(queries.NewWatchlist(intelligence)),
+		graphqladapter.WithRepositoryExposure(queries.NewGetRepositoryExposure(intelligence)))
 	if err != nil {
 		logger.Error("graphql schema build failed", "error", err)
 		os.Exit(1)

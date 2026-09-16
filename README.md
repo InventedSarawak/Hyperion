@@ -4,6 +4,23 @@ Hyperion is a simple, lightweight, and efficient TUI based CVE monitoring and an
 
 ---
 
+## Quick start
+
+```bash
+cp .env.sample .env   # every source works without a credential
+task up               # infra + cortex + nexus + continuous ingest, with health gates
+task backfill         # once: 10 years of NVD + OSV history (about an hour)
+task run:deck         # the TUI — press 4 to add repositories to track
+task down             # stop everything (volumes kept)
+```
+
+Full instructions — starting, stopping, loading data, using the CLI, and
+troubleshooting — are in **[docs/RUNBOOK.md](docs/RUNBOOK.md)**. Everything the system
+can do, function by function, is in
+**[docs/CURRENT-FUNCTIONALITIES.md](docs/CURRENT-FUNCTIONALITIES.md)**.
+
+---
+
 ## project structure
 
 ```hyperion/
@@ -22,8 +39,8 @@ github.com/vedant/hyperion/
 
 ## Progress
 
-- [ ] v1: The Foundation (MVP)
-- [ ] v2: The Structure (Graph & TUI)
+- [x] v1: The Foundation (MVP)
+- [x] v2: The Structure (Graph & TUI)
 - [ ] v3: The Nervous System (Streaming)
 - [ ] v4: The Platform (SaaS)
 - [ ] v5: The Endgame (AI Copilot)

@@ -62,8 +62,8 @@ This document outlines the complete polyglot architecture of **Hyperion**. Every
 
 ### 🚀 Implementation Roadmap Summary
 
-- **v1 (The Foundation):** Go, Protobuf/buf, PostgreSQL, Elasticsearch, GraphQL. _(Contracts, data scraping, and basic search)._
-- **v2 (The Structure):** Neo4j, gRPC, Bubble Tea. _(Dependency graphs and terminal interface)._
+- **v1 (The Foundation): ✅ DONE** — Go, Protobuf/buf, PostgreSQL, Elasticsearch, GraphQL. _(Contracts, data scraping, and basic search.)_
+- **v2 (The Structure): ✅ DONE** — Neo4j, gRPC, Bubble Tea. _(Dependency graphs and terminal interface.)_
 - **v3 (The Stream):** Kafka, RabbitMQ, Redis. _(Real-time event processing and notifications)._
 - **v4 (The Platform):** Next.js, Nginx, Keycloak, MinIO, DuckDB, Lago, Kubernetes (K8s), Helm, ArgoCD, GitHub Actions. _(SaaS readiness, automated GitOps deployments, billing, and scale)._
 - **v5 (The Endgame):** Ollama, Qdrant, Rust (optional). _(AI RAG pipeline, automated exploit generation, and low-latency system hooks)._

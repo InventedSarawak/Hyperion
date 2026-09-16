@@ -39,6 +39,40 @@ services:
       timeout: 5s
       retries: 20
 
+  neo4j:
+    image: neo4j:5.26
+    container_name: hyperion-neo4j
+    environment:
+      # Single-instance dev graph. Community edition, one database ("neo4j").
+      NEO4J_AUTH: neo4j/hyperion
+      NEO4J_server_memory_heap_max__size: 512M
+      NEO4J_server_memory_pagecache_size: 256M
+    ports:
+      - "7474:7474"   # HTTP browser UI
+      - "7687:7687"   # Bolt (the driver speaks this)
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      # cypher-shell ships in the image; an HTTP probe would only prove the
+      # browser is up, not that Bolt will accept a session.
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p hyperion 'RETURN 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: hyperion-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
   postgres_data:
   elasticsearch_data:
+  neo4j_data:

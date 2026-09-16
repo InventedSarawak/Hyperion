@@ -2,7 +2,11 @@
 // namespaced config system. Every key is cortex.<NAME> -> CORTEX_<NAME>.
 package config
 
-import "github.com/inventedsarawak/hyperion/packages/common/config"
+import (
+	"time"
+
+	"github.com/inventedsarawak/hyperion/packages/common/config"
+)
 
 // Service is the config namespace for this microservice.
 const Service = "cortex"
@@ -13,6 +17,12 @@ const (
 	DefaultElasticsearchURL = "http://localhost:9200"
 	DefaultIndexName        = "hyperion-vulnerabilities"
 	DefaultGRPCAddr         = ":50051"
+	DefaultNeo4jURI         = "bolt://localhost:7687"
+	DefaultNeo4jUsername    = "neo4j"
+	DefaultNeo4jPassword    = "hyperion"
+	DefaultNeo4jDatabase    = "neo4j"
+	DefaultRedisAddr        = "localhost:6379"
+	DefaultSubscriptionIdx  = "hyperion-subscriptions"
 )
 
 // Config holds cortex's runtime settings.
@@ -23,6 +33,25 @@ type Config struct {
 	GRPCAddr         string
 	ServeGRPC        bool
 	ConsumeStdin     bool
+	// IngestWorkers is how many events are ingested concurrently. Each is
+	// I/O-bound, so this is what sets backfill throughput.
+	IngestWorkers int
+
+	Neo4jURI            string
+	Neo4jUsername       string
+	Neo4jPassword       string
+	Neo4jDatabase       string
+	BlastRadiusMaxDepth int
+
+	RedisAddr         string
+	SubscriptionIndex string
+	AlertDedupeWindow time.Duration
+
+	// GitHubBaseURL and GitHubToken drive repository discovery for the
+	// watchlist. The token is optional but the anonymous budget (60/hour)
+	// runs out after a few lookups.
+	GitHubBaseURL string
+	GitHubToken   string
 
 	loader *config.Loader
 }
@@ -30,6 +59,14 @@ type Config struct {
 // Load reads configuration from the environment, applying defaults.
 func Load() Config {
 	l := config.For(Service)
+
+	// Secret carries no default (an unset credential must read as unset), so
+	// the local-dev fallback is applied here and still reported masked.
+	neo4jPassword := l.Secret("NEO4J_PASSWORD")
+	if neo4jPassword == "" {
+		neo4jPassword = DefaultNeo4jPassword
+	}
+
 	return Config{
 		loader:           l,
 		DatabaseURL:      l.String("DATABASE_URL", DefaultDatabaseURL),
@@ -38,6 +75,26 @@ func Load() Config {
 		GRPCAddr:         l.String("GRPC_ADDR", DefaultGRPCAddr),
 		ServeGRPC:        l.Bool("SERVE_GRPC", true),
 		ConsumeStdin:     l.Bool("CONSUME_STDIN", false),
+		IngestWorkers:    l.Int("INGEST_WORKERS", 8),
+
+		Neo4jURI:      l.String("NEO4J_URI", DefaultNeo4jURI),
+		Neo4jUsername: l.String("NEO4J_USERNAME", DefaultNeo4jUsername),
+		Neo4jPassword: neo4jPassword,
+		Neo4jDatabase: l.String("NEO4J_DATABASE", DefaultNeo4jDatabase),
+		// 3 hops covers a repository, the library it names, and that
+		// library's own dependency — deep enough to be useful, shallow
+		// enough to stay fast on a dense graph.
+		BlastRadiusMaxDepth: l.Int("BLAST_RADIUS_MAX_DEPTH", 3),
+
+		RedisAddr:         l.String("REDIS_ADDR", DefaultRedisAddr),
+		SubscriptionIndex: l.String("SUBSCRIPTION_INDEX", DefaultSubscriptionIdx),
+		// Advisories are re-observed on every poll and corrected for weeks;
+		// an hour is long enough to stop the repeats without hiding a genuinely
+		// new finding.
+		AlertDedupeWindow: l.Duration("ALERT_DEDUPE_WINDOW", time.Hour),
+
+		GitHubBaseURL: l.String("GITHUB_BASE_URL", "https://api.github.com"),
+		GitHubToken:   l.Secret("GITHUB_TOKEN"),
 	}
 }
 

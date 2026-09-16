@@ -92,7 +92,9 @@ func (c *Client) Fetch(ctx context.Context, since time.Time) ([]model.SourceSign
 			}
 			seen[signal.CVEID] = struct{}{}
 
-			signal.Description = fmt.Sprintf("Affects watched package %s (%s). %s", name, ecosystem, signal.Description)
+			// The package is already in AffectedPackages. Writing it into
+			// the description as well rewrote the advisory's own text, and
+			// the edit then won every merge with the feeds that had it right.
 			signals = append(signals, signal)
 		}
 		time.Sleep(requestDelay)
