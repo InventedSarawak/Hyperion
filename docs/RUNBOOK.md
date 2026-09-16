@@ -505,6 +505,30 @@ task run:cortex          # consumes the topic, and serves the gRPC API
 task run:siphon          # polls the feeds and publishes
 ```
 
+### Measuring what it can carry
+
+```bash
+task loadtest                              # 10k findings at 1000/s
+task loadtest -- -count 50000 -rate 0      # unpaced: find the ceiling
+```
+
+It uses a throwaway topic and deletes it afterwards, so it cannot touch the signal topic
+or the databases. Measured on a dev laptop: **1,000/s sustained, 6ms mean latency** (18ms
+max), and **~9,200/s unpaced**. High latency in an unpaced run is backlog, not slowness —
+the producer is simply faster than the consumer.
+
+That measures the broker and the client. To measure **cortex's ingest**, which is bounded
+by Postgres, Elasticsearch and Neo4j rather than by Kafka, publish into the real topic and
+watch it drain:
+
+```bash
+task loadtest -- -topic hyperion.signals.v1 -no-consume -count 5000
+task topic:lag     # repeatedly, to watch cortex work through it
+```
+
+Note what that does: those synthetic findings are **really ingested**, under ids of the
+form `CVE-9000-*`. Remove them afterwards, or do it on a stack you do not mind refilling.
+
 ### Watching findings arrive
 
 ```bash

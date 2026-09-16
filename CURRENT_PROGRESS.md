@@ -95,6 +95,15 @@ nexus returning findings with cross-source provenance (`["package_feed","nvd"]`)
   `IntelligenceClient` — so no existing caller or test stub had to implement a streaming
   method it never uses.
 
+- **Load test (2026-09-17).** `task loadtest` publishes synthetic findings at a target
+  rate and consumes them back, on a throwaway topic it deletes afterwards — it cannot
+  touch the signal topic or the databases. On the dev laptop: **1,000/s sustained with
+  6ms mean latency** (18ms max) and **~9,200/s unpaced**, about 10x the roadmap's target.
+  Building it caught a measurement bug worth recording: timing the consumer from the end
+  of publishing reported "1.8M/s", because the consumer had already drained almost
+  everything while producing — it now measures between the first and last record actually
+  consumed, after a warm-up record proves the group has joined.
+
 ### What is deliberately not done
 
 - Repository scans still call cortex over synchronous gRPC

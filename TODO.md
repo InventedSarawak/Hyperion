@@ -203,7 +203,12 @@ Registered in `docs/TECHNICAL-DEBT.md`. Highest-value items, roughly in order:
 
 ### Performance Testing
 
-- [ ] Write a load test script (simulate 1k events/sec)
+- [x] **Load test (2026-09-17):** `task loadtest` (`tests/load`) publishes synthetic
+      findings at a target rate and consumes them back, on a throwaway topic it deletes
+      afterwards. Measured on the dev laptop: **1,000/s sustained with 6ms mean latency**
+      (18ms max), and **~9,200/s unpaced** — roughly 10x the roadmap's target. Those
+      numbers are the broker and client; cortex's ingest is bounded by Postgres,
+      Elasticsearch and Neo4j, and is measured by pointing it at the signal topic
 - [x] **TUI updates instantly via gRPC streaming (2026-09-17):** cortex broadcasts each
       stored finding over `StreamFindings`, nexus relays it as SSE at `/stream`, deck
       subscribes and refreshes on arrival (debounced to 2s). Ingest never blocks on a

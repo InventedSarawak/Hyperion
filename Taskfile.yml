@@ -146,6 +146,12 @@ tasks:
         cd apps/siphon && SIPHON_KAFKA_ENABLED=false go run ./cmd/worker 2>/dev/null | \
           (cd ../cortex && CORTEX_CONSUME_STDIN=true CORTEX_KAFKA_ENABLED=false go run ./cmd/server)
 
+  loadtest:
+    desc: 'Measure what the event backbone carries: task loadtest -- -count 50000 -rate 5000'
+    dir: tests/load
+    cmds:
+      - go run . {{.CLI_ARGS}}
+
   test:go:integration:
     desc: Run Go tests including the Postgres/Elasticsearch/Neo4j/Redis integration suites
     env:
