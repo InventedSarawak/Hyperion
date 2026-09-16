@@ -62,32 +62,91 @@ func (g *Graph) Ready(ctx context.Context) error {
 	return nil
 }
 
-// constraints are idempotent and double as indexes: Neo4j backs every
-// uniqueness constraint with one, which is what keeps MERGE from degrading
-// into a full label scan as the graph grows.
-var constraints = []string{
-	`CREATE CONSTRAINT repository_full_name IF NOT EXISTS
-	 FOR (r:Repository) REQUIRE r.full_name IS UNIQUE`,
-	`CREATE CONSTRAINT library_key IF NOT EXISTS
-	 FOR (l:Library) REQUIRE l.key IS UNIQUE`,
-	`CREATE CONSTRAINT author_login IF NOT EXISTS
-	 FOR (a:Author) REQUIRE a.login IS UNIQUE`,
-	`CREATE CONSTRAINT vulnerability_cve_id IF NOT EXISTS
-	 FOR (v:Vulnerability) REQUIRE v.cve_id IS UNIQUE`,
+// migration is one versioned change to the graph's schema.
+//
+// Versioned for the same reason the Postgres migrations are: a statement that
+// creates something can be written idempotently and re-run forever, but one
+// that *changes* something cannot, and there was previously no way to tell
+// which had already happened. Appending here is how the graph schema evolves.
+type migration struct {
+	version string
+	stmt    string
 }
 
-// EnsureSchema creates the uniqueness constraints the MERGEs rely on. Without
-// them a concurrent MERGE can create a duplicate node under the same key.
+// migrations run in order, once each. The constraints double as indexes: Neo4j
+// backs every uniqueness constraint with one, which is what keeps MERGE from
+// degrading into a full label scan as the graph grows.
+var migrations = []migration{
+	{"0001_repository_full_name", `CREATE CONSTRAINT repository_full_name IF NOT EXISTS
+	 FOR (r:Repository) REQUIRE r.full_name IS UNIQUE`},
+	{"0002_library_key", `CREATE CONSTRAINT library_key IF NOT EXISTS
+	 FOR (l:Library) REQUIRE l.key IS UNIQUE`},
+	{"0003_author_login", `CREATE CONSTRAINT author_login IF NOT EXISTS
+	 FOR (a:Author) REQUIRE a.login IS UNIQUE`},
+	{"0004_vulnerability_cve_id", `CREATE CONSTRAINT vulnerability_cve_id IF NOT EXISTS
+	 FOR (v:Vulnerability) REQUIRE v.cve_id IS UNIQUE`},
+}
+
+// schemaVersionConstraint keeps the migration register honest: two cortex
+// instances starting at once must not both record the same version.
+const schemaVersionConstraint = `CREATE CONSTRAINT schema_migration_version IF NOT EXISTS
+	 FOR (m:SchemaMigration) REQUIRE m.version IS UNIQUE`
+
+// EnsureSchema applies any graph migration that has not run yet.
+//
+// The constraints the MERGEs rely on are created here; without them a
+// concurrent MERGE can create a duplicate node under the same key.
 func (g *Graph) EnsureSchema(ctx context.Context) error {
 	session := g.session(ctx, driver.AccessModeWrite)
 	defer session.Close(ctx)
 
-	for _, stmt := range constraints {
-		if _, err := session.Run(ctx, stmt, nil); err != nil {
-			return fmt.Errorf("neo4j: ensure schema: %w", err)
+	// The register itself first — it is what decides whether anything else
+	// runs, so it cannot be one of the things it decides about.
+	if _, err := session.Run(ctx, schemaVersionConstraint, nil); err != nil {
+		return fmt.Errorf("neo4j: ensure schema register: %w", err)
+	}
+
+	applied, err := g.appliedVersions(ctx, session)
+	if err != nil {
+		return err
+	}
+
+	for _, m := range migrations {
+		if applied[m.version] {
+			continue
+		}
+		if _, err := session.Run(ctx, m.stmt, nil); err != nil {
+			return fmt.Errorf("neo4j: apply %s: %w", m.version, err)
+		}
+		if _, err := session.Run(ctx,
+			`MERGE (m:SchemaMigration {version: $version})
+			 ON CREATE SET m.applied_at = datetime()`,
+			map[string]any{"version": m.version}); err != nil {
+			return fmt.Errorf("neo4j: record %s: %w", m.version, err)
 		}
 	}
 	return nil
+}
+
+// appliedVersions reads which graph migrations have already run.
+func (g *Graph) appliedVersions(ctx context.Context, session driver.SessionWithContext) (map[string]bool, error) {
+	result, err := session.Run(ctx, `MATCH (m:SchemaMigration) RETURN m.version AS version`, nil)
+	if err != nil {
+		return nil, fmt.Errorf("neo4j: read schema migrations: %w", err)
+	}
+
+	applied := map[string]bool{}
+	for result.Next(ctx) {
+		if v, ok := result.Record().Get("version"); ok {
+			if name, ok := v.(string); ok {
+				applied[name] = true
+			}
+		}
+	}
+	if err := result.Err(); err != nil {
+		return nil, fmt.Errorf("neo4j: read schema migrations: %w", err)
+	}
+	return applied, nil
 }
 
 func (g *Graph) session(ctx context.Context, mode driver.AccessMode) driver.SessionWithContext {

@@ -218,10 +218,10 @@ what flows is right. Everything else stays where it is; the reasoning is below.
       gained a `historical` flag; cortex stores such events identically and skips
       alerting and the live feed for them, so loading ten years of history no longer
       fires ten years of alerts.
-- [ ] **Versioned migrations, Postgres and Neo4j** (🟡 _Naive migration runner_ + 🟢
-      _Neo4j migrations are implicit_). One piece of work: a schema-version table instead
-      of re-running every file and relying on `IF NOT EXISTS`. Both stores have the same
-      shortcut, and the doc already tags both for v3.
+- [x] **Versioned migrations, Postgres and Neo4j (2026-09-17)** (🟡 + 🟢). A
+      `schema_migrations` register with checksums, each file applied once in its own
+      transaction; the graph keeps the same register as `(:SchemaMigration)` nodes.
+      Editing an applied migration is refused. Down-migrations still absent.
 - [ ] **Elasticsearch alias and reindex strategy** (🟢). Write through an alias, reindex
       into a new concrete index, flip atomically — so a mapping change stops meaning
       delete-and-rebuild with downtime.

@@ -248,14 +248,22 @@ both alerting and the live feed for it.
   historical when a backfill replays it and current when a poll finds it, so
   the flag belongs to the report. Ingest takes an `Observation` now.
 
-### 🟡 Naive migration runner
+### 🟢 ~~Naive migration runner~~ — REPAID (v3, 2026-09-17)
 
-`postgres.Migrate` executes every embedded `.sql` file in filename order on every
-boot. Idempotency relies on `IF NOT EXISTS`.
+`schema_migrations` records what has been applied, by filename and checksum.
+Each file runs once, in its own transaction, together with the row that records
+it — a migration that succeeded but was not recorded would run again on the next
+boot, which is the failure the register exists to prevent.
 
-- **Cost:** no version table, no down-migrations, no drift detection. A non-idempotent
-  migration would corrupt state or fail the boot.
-- **Fix in v2/v3:** adopt `goose` or `golang-migrate` with a schema-version table.
+- **What it unlocks:** a migration that _changes_ data, not just creates
+  things. Under the old runner every file ran on every boot, so correctness
+  rested entirely on `IF NOT EXISTS`, and a one-time backfill was impossible to
+  write safely. The very next migration needed one.
+- **Drift detection:** editing a migration that has already run is refused,
+  because it is a silent way for two databases built from the same source tree
+  to end up with different schemas.
+- **What remains:** no down-migrations and no CLI. `goose` or `golang-migrate`
+  would bring both; this is the register they were wanted for.
 
 ### 🟢 No Elasticsearch alias or reindex strategy
 
@@ -358,14 +366,14 @@ directly.
 - **Escape hatch:** `DECK_TRANSPORT=grpc` keeps the direct path for debugging a
   cortex the gateway cannot reach.
 
-### 🟢 Neo4j migrations are implicit
+### 🟢 ~~Neo4j migrations are implicit~~ — REPAID (v3, 2026-09-17)
 
-`EnsureSchema` creates uniqueness constraints idempotently on boot. There is no
-version table and no way to evolve a constraint.
+The graph keeps the same register, as `(:SchemaMigration {version})` nodes with
+a uniqueness constraint so two instances starting at once cannot both record the
+same version. Constraints are applied once and appending to the list is how the
+graph schema changes.
 
-- **Cost:** the same shortcut as the Postgres migration runner, one layer over.
-- **Fix in v3:** fold the graph schema into whatever versioned migration tool
-  replaces the Postgres runner.
+- **What remains:** as with Postgres, no way back down.
 
 ---
 
