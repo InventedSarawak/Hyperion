@@ -204,7 +204,10 @@ Registered in `docs/TECHNICAL-DEBT.md`. Highest-value items, roughly in order:
 ### Performance Testing
 
 - [ ] Write a load test script (simulate 1k events/sec)
-- [ ] Verify TUI updates instantly via gRPC streaming
+- [x] **TUI updates instantly via gRPC streaming (2026-09-17):** cortex broadcasts each
+      stored finding over `StreamFindings`, nexus relays it as SSE at `/stream`, deck
+      subscribes and refreshes on arrival (debounced to 2s). Ingest never blocks on a
+      watcher; the poll timer remains as the fallback
 
 ---
 

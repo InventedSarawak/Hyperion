@@ -26,6 +26,37 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner++
 		return m, m.spin()
 
+	case streamOpenedMsg:
+		m.live = msg.updates
+		m.liveOn = true
+		return m, awaitFinding(msg.updates)
+
+	case streamEndedMsg:
+		// The feed went away. The polling timer is still running, so deck
+		// keeps working; it just stops being instant.
+		m.live = nil
+		m.liveOn = false
+		return m, nil
+
+	case streamMsg:
+		// Something landed. Ask for a refresh soon — not now, and not once per
+		// finding: a backfill would otherwise queue thousands of queries.
+		cmds := []tea.Cmd{awaitFinding(m.live)}
+		if !m.livePending {
+			m.livePending = true
+			cmds = append(cmds, scheduleStreamRefresh())
+		}
+		return m, tea.Batch(cmds...)
+
+	case streamRefreshMsg:
+		m.livePending = false
+		// Same guard as the timer: never stack a refresh on one in flight.
+		if m.loading || m.loadingMore {
+			return m, nil
+		}
+		m.loading = true
+		return m, tea.Batch(m.refresh(), m.spin())
+
 	case tickMsg:
 		// Skip a beat rather than stacking requests on a slow backend, or
 		// replacing the list underneath a page that is still arriving.

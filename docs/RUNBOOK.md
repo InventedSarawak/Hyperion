@@ -505,6 +505,17 @@ task run:cortex          # consumes the topic, and serves the gRPC API
 task run:siphon          # polls the feeds and publishes
 ```
 
+### Watching findings arrive
+
+```bash
+curl -N http://localhost:8080/stream                 # every finding, as it lands
+curl -N 'http://localhost:8080/stream?kind=malware'  # one kind only
+```
+
+`deck` subscribes to this on start, so its feed updates on arrival rather than on its
+30-second timer. If the stream cannot connect, deck falls back to that timer and keeps
+working — there is nothing to turn on and nothing that breaks when it is unavailable.
+
 ### In a browser
 
 **<http://localhost:8081>** — the Kafka console, started with the rest of the

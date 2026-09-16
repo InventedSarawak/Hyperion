@@ -13,6 +13,7 @@ import (
 	"time"
 
 	graphqladapter "github.com/inventedsarawak/hyperion/apps/nexus/internal/adapters/inbound/graphql"
+	sseadapter "github.com/inventedsarawak/hyperion/apps/nexus/internal/adapters/inbound/sse"
 	grpcadapter "github.com/inventedsarawak/hyperion/apps/nexus/internal/adapters/outbound/grpc"
 	"github.com/inventedsarawak/hyperion/apps/nexus/internal/application/queries"
 	"github.com/inventedsarawak/hyperion/apps/nexus/internal/platform/config"
@@ -49,6 +50,9 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/graphql", graphqladapter.NewHandler(schema))
+	// The live feed, relayed through the edge rather than straight from
+	// cortex, so it passes the same door as every other client request.
+	mux.Handle("/stream", sseadapter.NewHandler(intelligence, logger))
 	mux.Handle("/playground", graphqladapter.NewPlaygroundHandler())
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

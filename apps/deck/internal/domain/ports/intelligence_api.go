@@ -32,3 +32,16 @@ type WatchlistAPI interface {
 	TrackRepositories(ctx context.Context, fullNames []string) ([]model.TrackedRepository, error)
 	UntrackRepository(ctx context.Context, fullName string) error
 }
+
+// FindingStream is an OUTBOUND port: a live feed of findings as they are
+// ingested.
+//
+// Separate from IntelligenceAPI because it is a different kind of thing —
+// everything there answers a question and returns, while this subscribes and
+// stays open. It is also optional: deck works without it, on a timer, which is
+// what it did before there was a stream to listen to.
+type FindingStream interface {
+	// StreamFindings delivers findings until ctx is cancelled. The channel is
+	// closed when the feed ends, however it ended.
+	StreamFindings(ctx context.Context) (<-chan model.Vulnerability, error)
+}

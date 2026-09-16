@@ -492,6 +492,37 @@ modifiedAt, sources, affectedPackages { package versionRange }`.
 `task run:deck`. Four tabs; `tab` / `shift+tab` cycle them, `1`–`4` jump, `q` quits.
 It goes through nexus by default (`DECK_TRANSPORT=grpc` talks to cortex directly).
 
+### 4.0 The live feed
+
+**What it does.** cortex announces each finding as it is stored;
+`StreamFindings` (server-streaming gRPC) fans it out to whoever is watching, and nexus
+relays it to HTTP clients as Server-Sent Events at **`GET /stream`**. deck subscribes on
+start, so the feed updates when something lands rather than on its 30s timer.
+
+```bash
+curl -N http://localhost:8080/stream                 # watch it yourself
+curl -N 'http://localhost:8080/stream?kind=malware'  # one kind only
+```
+
+**Three decisions worth knowing.**
+
+- **Ingest never waits for a watcher.** A subscriber that has stopped reading — a frozen
+  ssh session, a switched tab — fills its buffer (256) and then _misses_ findings. Losing
+  updates to a terminal nobody is looking at is nothing; stalling ingestion behind one
+  would be serious.
+- **deck refreshes on arrival, it does not insert the streamed record.** What the list
+  shows is what the query returns; rebuilding rows from the stream would duplicate the
+  feed's ordering, malware filtering and version verdicts in a second place, free to
+  disagree with the first. Arrivals are debounced to one refresh per 2s, because a
+  backfill lands thousands a second.
+- **The feed carries no history and is not durable.** It is in memory in cortex, and a
+  client that was not connected has missed nothing it cannot ask Search for. The poll
+  timer stays as the safety net: if the stream never connects or dies, deck keeps working
+  exactly as it did before.
+
+**Where it stops.** Nothing replays what was missed while disconnected, the stream has no
+authentication (v4), and `console` does not consume it yet.
+
 ### 4.1 Live Feed (1)
 
 The latest findings, newest first, refreshed every `DECK_REFRESH_INTERVAL` (30s). Each row

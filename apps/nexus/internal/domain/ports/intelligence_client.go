@@ -24,6 +24,21 @@ type IntelligenceClient interface {
 	RepositoryExposure(ctx context.Context, fullName string, includeUnaffected bool) (model.RepositoryExposure, error)
 }
 
+// FindingStreamClient is an OUTBOUND port: cortex's live feed.
+//
+// Separate from IntelligenceClient on purpose. Everything there answers a
+// question and returns; this subscribes and stays open, and the only thing
+// that needs it is the endpoint that relays it. Folding it into the larger
+// interface would oblige every caller — and every test stub — to implement a
+// streaming method none of them use.
+type FindingStreamClient interface {
+	// StreamFindings delivers findings as they are ingested, until ctx is
+	// cancelled. The channel is closed when the stream ends, for any reason:
+	// a feed that has died looks exactly like one with nothing to say, so the
+	// close is how it tells a reader which it is.
+	StreamFindings(ctx context.Context, kinds []model.FindingKind) (<-chan model.Vulnerability, error)
+}
+
 // WatchlistClient is an OUTBOUND port: the repositories cortex tracks.
 type WatchlistClient interface {
 	TrackedRepositories(ctx context.Context) ([]model.TrackedRepository, error)

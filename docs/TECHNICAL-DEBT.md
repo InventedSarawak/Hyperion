@@ -471,4 +471,8 @@ Not debt — planned roadmap work, listed so the gap between the docs and realit
   (`DECK_TRANSPORT=grpc` still bypasses it for debugging). This matters because
   auth, rate limiting and metering all land at the edge in v4; a client that
   skips the gateway would skip all of them.
-- **gRPC streaming for the live feed** — `deck` polls; v3.
+- ~~**gRPC streaming for the live feed**~~ — **built in v3**: cortex broadcasts each
+  stored finding over `StreamFindings`, nexus relays it as SSE at `/stream`, and `deck`
+  refreshes on arrival instead of on its timer. The timer stays as the fallback. What
+  remains: nothing replays findings missed while disconnected, and the stream is
+  unauthenticated like the rest of the API (v4).

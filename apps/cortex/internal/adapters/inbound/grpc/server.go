@@ -54,6 +54,7 @@ type Server struct {
 	blast    BlastRadiusCalculator
 	vulns    VulnerabilityReader
 	exposure RepositoryExposureReader
+	findings FindingSubscriber
 }
 
 // NewServer wires the gRPC adapter to cortex's use cases. The graph use cases

@@ -84,6 +84,17 @@ nexus returning findings with cross-source provenance (`["package_feed","nvd"]`)
   succeeded, and cortex wrote the edges when it came back. That scan would previously
   have failed outright.
 
+- **Live feed, end to end (2026-09-17).** `StreamFindings` (server-streaming gRPC) on
+  cortex, fed by an in-memory broadcaster that ingest notifies after each store; nexus
+  relays it to HTTP clients as SSE at `GET /stream`; deck subscribes on start and
+  refreshes on arrival. Three calls worth recording: **ingest never blocks on a watcher**
+  (a full buffer drops updates instead), **deck refreshes rather than inserting the
+  streamed record** (the query stays the single source of what the list shows), and the
+  **feed goes through the gateway**, not straight from cortex, so it passes the same door
+  as every other client. The port was split — `FindingStreamClient` separate from
+  `IntelligenceClient` — so no existing caller or test stub had to implement a streaming
+  method it never uses.
+
 ### What is deliberately not done
 
 - Repository scans still call cortex over synchronous gRPC

@@ -19,6 +19,16 @@ type IngestSignal struct {
 	graph   ports.DependencyGraph
 	alerter Alerter
 	log     *slog.Logger
+
+	// notifier, when set, announces each stored finding to live watchers.
+	notifier ports.FindingNotifier
+}
+
+// WithNotifier announces every stored finding, so a watcher sees it as it
+// lands instead of discovering it on its next poll.
+func (c *IngestSignal) WithNotifier(n ports.FindingNotifier) *IngestSignal {
+	c.notifier = n
+	return c
 }
 
 // Alerter raises alerts for the subscriptions a vulnerability matches
@@ -123,6 +133,14 @@ func (c *IngestSignal) Handle(ctx context.Context, incoming model.Vulnerability)
 			c.log.Error("alert matching failed; record is stored but nobody was told",
 				"cve", incoming.CVEID, "error", err)
 		}
+	}
+
+	// Last, and only once everything above has settled: what watchers receive
+	// is the finding as it was actually stored. Notify does not block — a
+	// viewer that has stopped reading misses updates rather than holding up
+	// ingestion.
+	if c.notifier != nil {
+		c.notifier.Notify(ctx, incoming)
 	}
 	return nil
 }

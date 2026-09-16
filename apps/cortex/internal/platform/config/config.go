@@ -45,6 +45,9 @@ type Config struct {
 	// lines. A backfill runs for half an hour; silence is indistinguishable
 	// from a stall.
 	IngestProgressEvery int
+	// StreamBuffer is how many findings a live watcher can fall behind by
+	// before it starts missing them. Ingest never waits for a watcher.
+	StreamBuffer int
 	// LogLevel is debug, info, warn or error. At debug every finding ingested
 	// is logged as it lands.
 	LogLevel string
@@ -124,6 +127,7 @@ func Load() Config {
 		ConsumeStdin:        l.Bool("CONSUME_STDIN", false),
 		IngestWorkers:       l.Int("INGEST_WORKERS", 8),
 		IngestProgressEvery: l.Int("INGEST_PROGRESS_EVERY", 1000),
+		StreamBuffer:        l.Int("STREAM_BUFFER", 256),
 		LogLevel:            l.String("LOG_LEVEL", "info"),
 
 		Neo4jURI:      l.String("NEO4J_URI", DefaultNeo4jURI),

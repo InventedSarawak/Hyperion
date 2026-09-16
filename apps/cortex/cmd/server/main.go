@@ -29,6 +29,7 @@ import (
 
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/inbound/consumer"
 	grpcadapter "github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/inbound/grpc"
+	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/broadcast"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/elasticsearch"
 	githubadapter "github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/github"
 	graphadapter "github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/outbound/neo4j"
@@ -102,7 +103,13 @@ func main() {
 	listWatchlist := queries.NewListWatchlist(postgres.NewWatchlist(pool),
 		githubadapter.New(nil, cfg.GitHubBaseURL, cfg.GitHubToken))
 
-	ingest := commands.NewIngestSignal(repo, index, graph, match)
+	// Live feed: ingest announces what it stored, the streaming RPC fans it
+	// out to whoever is watching. In memory on purpose — everything announced
+	// is already in Postgres, so a watcher that was not connected has lost
+	// nothing it cannot ask Search for.
+	live := broadcast.New(cfg.StreamBuffer)
+
+	ingest := commands.NewIngestSignal(repo, index, graph, match).WithNotifier(live)
 	ingestDeps := commands.NewIngestDependency(graph)
 	search := queries.NewSearch(index)
 	blast := queries.NewCalculateBlastRadius(graph, cfg.BlastRadiusMaxDepth).WithResolver(repo)
@@ -161,7 +168,7 @@ func main() {
 
 	if cfg.ServeGRPC {
 		serveGRPC(runCtx, logger, cfg, search, ingestDeps, blast, manageSubs, listAlerting, repo,
-			grpcadapter.NewWatchlistServer(manageWatchlist, listWatchlist), exposure)
+			grpcadapter.NewWatchlistServer(manageWatchlist, listWatchlist), exposure, live)
 	} else {
 		<-runCtx.Done()
 		logger.Info("cortex stopped")
@@ -329,6 +336,7 @@ func serveGRPC(
 	vulns *postgres.Repo,
 	watchlist *grpcadapter.WatchlistServer,
 	exposure *queries.RepositoryExposure,
+	live *broadcast.Broadcaster,
 ) {
 	listener, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
@@ -337,7 +345,10 @@ func serveGRPC(
 	}
 
 	server := grpc.NewServer()
-	intelv1.RegisterIntelligenceServiceServer(server, grpcadapter.NewServer(search, ingestDeps, blast, vulns).WithRepositoryExposure(exposure))
+	intelv1.RegisterIntelligenceServiceServer(server,
+		grpcadapter.NewServer(search, ingestDeps, blast, vulns).
+			WithRepositoryExposure(exposure).
+			WithFindingStream(live))
 	watchlistv1.RegisterWatchlistServiceServer(server, watchlist)
 	alertingv1.RegisterAlertingServiceServer(server,
 		grpcadapter.NewAlertingServer(manageSubs, listAlerting, vulns))
