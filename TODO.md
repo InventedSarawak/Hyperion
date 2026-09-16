@@ -201,6 +201,63 @@ Registered in `docs/TECHNICAL-DEBT.md`. Highest-value items, roughly in order:
 - [x] Boot-time reindex, so a lost or rebuilt percolator index is repaired from
       Postgres rather than silently leaving every rule dead
 
+### Technical debt taken into v3
+
+Gathered from [`docs/TECHNICAL-DEBT.md`](docs/TECHNICAL-DEBT.md) on 2026-09-17: the open
+entries that belong to v3's subject — how data flows through the backbone, and whether
+what flows is right. Everything else stays where it is; the reasoning is below.
+
+- [ ] **A watermark per source, not one for all ten** (🟡 _Single global lookback_).
+      Directly extends the checkpoint just built: one `SIPHON_LOOKBACK` and one watermark
+      drive ten sources whose cadences differ by orders of magnitude, so slow feeds return
+      nothing at 2h and a single slow source cannot be tracked separately. Per-source
+      interval, lookback and watermark. Small, and the clearest win left.
+- [ ] **Graceful shutdown for ingest** (🟡 _Ingest has no graceful shutdown_).
+      Postgres can end up holding a record Elasticsearch does not, because an abrupt stop
+      drops what is in flight between the two writes. Kafka already replays the
+      uncommitted batch; what is missing is draining cleanly and a reconciliation pass.
+- [ ] **Mark backfilled events as historical** (🟢 _A backfill can raise alerts for old
+      findings_). A contract change, which makes it v3 work: `SignalDiscovered` gains a
+      flag, and alerting skips it, so loading ten years of history stops firing ten years
+      of alerts.
+- [ ] **Versioned migrations, Postgres and Neo4j** (🟡 _Naive migration runner_ + 🟢
+      _Neo4j migrations are implicit_). One piece of work: a schema-version table instead
+      of re-running every file and relying on `IF NOT EXISTS`. Both stores have the same
+      shortcut, and the doc already tags both for v3.
+- [ ] **Elasticsearch alias and reindex strategy** (🟢). Write through an alias, reindex
+      into a new concrete index, flip atomically — so a mapping change stops meaning
+      delete-and-rebuild with downtime.
+- [ ] **Triage malware rather than hiding it** (🟡 _Malware is ingested in full but only
+      hidden_). ~220,000 `MAL-` records sit in the store costing index space, and a broad
+      subscription rule can match them. The graph can already answer "does a tracked
+      repository depend on this package?", which is the ranking that makes them useful
+      instead of noise.
+
+### Correctness fixes worth doing alongside
+
+Not v3's subject, but each is small and each is a wrong answer today rather than a missing
+feature:
+
+- [ ] **Normalise NuGet (and RubyGems) package names** (🟡). A `.csproj` writing
+      `newtonsoft.json` never reaches advisories filed under `Newtonsoft.Json`, so real
+      exposure is silently missed.
+- [ ] **Read `yarn.lock` and `packages.lock.json`** (🟢). The last two lockfile formats
+      unread, so those versions stay ranges and their findings stay "possibly affected"
+      instead of being settled outright.
+- [ ] **Keep one description and score set per source** (🟡 _last-writer-wins_). Which
+      description you read currently depends on which feed reported last.
+
+### Deliberately left for v4 and later
+
+Not gathered into v3, and why: **Dockerfiles, k8s/terraform, CI, restart policies and
+resource limits** are deployment (v4). **Authentication, TLS, Kafka SASL, Elasticsearch
+security, committed credentials and plaintext secrets** are the security pass (v4) and
+should land together rather than piecemeal. **Health endpoints** (v4) and **metrics,
+tracing and log aggregation** (v6) belong with their own stacks. **Library-to-library
+edges reaching only as far as the watchlist** needs a real module graph (deps.dev or an
+SBOM feed) — a data-source project, not a transport one. **Topics declared with the
+infrastructure** waits for the same v4 work that containerises the services.
+
 ### Performance Testing
 
 - [x] **Load test (2026-09-17):** `task loadtest` (`tests/load`) publishes synthetic
