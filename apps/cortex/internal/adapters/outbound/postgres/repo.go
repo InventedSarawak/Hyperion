@@ -333,3 +333,41 @@ func fromStoredPackages(stored []storedPackage) []valueobject.PackageRef {
 	}
 	return out
 }
+
+// --- index reconciliation ---
+
+// pendingIndexSQL reads the rows whose search document is behind.
+//
+// Oldest first, so a backlog is worked through in the order it appeared rather
+// than repeatedly re-reading the same newest rows.
+const pendingIndexSQL = selectVulnerability + `
+WHERE v.indexed_at IS NULL OR v.indexed_at < v.last_seen_at
+ORDER BY v.last_seen_at
+LIMIT $1;`
+
+// PendingIndex returns records whose index document is missing or stale.
+func (r *Repo) PendingIndex(ctx context.Context, limit int) ([]model.Vulnerability, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	rows, err := r.pool.Query(ctx, pendingIndexSQL, limit)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: pending index: %w", err)
+	}
+	return collectVulnerabilities(rows)
+}
+
+// markIndexedSQL settles the rows that have just been written to the index.
+const markIndexedSQL = `
+UPDATE vulnerabilities SET indexed_at = $1 WHERE cve_id = ANY($2);`
+
+// MarkIndexed records that these ids are in the index as of at.
+func (r *Repo) MarkIndexed(ctx context.Context, at time.Time, ids ...string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if _, err := r.pool.Exec(ctx, markIndexedSQL, at, ids); err != nil {
+		return fmt.Errorf("postgres: mark indexed: %w", err)
+	}
+	return nil
+}

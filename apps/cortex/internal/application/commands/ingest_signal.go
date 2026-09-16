@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/model"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/ports"
@@ -22,6 +23,15 @@ type IngestSignal struct {
 
 	// notifier, when set, announces each stored finding to live watchers.
 	notifier ports.FindingNotifier
+	// reconciler, when set, records which rows are in step with the index.
+	reconciler ports.IndexReconciler
+}
+
+// WithReconciler records which records reached the index, so the ones that did
+// not can be found and repaired instead of silently staying unsearchable.
+func (c *IngestSignal) WithReconciler(r ports.IndexReconciler) *IngestSignal {
+	c.reconciler = r
+	return c
 }
 
 // WithNotifier announces every stored finding, so a watcher sees it as it
@@ -95,8 +105,17 @@ func (c *IngestSignal) Handle(ctx context.Context, incoming model.Vulnerability)
 
 	if c.index != nil {
 		if err := c.index.Index(ctx, incoming); err != nil {
-			c.log.Warn("indexing failed; record is stored but not searchable",
+			// Not fatal — the record is stored, which is what matters — but no
+			// longer merely logged either. The row stays marked as behind, and
+			// the reconciler settles it later. A warning alone meant the index
+			// stayed wrong until somebody thought to rebuild it by hand.
+			c.log.Warn("indexing failed; record is stored but not searchable until reconciled",
 				"cve", incoming.CVEID, "error", err)
+		} else if c.reconciler != nil {
+			if err := c.reconciler.MarkIndexed(ctx, time.Now(), incoming.CVEID); err != nil {
+				// Worst case the record is reindexed once unnecessarily.
+				c.log.Debug("could not mark the record as indexed", "cve", incoming.CVEID, "error", err)
+			}
 		}
 	}
 

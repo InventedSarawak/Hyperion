@@ -445,13 +445,31 @@ empty module.
 - **Cost:** no visibility into rate-limit consumption, ingest lag, or query latency.
 - **Fix in v6:** OpenTelemetry, Prometheus, Grafana, Loki, Tempo.
 
-### 🟡 Ingest has no graceful shutdown
+### 🟢 ~~Ingest has no graceful shutdown~~ — REPAID (v3, 2026-09-17)
 
-Ctrl-C during ingestion drops whatever is in flight. There is no transaction spanning
-the store-and-index pair, so Postgres can hold a record that Elasticsearch does not.
+Two halves, because the entry was really two problems.
 
-- **Cost:** search results can silently lag storage after an abrupt stop.
-- **Fix in v3:** drain on shutdown; a reconciliation job to reindex from Postgres.
+**Stopping cleanly.** The Kafka consumer now finishes the batch already in hand
+when a stop is asked for, within a bounded grace period
+(`CORTEX_SHUTDOWN_GRACE`, 30s), and commits it. Ctrl-C used to abandon a record
+mid-write — stored in Postgres, not yet indexed — and replay the whole batch on
+the next start.
+
+**Noticing when the stores disagree.** Ingest tolerates a failed index write on
+purpose: losing the finding would be worse than it being briefly unsearchable.
+That tolerance used to end at a log line, and the index stayed wrong until
+someone ran a full reindex by hand. Rows now carry `indexed_at`, a partial index
+covers only those behind (normally none), and a reconciler settles them every
+`CORTEX_RECONCILE_INTERVAL` (5m). Verified live: 131 rows drifted during an
+upgrade and were repaired automatically — `search index reconciled: records 131,
+still_behind 0`.
+
+- **Bounded, not a rebuild:** only rows known to be behind are read, so
+  repairing one document does not mean rewriting 500,000.
+- **`task reindex` still exists** for a mapping change or drift that predates
+  the column.
+- **What remains:** Neo4j has no equivalent marker, so a failed graph link is
+  still only a log line.
 
 ### 🟢 Elasticsearch cluster runs yellow
 

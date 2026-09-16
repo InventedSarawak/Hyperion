@@ -86,6 +86,10 @@ type Consumer struct {
 	// not the records.
 	maxConsecutiveDeadLetters int64
 	consecutiveDeadLetters    atomic.Int64
+
+	// grace is how long a batch already in hand may keep working after
+	// shutdown is asked for.
+	grace time.Duration
 }
 
 // ConsumerOption customizes a Consumer.
@@ -100,6 +104,7 @@ type consumerSettings struct {
 	extra          []kgo.Opt
 	deadLetter     *DeadLetter
 	maxConsecutive int64
+	grace          time.Duration
 }
 
 // WithMaxPollRecords caps how many records one poll returns.
@@ -144,6 +149,22 @@ func WithDeadLetter(dl *DeadLetter, maxConsecutive int) ConsumerOption {
 	}
 }
 
+// WithShutdownGrace gives a batch already being handled this long to finish
+// after the context is cancelled.
+//
+// Without it, Ctrl-C aborts mid-record: the offset is not committed, so nothing
+// is lost, but the half-finished record leaves the stores briefly disagreeing
+// (written to one, not yet the next) and the whole batch is replayed on the
+// next start. Finishing what is in hand and committing it is a cleaner stop and
+// a faster restart. Zero takes a sensible default.
+func WithShutdownGrace(d time.Duration) ConsumerOption {
+	return func(s *consumerSettings) {
+		if d > 0 {
+			s.grace = d
+		}
+	}
+}
+
 // WithFromLatest starts a group with no committed offsets at the end of the
 // topic instead of the beginning. The default is the beginning: a new or
 // rebuilt consumer should see the history the topic still holds, not silently
@@ -183,6 +204,7 @@ func NewConsumer(cfg Config, topic, group string, opts ...ConsumerOption) (*Cons
 		fromStart:      true,
 		log:            slog.Default(),
 		maxConsecutive: 10,
+		grace:          30 * time.Second,
 	}
 	for _, opt := range opts {
 		opt(&settings)
@@ -223,6 +245,7 @@ func NewConsumer(cfg Config, topic, group string, opts ...ConsumerOption) (*Cons
 		log:                       settings.log,
 		deadLetter:                settings.deadLetter,
 		maxConsecutiveDeadLetters: settings.maxConsecutive,
+		grace:                     settings.grace,
 	}, nil
 }
 
@@ -262,7 +285,8 @@ func (c *Consumer) pollOnce(ctx context.Context, h Handler) (bool, error) {
 	if fetches.IsClientClosed() {
 		return true, nil
 	}
-	if err := ctx.Err(); err != nil {
+	if err := ctx.Err(); err != nil && fetches.NumRecords() == 0 {
+		// Nothing in hand, and shutdown has been asked for: stop here.
 		return false, err
 	}
 	for _, fe := range fetches.Errors() {
@@ -274,13 +298,27 @@ func (c *Consumer) pollOnce(ctx context.Context, h Handler) (bool, error) {
 		}
 	}
 
+	// The batch in hand finishes even if shutdown has been asked for, within a
+	// bounded grace period. A cancelled context here would abandon a record
+	// half-written — stored in one place and not yet the next — and replay the
+	// whole batch on the next start.
+	work, release := context.WithTimeout(context.WithoutCancel(ctx), c.grace)
+	defer release()
+
 	// Offsets are committed only once every record they cover has been
 	// handled. A batch that failed commits nothing, so a restart replays it.
-	if err := c.handleBatch(ctx, fetches, h); err != nil {
+	if err := c.handleBatch(work, fetches, h); err != nil {
 		return false, err
 	}
-	if err := c.cl.CommitUncommittedOffsets(ctx); err != nil {
+	if err := c.cl.CommitUncommittedOffsets(work); err != nil {
 		return false, fmt.Errorf("kafka: commit %s/%s: %w", c.topic, c.group, err)
+	}
+
+	// Committed what was in hand; now honour the shutdown.
+	if err := ctx.Err(); err != nil {
+		c.log.Info("finished the batch in hand before stopping",
+			"topic", c.topic, "records", fetches.NumRecords())
+		return false, err
 	}
 	return false, nil
 }

@@ -341,6 +341,14 @@ ingested on `CORTEX_INGEST_WORKERS` (default 8) parallel workers, sharded by id 
 record's observations are always merged in order; over Kafka that sharding is the
 partition key instead, one goroutine per partition. A write that loses a race — another worker filing the same finding under a different id, a deadlock, a serialization failure — is re-read and merged again, up to three attempts.
 
+**When the stores disagree.** Postgres is the truth; Elasticsearch and Neo4j are derived
+from it. An index write that fails does not fail the ingest — losing the finding would be
+worse than it being briefly unsearchable — so the row is left marked as behind
+(`indexed_at` older than `last_seen_at`) and a reconciler settles it within
+`CORTEX_RECONCILE_INTERVAL` (5m). Only rows known to be behind are read, which is normally
+none. Stopping cortex is safe at any point: the batch in hand finishes within
+`CORTEX_SHUTDOWN_GRACE` (30s) and is committed, and anything not committed is replayed.
+
 **Merge rules** (how two feeds' views of one finding combine):
 
 | Field             | Rule                                                           |

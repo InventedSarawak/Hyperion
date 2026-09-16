@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -109,7 +110,10 @@ func main() {
 	// nothing it cannot ask Search for.
 	live := broadcast.New(cfg.StreamBuffer)
 
-	ingest := commands.NewIngestSignal(repo, index, graph, match).WithNotifier(live)
+	ingest := commands.NewIngestSignal(repo, index, graph, match).
+		WithNotifier(live).
+		WithReconciler(repo)
+	reconcile := commands.NewReconcileIndex(repo, index)
 	ingestDeps := commands.NewIngestDependency(graph)
 	search := queries.NewSearch(index)
 	blast := queries.NewCalculateBlastRadius(graph, cfg.BlastRadiusMaxDepth).WithResolver(repo)
@@ -166,6 +170,11 @@ func main() {
 		}()
 	}
 
+	// Close whatever gap opened between Postgres and the index — a failed
+	// index write, a process stopped between the two — without anyone having
+	// to notice and run a reindex by hand.
+	go runReconciler(runCtx, logger, reconcile, cfg.ReconcileInterval)
+
 	if cfg.ServeGRPC {
 		serveGRPC(runCtx, logger, cfg, search, ingestDeps, blast, manageSubs, listAlerting, repo,
 			grpcadapter.NewWatchlistServer(manageWatchlist, listWatchlist), exposure, live)
@@ -214,6 +223,29 @@ func runDependencyConsumer(ctx context.Context, logger *slog.Logger, ingestDeps 
 	return nil
 }
 
+// runReconciler settles records whose search document is behind, on a timer.
+//
+// It runs whatever else cortex is doing: the gap it repairs is opened by
+// ingest, and closing it is not something to ask an operator to remember.
+func runReconciler(ctx context.Context, logger *slog.Logger, reconcile *commands.ReconcileIndex, every time.Duration) {
+	if every <= 0 {
+		return
+	}
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := reconcile.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				logger.Warn("index reconciliation failed", "error", err)
+			}
+		}
+	}
+}
+
 // runKafkaConsumer reads the signal topic until the context is cancelled.
 //
 // The topic is ensured here as well as in siphon so that cortex can be started
@@ -240,6 +272,8 @@ func runKafkaConsumer(ctx context.Context, logger *slog.Logger, ingest *commands
 		logger.Info("unprocessable records will be set aside",
 			"dead_letter_topic", dl.Topic(), "stop_after_consecutive", cfg.Kafka.MaxConsecutiveDLQ)
 	}
+
+	opts = append(opts, kafka.WithShutdownGrace(cfg.ShutdownGrace))
 
 	c, err := kafka.NewConsumer(clientCfg, cfg.Kafka.Topic, cfg.Kafka.Group, opts...)
 	if err != nil {

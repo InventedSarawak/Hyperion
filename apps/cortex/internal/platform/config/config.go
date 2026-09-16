@@ -45,6 +45,12 @@ type Config struct {
 	// lines. A backfill runs for half an hour; silence is indistinguishable
 	// from a stall.
 	IngestProgressEvery int
+	// ReconcileInterval is how often cortex looks for records whose search
+	// document is behind the stored row, and settles them. Zero turns it off.
+	ReconcileInterval time.Duration
+	// ShutdownGrace is how long a batch already being ingested may finish
+	// after a stop is asked for, so a record is not left half-written.
+	ShutdownGrace time.Duration
 	// StreamBuffer is how many findings a live watcher can fall behind by
 	// before it starts missing them. Ingest never waits for a watcher.
 	StreamBuffer int
@@ -127,6 +133,8 @@ func Load() Config {
 		ConsumeStdin:        l.Bool("CONSUME_STDIN", false),
 		IngestWorkers:       l.Int("INGEST_WORKERS", 8),
 		IngestProgressEvery: l.Int("INGEST_PROGRESS_EVERY", 1000),
+		ReconcileInterval:   l.Duration("RECONCILE_INTERVAL", 5*time.Minute),
+		ShutdownGrace:       l.Duration("SHUTDOWN_GRACE", 30*time.Second),
 		StreamBuffer:        l.Int("STREAM_BUFFER", 256),
 		LogLevel:            l.String("LOG_LEVEL", "info"),
 

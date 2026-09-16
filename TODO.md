@@ -210,10 +210,10 @@ what flows is right. Everything else stays where it is; the reasoning is below.
 - [x] **A watermark per source, not one for all ten (2026-09-17)** (🟡 _Single global
       lookback_). Per-source interval, first window and watermark; the scheduler became a
       plain ticker. `vendor_advisory` fetches 13 records over 48h where 2h found none.
-- [ ] **Graceful shutdown for ingest** (🟡 _Ingest has no graceful shutdown_).
-      Postgres can end up holding a record Elasticsearch does not, because an abrupt stop
-      drops what is in flight between the two writes. Kafka already replays the
-      uncommitted batch; what is missing is draining cleanly and a reconciliation pass.
+- [x] **Graceful shutdown for ingest (2026-09-17)** (🟡). The consumer finishes and
+      commits the batch in hand within a 30s grace period instead of abandoning a record
+      mid-write; rows carry `indexed_at` and a reconciler settles whatever drifted every
+      5m. Verified live: 131 drifted rows repaired automatically.
 - [ ] **Mark backfilled events as historical** (🟢 _A backfill can raise alerts for old
       findings_). A contract change, which makes it v3 work: `SignalDiscovered` gains a
       flag, and alerting skips it, so loading ten years of history stops firing ten years
