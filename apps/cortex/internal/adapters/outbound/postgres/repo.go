@@ -109,6 +109,17 @@ func (r *Repo) Upsert(ctx context.Context, v model.Vulnerability, replaces ...st
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// Retiring a key is how two records become one finding: the loser's row
+	// goes and its id lives on as an alias of the winner. An id the winner
+	// does not carry has nowhere to live on — the row would be deleted and
+	// nothing would resolve that id afterwards, which is a finding
+	// disappearing rather than merging. The store refuses rather than
+	// allowing it: there is no caller for whom that is the intent.
+	if lost := retiredWithoutHome(v, retired); len(lost) > 0 {
+		return fmt.Errorf("postgres: upsert %s: refusing to retire %v, which %s does not carry: %w",
+			v.CVEID, lost, v.CVEID, ports.ErrOrphanedRetire)
+	}
+
 	var taken string
 	err = tx.QueryRow(ctx, conflictSQL, append([]string{v.CVEID}, aliases...), v.CVEID, retired, aliases).Scan(&taken)
 	switch {
@@ -389,4 +400,24 @@ func (r *Repo) Delete(ctx context.Context, ids ...string) error {
 		return fmt.Errorf("postgres: delete %v: %w", ids, err)
 	}
 	return nil
+}
+
+// retiredWithoutHome lists the ids a retire would delete without the surviving
+// record carrying them.
+func retiredWithoutHome(v model.Vulnerability, retired []string) []string {
+	if len(retired) == 0 {
+		return nil
+	}
+	carried := make(map[string]struct{}, 1+len(v.Aliases))
+	for _, id := range v.IDs() {
+		carried[valueobject.NormalizeID(id)] = struct{}{}
+	}
+
+	var lost []string
+	for _, id := range retired {
+		if _, ok := carried[valueobject.NormalizeID(id)]; !ok {
+			lost = append(lost, id)
+		}
+	}
+	return lost
 }

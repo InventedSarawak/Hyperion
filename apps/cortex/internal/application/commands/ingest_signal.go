@@ -221,6 +221,14 @@ func (c *IngestSignal) store(ctx context.Context, incoming model.Vulnerability) 
 			retired = append(retired, e.CVEID)
 		}
 	}
+	if len(retired) > 0 {
+		// Two records turning out to be one finding is ordinary, and it
+		// deletes a row — so it is worth a line. Rows that vanish with
+		// nothing recording why are impossible to account for later.
+		c.log.Info("merged findings under one id",
+			"cve", merged.CVEID, "retired", retired, "ids", merged.IDs())
+	}
+
 	if err := c.repo.Upsert(ctx, merged, retired...); err != nil {
 		return model.Vulnerability{}, nil, fmt.Errorf("ingest: upsert %s: %w", merged.CVEID, err)
 	}
