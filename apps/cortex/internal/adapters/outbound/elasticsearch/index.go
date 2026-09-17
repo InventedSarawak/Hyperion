@@ -79,6 +79,14 @@ const indexMapping = `{
       "packages":      {"type": "keyword"},
       "package_names": {"type": "text"},
       "max_score":   {"type": "float"},
+      "scores": {
+        "properties": {
+          "version":    {"type": "keyword"},
+          "base_score": {"type": "float"},
+          "vector":     {"type": "keyword"},
+          "severity":   {"type": "keyword"}
+        }
+      },
       "severity":    {"type": "keyword"},
       "published_at":{"type": "date"},
       "modified_at": {"type": "date"}
@@ -86,27 +94,42 @@ const indexMapping = `{
   }
 }`
 
-// ensureIndex creates the index when it does not already exist.
+// ensureIndex makes sure the name resolves to something writable.
+//
+// A fresh cluster gets the intended shape: a numbered concrete index with the
+// alias pointing at it, so a future mapping change can be a swap rather than a
+// rebuild with downtime. A cluster that already has a plain index of that name
+// keeps working exactly as before — `cortex -swap-index` is what moves it onto
+// an alias, because rebuilding half a million documents is not something to do
+// silently at boot.
 func (i *Index) ensureIndex(ctx context.Context) error {
-	resp, err := i.do(ctx, http.MethodHead, "/"+i.name, nil)
+	state, err := i.resolveAlias(ctx)
 	if err != nil {
-		return fmt.Errorf("elasticsearch: head index: %w", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode == http.StatusOK {
-		return i.ensureFields(ctx)
+		return err
 	}
 
-	createResp, err := i.do(ctx, http.MethodPut, "/"+i.name, strings.NewReader(indexMapping))
+	switch {
+	case state.alias, state.legacy:
+		// Something exists under the name; bring its mapping up to date.
+		return i.ensureFields(ctx)
+	default:
+		first := concreteIndex(i.name, 1)
+		if err := i.createIndex(ctx, first); err != nil {
+			return err
+		}
+		return i.updateAliases(ctx,
+			`{"actions":[{"add":{"index":"`+first+`","alias":"`+i.name+`"}}]}`)
+	}
+}
+
+// Resolved reports the concrete index the name currently resolves to, and
+// whether it is reached through an alias.
+func (i *Index) Resolved(ctx context.Context) (concrete string, aliased bool, err error) {
+	state, err := i.resolveAlias(ctx)
 	if err != nil {
-		return fmt.Errorf("elasticsearch: create index: %w", err)
+		return "", false, err
 	}
-	defer createResp.Body.Close()
-	if createResp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(createResp.Body, 512))
-		return fmt.Errorf("elasticsearch: create index status %d: %s", createResp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	return nil
+	return state.current, state.alias, nil
 }
 
 // addedFields are fields introduced after the index was first created.
@@ -122,6 +145,16 @@ const addedFields = `{
     "kind":          {"type": "keyword"}
   }
 }`
+
+// The scores object is stored but never searched on, so it was left out of the
+// mapping and Elasticsearch inferred it from whichever document arrived first.
+// That is a coin toss: a first document scoring 10 makes base_score a long, and
+// every later 9.8 is then rejected outright. Declaring it makes the type a
+// decision rather than an accident of ingest order.
+//
+// Not in addedFields, because an index that already inferred the field cannot
+// have it redeclared — a mapping type cannot change in place, which is what
+// `-swap-index` exists for.
 
 // ensureFields adds any fields an existing index is missing. It is idempotent:
 // re-declaring a field with the same type is a no-op.
@@ -365,12 +398,23 @@ type document struct {
 func toDocument(v model.Vulnerability) document {
 	// Denormalize the worst score so results can be sorted/filtered cheaply.
 	var maxScore float64
-	severity := string(model.SeverityUnknown)
 	for _, s := range v.Scores {
 		if s.BaseScore >= maxScore {
 			maxScore = s.BaseScore
-			severity = string(s.Severity)
 		}
+	}
+
+	// Severity comes from the finding, not from whichever score happened to
+	// be highest: a malicious package is critical and has no CVSS to say so
+	// through, and TopSeverity is what every other reader already asks.
+	severity := string(v.TopSeverity())
+
+	// A finding rated without a score still needs a number, because sorting
+	// and "at least this bad" filters are written against one. The rating's
+	// own floor is the honest answer — it says "at least this bad", which is
+	// exactly what the rating means — rather than 0, which reads as harmless.
+	if maxScore == 0 {
+		maxScore = severityFloor(v.TopSeverity())
 	}
 	kind := v.Kind
 	if kind == "" {
@@ -546,4 +590,22 @@ func (i *Index) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("elasticsearch: delete %s status %d: %s", id, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return nil
+}
+
+// severityFloor is the lowest CVSS base score that carries each rating, per the
+// CVSS v3.1 qualitative scale. It is used only for findings rated without a
+// score, so that "critical" sorts and filters as critical instead of as zero.
+func severityFloor(s model.Severity) float64 {
+	switch s {
+	case model.SeverityCritical:
+		return 9.0
+	case model.SeverityHigh:
+		return 7.0
+	case model.SeverityMedium:
+		return 4.0
+	case model.SeverityLow:
+		return 0.1
+	default:
+		return 0
+	}
 }

@@ -232,6 +232,19 @@ func (r *Registry) ActiveClients() []ports.SourceClient {
 	return out
 }
 
+// Active lists the source kinds that are active, for callers that need the
+// kinds themselves rather than their names — resolving each source's cadence,
+// for one.
+func (r *Registry) Active() []valueobject.SourceKind {
+	var out []valueobject.SourceKind
+	for _, s := range r.statuses {
+		if s.Active {
+			out = append(out, s.Kind)
+		}
+	}
+	return out
+}
+
 // ActiveKinds lists the kinds that are active, for logging.
 func (r *Registry) ActiveKinds() []string {
 	var out []string

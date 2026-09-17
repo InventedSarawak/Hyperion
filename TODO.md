@@ -148,18 +148,39 @@ Registered in `docs/TECHNICAL-DEBT.md`. Highest-value items, roughly in order:
 
 ### Infrastructure Upgrade
 
-- [ ] Add **Apache Kafka** & Zookeeper to `docker-compose.yml`
-- [ ] Add **Redis** (for caching/deduplication)
-- [ ] Create `packages/common/kafka` (Producer/Consumer wrappers)
+- [x] Add **Apache Kafka** to `docker-compose.yml` — 4.1.0 in **KRaft** mode, single
+      node, healthchecked. (No ZooKeeper: it was removed in Kafka 4.0.)
+- [x] Add **Redis** (for caching/deduplication) — landed with alerting, 2026-09-09
+- [x] Create `packages/common/kafka` (Producer/Consumer wrappers) — franz-go, with a
+      protobuf codec, group-free `Tail` for debugging, `EnsureTopic`, and lag reporting
 
 ### Refactor: Event-Driven Architecture
 
-- [ ] **Ingestion Worker:** Stop writing to DB directly.
-  - [ ] Create `KafkaProducer` adapter
-  - [ ] Push events to topic `raw-signals`
-- [ ] **Intelligence Service:**
-  - [ ] Create `KafkaConsumer` adapter (Group: `intel-indexer`)
-  - [ ] Process events: `Kafka -> Elastic/Neo4j`
+- [x] **Ingestion Worker:** publish to the broker instead of stdout
+  - [x] Create `KafkaProducer` adapter (`adapters/outbound/publisher/kafka_publisher.go`)
+  - [x] Push events to topic `hyperion.signals.v1`, keyed by finding id
+  - [x] `SignalPublisher` port gained `Flush`, so a poll's watermark cannot advance past
+        events the broker never acknowledged
+- [x] **Intelligence Service:**
+  - [x] Create `KafkaConsumer` adapter (Group: `intel-indexer`) — runs alongside the gRPC API
+  - [x] Process events: `Kafka -> Postgres/Elastic/Neo4j`
+- [x] **Make it the default (2026-09-17):** `task up` runs siphon and cortex as
+      independent services over the broker. The pipe survives only where it is wanted —
+      `task ingest` and `task backfill`, which opt out explicitly
+- [x] **Repository scans publish `DependencyObserved` (2026-09-17):** topic
+      `hyperion.dependencies.v1`, keyed by repository, consumed by cortex as group
+      `intel-graph`. Verified by scanning with cortex stopped — the scan succeeded and
+      cortex applied it on restart. The gRPC path remains as the no-broker fallback
+- [x] **Redis `DedupeStore` (2026-09-17):** observations are fingerprinted by content and
+      an unchanged one is not republished. One 3h NVD window re-read: 885 suppressed,
+      25 published. A corrected score or a new affected package still publishes
+- [x] **Dead-letter topic (2026-09-17):** exhausted records go to
+      `hyperion.signals.v1.dlq` with the reason in headers and ingest continues; a run of
+      ten consecutive failures still stops cortex rather than draining the topic.
+      `task topic:dlq` reads it, `-replay` puts records back
+- [x] **Persist siphon's ingestion watermark (2026-09-17):** `CheckpointStore` port +
+      Redis adapter; the scheduler resumes from the stored watermark and only advances
+      it on a successful poll. Restart re-fetch: 526 records -> 59
 
 ### Feature: Real-Time Alerts — DONE (2026-09-09)
 
@@ -180,14 +201,128 @@ Registered in `docs/TECHNICAL-DEBT.md`. Highest-value items, roughly in order:
 - [x] Boot-time reindex, so a lost or rebuilt percolator index is repaired from
       Postgres rather than silently leaving every rule dead
 
+### Technical debt taken into v3
+
+Gathered from [`docs/TECHNICAL-DEBT.md`](docs/TECHNICAL-DEBT.md) on 2026-09-17: the open
+entries that belong to v3's subject — how data flows through the backbone, and whether
+what flows is right. Everything else stays where it is; the reasoning is below.
+
+- [x] **A watermark per source, not one for all ten (2026-09-17)** (🟡 _Single global
+      lookback_). Per-source interval, first window and watermark; the scheduler became a
+      plain ticker. `vendor_advisory` fetches 13 records over 48h where 2h found none.
+- [x] **Graceful shutdown for ingest (2026-09-17)** (🟡). The consumer finishes and
+      commits the batch in hand within a 30s grace period instead of abandoning a record
+      mid-write; rows carry `indexed_at` and a reconciler settles whatever drifted every
+      5m. Verified live: 131 drifted rows repaired automatically.
+- [x] **Mark backfilled events as historical (2026-09-17)** (🟢). `SignalDiscovered`
+      gained a `historical` flag; cortex stores such events identically and skips
+      alerting and the live feed for them, so loading ten years of history no longer
+      fires ten years of alerts.
+- [x] **Versioned migrations, Postgres and Neo4j (2026-09-17)** (🟡 + 🟢). A
+      `schema_migrations` register with checksums, each file applied once in its own
+      transaction; the graph keeps the same register as `(:SchemaMigration)` nodes.
+      Editing an applied migration is refused. Down-migrations still absent.
+- [x] **Elasticsearch alias and reindex strategy (2026-09-17)** (🟢). The index name is
+      an alias onto a numbered index; `task index:swap` builds the next one alongside,
+      copies server-side and moves the alias atomically. Migrated 547,973 documents live
+      with search unaffected. Found and fixed an undeclared `scores.base_score` mapping
+      that made decimal scores a coin toss on a fresh install.
+- [x] **Triage malware rather than hiding it (2026-09-17)** (🟡). Alerting asks the graph
+      whether anything tracked depends on the malicious package and stays quiet when
+      nothing does; ordinary vulnerabilities are never filtered that way, and a graph that
+      cannot answer alerts anyway. Storage cost remains, recorded in TECHNICAL-DEBT.
+
+### Correctness fixes worth doing alongside
+
+Not v3's subject, but each is small and each is a wrong answer today rather than a missing
+feature:
+
+- [x] **Normalise NuGet package names (2026-09-17)** (🟡). Keys folded per registry —
+      NuGet and Packagist lower case, PyPI PEP 503 — with two graph migrations moving what
+      was stored: 1,322 nodes re-keyed, 33 split ones merged. RubyGems left alone: gem ids
+      are case-sensitive by specification.
+- [x] **Read `yarn.lock` and `packages.lock.json` (2026-09-17)** (🟢). Every lockfile
+      format the scanner meets now settles versions outright. Verified on `yarnpkg/berry`:
+      1,794 dependencies read from its `yarn.lock`.
+- [x] **Descriptions and scores no longer last-writer-wins (2026-09-17)** (🟡). Chosen by
+      ranking the feeds — GitHub's prose, NVD's scores — with the winning source recorded
+      on the row, so the same record reads the same however the polls interleave.
+
+### Deliberately left for v4 and later
+
+Not gathered into v3, and why: **Dockerfiles, k8s/terraform, CI, restart policies and
+resource limits** are deployment (v4). **Authentication, TLS, Kafka SASL, Elasticsearch
+security, committed credentials and plaintext secrets** are the security pass (v4) and
+should land together rather than piecemeal. **Health endpoints** (v4) and **metrics,
+tracing and log aggregation** (v6) belong with their own stacks. **Library-to-library
+edges reaching only as far as the watchlist** needs a real module graph (deps.dev or an
+SBOM feed) — a data-source project, not a transport one. **Topics declared with the
+infrastructure** waits for the same v4 work that containerises the services.
+
 ### Performance Testing
 
-- [ ] Write a load test script (simulate 1k events/sec)
-- [ ] Verify TUI updates instantly via gRPC streaming
+- [x] **Load test (2026-09-17):** `task loadtest` (`tests/load`) publishes synthetic
+      findings at a target rate and consumes them back, on a throwaway topic it deletes
+      afterwards. Measured on the dev laptop: **1,000/s sustained with 6ms mean latency**
+      (18ms max), and **~9,200/s unpaced** — roughly 10x the roadmap's target. Those
+      numbers are the broker and client; cortex's ingest is bounded by Postgres,
+      Elasticsearch and Neo4j, and is measured by pointing it at the signal topic
+- [x] **TUI updates instantly via gRPC streaming (2026-09-17):** cortex broadcasts each
+      stored finding over `StreamFindings`, nexus relays it as SSE at `/stream`, deck
+      subscribes and refreshes on arrival (debounced to 2s). Ingest never blocks on a
+      watcher; the poll timer remains as the fallback
 
 ---
 
 ## TODO v4: The Platform (SaaS)
+
+### The edge: everything a user touches goes through nexus
+
+> **The rule (decided 2026-09-17):** gRPC is internal transport only — service to
+> service. Anything an end user or a client application reaches goes through the
+> gateway, because that is where authentication, API keys, rate limiting, per-tenant
+> scoping and usage metering land. A client that talks to cortex directly skips all of
+> them, and "it is only the CLI" stops being true the moment someone runs it over SSH.
+
+- [x] **Expose alerting through GraphQL (2026-09-17).** `hyperion.alerting.v1` — subscriptions
+      (create/list/delete) and alerts (list) — is served only over gRPC on :50051. It is
+      an end-user feature with no route through the gateway, so the only way to use it is
+      `grpcurl`. Queries `subscriptions`, `alerts`; mutations `createSubscription`,
+      `deleteSubscription`.
+- [ ] **Give deck an alerts view**, once the gateway serves them — it has Feed, Details,
+      Graph and Repositories, and no way to see or manage what it is alerting on.
+- [x] **Move the grpcurl tasks onto the gateway (2026-09-17).** `task blast`,
+      `subscribe`, `subscriptions`, `unsubscribe` and `alerts` all go through nexus via
+      `scripts/graphql.sh`. No task calls cortex directly any more.
+- [ ] **Retire `DECK_TRANSPORT=grpc`** as anything but a debugging escape hatch, and say
+      so in the docs (registered in TECHNICAL-DEBT.md).
+- [ ] **API keys** issued and verified at nexus, as the first thing that makes the rule
+      enforceable rather than a convention.
+
+### Notifications (`herald`)
+
+> **Decided 2026-09-17.** Design settled: Kafka carries the event, a Postgres outbox in
+> the notifier carries delivery with retries, a new service owns the delivery adapters,
+> and pushes are detected by storing the commit SHA rather than by webhook. RabbitMQ was
+> considered and left out — Kafka already carries the events, and a second broker needs a
+> better reason than the architecture diagram naming one.
+
+- [ ] **Rescan on change, not on a timer.** Store the default branch's head SHA on
+      `TrackedRepository`; the watchlist pass asks GitHub for just that SHA (one request)
+      and does the full manifest read only when it changed. Lets the check run every few
+      minutes while costing less quota than the current 6-hourly full rescan.
+- [ ] **Notification policy per repository:** minimum severity (default **high +
+      critical**, plus all malware), changeable to include low and medium.
+- [ ] **Two triggers in cortex**, both publishing to `hyperion.notifications.v1`:
+      a scan landing (evaluate the repository's exposure) and a new finding arriving that
+      reaches a tracked repository (the graph already answers this — it is the query
+      malware triage uses).
+- [ ] **`apps/herald`:** consume the topic, write a delivery row, deliver, retry with
+      backoff, park what fails. Duplicate suppression on `(repository, finding)` as a
+      Postgres constraint — durable, unlike the Redis window.
+- [ ] **First channel: an outgoing webhook** (JSON POST to a configured URL). Slack and
+      email are adapters behind the same port afterwards.
+- [ ] **Surface notifications in deck**, and in `console` when it exists.
 
 ### Data Lake Strategy
 

@@ -24,6 +24,7 @@ const (
 	IntelligenceService_GetBlastRadius_FullMethodName        = "/hyperion.intelligence.v1.IntelligenceService/GetBlastRadius"
 	IntelligenceService_GetVulnerability_FullMethodName      = "/hyperion.intelligence.v1.IntelligenceService/GetVulnerability"
 	IntelligenceService_GetRepositoryExposure_FullMethodName = "/hyperion.intelligence.v1.IntelligenceService/GetRepositoryExposure"
+	IntelligenceService_StreamFindings_FullMethodName        = "/hyperion.intelligence.v1.IntelligenceService/StreamFindings"
 )
 
 // IntelligenceServiceClient is the client API for IntelligenceService service.
@@ -50,6 +51,11 @@ type IntelligenceServiceClient interface {
 	// repository reaches through its dependencies, each judged by comparing the
 	// version it declares with the versions the advisory says are affected.
 	GetRepositoryExposure(ctx context.Context, in *GetRepositoryExposureRequest, opts ...grpc.CallOption) (*GetRepositoryExposureResponse, error)
+	// StreamFindings pushes each finding as it is ingested, for as long as the
+	// caller keeps the stream open. It is a live feed, not a query: it carries
+	// what arrives from now on and never replays history — a client that wants
+	// what came before asks Search for it.
+	StreamFindings(ctx context.Context, in *StreamFindingsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StreamFindingsResponse], error)
 }
 
 type intelligenceServiceClient struct {
@@ -110,6 +116,25 @@ func (c *intelligenceServiceClient) GetRepositoryExposure(ctx context.Context, i
 	return out, nil
 }
 
+func (c *intelligenceServiceClient) StreamFindings(ctx context.Context, in *StreamFindingsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StreamFindingsResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &IntelligenceService_ServiceDesc.Streams[0], IntelligenceService_StreamFindings_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[StreamFindingsRequest, StreamFindingsResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type IntelligenceService_StreamFindingsClient = grpc.ServerStreamingClient[StreamFindingsResponse]
+
 // IntelligenceServiceServer is the server API for IntelligenceService service.
 // All implementations must embed UnimplementedIntelligenceServiceServer
 // for forward compatibility.
@@ -134,6 +159,11 @@ type IntelligenceServiceServer interface {
 	// repository reaches through its dependencies, each judged by comparing the
 	// version it declares with the versions the advisory says are affected.
 	GetRepositoryExposure(context.Context, *GetRepositoryExposureRequest) (*GetRepositoryExposureResponse, error)
+	// StreamFindings pushes each finding as it is ingested, for as long as the
+	// caller keeps the stream open. It is a live feed, not a query: it carries
+	// what arrives from now on and never replays history — a client that wants
+	// what came before asks Search for it.
+	StreamFindings(*StreamFindingsRequest, grpc.ServerStreamingServer[StreamFindingsResponse]) error
 	mustEmbedUnimplementedIntelligenceServiceServer()
 }
 
@@ -158,6 +188,9 @@ func (UnimplementedIntelligenceServiceServer) GetVulnerability(context.Context, 
 }
 func (UnimplementedIntelligenceServiceServer) GetRepositoryExposure(context.Context, *GetRepositoryExposureRequest) (*GetRepositoryExposureResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetRepositoryExposure not implemented")
+}
+func (UnimplementedIntelligenceServiceServer) StreamFindings(*StreamFindingsRequest, grpc.ServerStreamingServer[StreamFindingsResponse]) error {
+	return status.Error(codes.Unimplemented, "method StreamFindings not implemented")
 }
 func (UnimplementedIntelligenceServiceServer) mustEmbedUnimplementedIntelligenceServiceServer() {}
 func (UnimplementedIntelligenceServiceServer) testEmbeddedByValue()                             {}
@@ -270,6 +303,17 @@ func _IntelligenceService_GetRepositoryExposure_Handler(srv interface{}, ctx con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _IntelligenceService_StreamFindings_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(StreamFindingsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(IntelligenceServiceServer).StreamFindings(m, &grpc.GenericServerStream[StreamFindingsRequest, StreamFindingsResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type IntelligenceService_StreamFindingsServer = grpc.ServerStreamingServer[StreamFindingsResponse]
+
 // IntelligenceService_ServiceDesc is the grpc.ServiceDesc for IntelligenceService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -298,6 +342,12 @@ var IntelligenceService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _IntelligenceService_GetRepositoryExposure_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "StreamFindings",
+			Handler:       _IntelligenceService_StreamFindings_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "hyperion/intelligence/v1/intelligence_service.proto",
 }

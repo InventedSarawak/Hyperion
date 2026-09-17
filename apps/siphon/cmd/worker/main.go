@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/inbound/scheduler"
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/checkpoint"
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/dedupe"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/intelligence"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/publisher"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/repos/githubrepo"
@@ -45,14 +47,14 @@ func main() {
 		"comma-separated backfill sources: nvd, osv")
 	flag.Parse()
 
+	cfg := siphonconfig.Load()
+
 	// Logs go to stderr; published events go to stdout (kept separate on purpose).
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel(cfg.LogLevel)}))
 	slog.SetDefault(logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	cfg := siphonconfig.Load()
 
 	// Resolve which of the documented sources are usable this run.
 	registry := sources.Build(cfg, nil)
@@ -88,9 +90,23 @@ func main() {
 	}
 
 	// Compose the hexagon: outbound adapters -> use case -> inbound adapter.
-	pub := publisher.NewStdout(os.Stdout)
-	poll := workflows.NewPollSources(clients, pub)
-	sched := scheduler.New(poll, cfg.PollInterval, cfg.Lookback)
+	pub, closePub := buildPublisher(ctx, logger, cfg)
+	defer closePub()
+	seen, closeDedupe := buildDedupeStore(ctx, logger, cfg)
+	defer closeDedupe()
+
+	checkpoints, closeCheckpoints := buildCheckpointStore(ctx, logger, cfg)
+	defer closeCheckpoints()
+
+	poll := workflows.NewPollSources(clients, pub).
+		WithDedupe(seen, cfg.Dedupe.Window).
+		WithCadence(cfg.CadenceFor).
+		WithCheckpoint(checkpoints)
+
+	// The scheduler wakes often enough for the most frequent source to be on
+	// time; each source then decides whether it is due. One ticker for ten
+	// feeds, rather than ten tickers or one compromise interval.
+	sched := scheduler.New(poll, cfg.MinInterval(registry.Active()))
 
 	// The supply-chain scan runs alongside on its own, much slower schedule.
 	stopScan := startRepositoryScan(ctx, logger, cfg)
@@ -98,15 +114,98 @@ func main() {
 
 	logger.Info("siphon starting",
 		"active_sources", registry.ActiveKinds(),
-		"interval", cfg.PollInterval.String(),
-		"lookback", cfg.Lookback.String(),
+		"tick", cfg.MinInterval(registry.Active()).String(),
 	)
+	for _, kind := range registry.Active() {
+		interval, lookback := cfg.CadenceFor(kind)
+		logger.Info("source cadence", "source", kind.String(),
+			"every", interval.String(), "first_window", lookback.String())
+	}
 
 	if err := sched.Start(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("siphon exited with error", "error", err)
 		os.Exit(1)
 	}
 	logger.Info("siphon stopped")
+}
+
+// buildCheckpointStore returns the store that makes the watermark outlive the
+// process, or nil when there is none.
+//
+// Redis being unreachable is a warning, not a stop: ingestion still works
+// without it, exactly as it did before there was a checkpoint at all. Refusing
+// to poll because the bookmark is unavailable would turn a small degradation
+// into an outage.
+func buildCheckpointStore(ctx context.Context, logger *slog.Logger, cfg siphonconfig.Config) (ports.CheckpointStore, func()) {
+	if !cfg.Checkpoint.Enabled {
+		logger.Info("ingestion watermark is in-memory only (SIPHON_CHECKPOINT_ENABLED=false); a restart re-reads the lookback window")
+		return nil, func() {}
+	}
+
+	store, err := checkpoint.Connect(ctx, cfg.Checkpoint.RedisAddr)
+	if err != nil {
+		logger.Warn("redis unavailable; the ingestion watermark will not survive a restart",
+			"addr", cfg.Checkpoint.RedisAddr, "error", err)
+		return nil, func() {}
+	}
+
+	logger.Info("ingestion watermark persisted to redis", "addr", cfg.Checkpoint.RedisAddr)
+	return store, func() { _ = store.Close() }
+}
+
+// buildDedupeStore returns the store that suppresses republishing unchanged
+// observations, or nil when there is none.
+//
+// As with the watermark, Redis being unreachable is a warning: publishing
+// every observation is what siphon did before this existed, and it is correct
+// — merely wasteful.
+func buildDedupeStore(ctx context.Context, logger *slog.Logger, cfg siphonconfig.Config) (ports.DedupeStore, func()) {
+	if !cfg.Dedupe.Enabled {
+		logger.Info("dedupe disabled (SIPHON_DEDUPE_ENABLED=false); every observation is published")
+		return nil, func() {}
+	}
+
+	store, err := dedupe.Connect(ctx, cfg.Dedupe.RedisAddr)
+	if err != nil {
+		logger.Warn("redis unavailable; every observation will be published, including unchanged ones",
+			"addr", cfg.Dedupe.RedisAddr, "error", err)
+		return nil, func() {}
+	}
+
+	logger.Info("suppressing observations already published",
+		"addr", cfg.Dedupe.RedisAddr, "window", cfg.Dedupe.Window.String())
+	return store, func() { _ = store.Close() }
+}
+
+// buildPublisher chooses where published events go, and is the only place in
+// siphon that knows there is a choice.
+//
+// A configured broker that cannot be reached is fatal rather than a fallback
+// to stdout. Falling back would look like it worked: siphon runs detached,
+// so its stdout goes to a log file, and every finding would be written into
+// something nothing reads.
+func buildPublisher(ctx context.Context, logger *slog.Logger, cfg siphonconfig.Config) (ports.SignalPublisher, func()) {
+	if !cfg.Kafka.Enabled {
+		logger.Info("publishing signals to stdout (set SIPHON_KAFKA_ENABLED=true for the broker)")
+		return publisher.NewStdout(os.Stdout), func() {}
+	}
+
+	pub, err := publisher.NewKafka(ctx, publisher.KafkaConfig{
+		Brokers:    cfg.Kafka.Brokers,
+		Topic:      cfg.Kafka.Topic,
+		Partitions: int32(cfg.Kafka.Partitions),
+	}, logger)
+	if err != nil {
+		logger.Error("kafka publisher unavailable", "brokers", cfg.Kafka.Brokers, "error", err)
+		os.Exit(1)
+	}
+	return pub, func() {
+		// Close flushes: whatever the last poll buffered is sent before the
+		// process goes away.
+		if err := pub.Close(); err != nil {
+			logger.Error("kafka publisher did not flush cleanly", "error", err)
+		}
+	}
 }
 
 // startRepositoryScan runs the watchlist scanner in the background,
@@ -130,7 +229,11 @@ func startRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphoncon
 	}
 
 	repos := githubrepo.New(cfg.RepoScan.BaseURL, cfg.RepoScan.Token)
-	scan := workflows.NewScanWatchlist(client, repos, client, cfg.RepoScan.Interval, cfg.RepoScan.RetryInterval)
+
+	// Where manifest reads go. Over the broker a scan no longer fails because
+	// cortex is restarting, and one taken while it was down is replayed.
+	deps, closeDeps := buildDependencyPublisher(ctx, logger, cfg, client)
+	scan := workflows.NewScanWatchlist(client, repos, deps, cfg.RepoScan.Interval, cfg.RepoScan.RetryInterval)
 
 	logger.Info("watchlist scanner starting",
 		"check_every", cfg.RepoScan.WatchInterval.String(),
@@ -143,13 +246,49 @@ func startRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphoncon
 	go func() {
 		// Lookback is irrelevant to a manifest read: its current contents are
 		// the whole truth, so the watermark the scheduler tracks is unused.
-		if err := scheduler.New(scan, cfg.RepoScan.WatchInterval, 0).Start(ctx); err != nil &&
+		if err := scheduler.New(scan, cfg.RepoScan.WatchInterval).Start(ctx); err != nil &&
 			!errors.Is(err, context.Canceled) {
 			logger.Error("watchlist scanner stopped", "error", err)
 		}
 	}()
 
-	return func() { _ = client.Close() }
+	return func() {
+		closeDeps()
+		_ = client.Close()
+	}
+}
+
+// buildDependencyPublisher chooses how manifest reads reach cortex: the topic
+// when there is a broker, the gRPC client otherwise.
+//
+// Unlike the signal publisher, an unreachable broker here falls back to gRPC
+// rather than exiting. Scanning is the secondary job — siphon's primary work
+// is advisories, and it kept scanning over gRPC for all of v2.
+func buildDependencyPublisher(
+	ctx context.Context,
+	logger *slog.Logger,
+	cfg siphonconfig.Config,
+	fallback ports.DependencyPublisher,
+) (ports.DependencyPublisher, func()) {
+	if !cfg.Kafka.Enabled {
+		return fallback, func() {}
+	}
+
+	pub, err := publisher.NewKafkaDependencies(ctx, publisher.KafkaDependenciesConfig{
+		Brokers:    cfg.Kafka.Brokers,
+		Topic:      cfg.Kafka.DependencyTopic,
+		Partitions: int32(cfg.Kafka.Partitions),
+	}, logger)
+	if err != nil {
+		logger.Warn("kafka unavailable for dependency observations; reporting over grpc instead",
+			"brokers", cfg.Kafka.Brokers, "error", err)
+		return fallback, func() {}
+	}
+	return pub, func() {
+		if err := pub.Close(); err != nil {
+			logger.Error("dependency publisher did not flush cleanly", "error", err)
+		}
+	}
 }
 
 // reportSources logs the status of every documented ingestion source, so it is
@@ -207,10 +346,15 @@ func runRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphonconfi
 
 	repos := githubrepo.New(cfg.RepoScan.BaseURL, cfg.RepoScan.Token)
 
+	// A one-off scan reports the same way the scheduled one does: over the
+	// topic when there is a broker, over gRPC otherwise.
+	deps, closeDeps := buildDependencyPublisher(ctx, logger, cfg, client)
+	defer closeDeps()
+
 	var scan scheduler.Poller
 	switch {
 	case repoFlag != "" || orgFlag != "":
-		scan = workflows.NewScanRepositories(repos, repos, client, workflows.Targets{
+		scan = workflows.NewScanRepositories(repos, repos, deps, workflows.Targets{
 			Repositories:  splitList(repoFlag),
 			Organizations: splitList(orgFlag),
 			PerOwnerLimit: cfg.RepoScan.PerOwnerLimit,
@@ -218,16 +362,18 @@ func runRepositoryScan(ctx context.Context, logger *slog.Logger, cfg siphonconfi
 		logger.Info("scanning named repositories", "repositories", repoFlag, "organizations", orgFlag)
 	default:
 		// Zero intervals make every tracked repository due.
-		scan = workflows.NewScanWatchlist(client, repos, client, 0, 0)
+		scan = workflows.NewScanWatchlist(client, repos, deps, 0, 0)
 		logger.Info("scanning every repository on the watchlist")
 	}
 
-	written, err := scan.Run(ctx, time.Time{})
+	reported, err := scan.Run(ctx)
 	if err != nil {
-		logger.Error("repository scan finished with errors", "written", written, "error", err)
+		logger.Error("repository scan finished with errors", "reported", reported, "error", err)
 		os.Exit(1)
 	}
-	logger.Info("repository scan complete", "dependency_edges_written", written)
+	// Dependencies reported, not edges written: over the topic the writing
+	// happens in cortex, afterwards.
+	logger.Info("repository scan complete", "dependencies_reported", reported)
 }
 
 // runBackfill publishes the history of the chosen sources from a date, and
@@ -261,12 +407,23 @@ func runBackfill(ctx context.Context, logger *slog.Logger, cfg siphonconfig.Conf
 	}
 
 	logger.Info("backfill starting", "from", from.Format(time.DateOnly), "sources", sourcesFlag)
-	published, err := workflows.NewBackfill(backfillers, publisher.NewStdout(os.Stdout)).Run(ctx, from)
-	if err != nil {
+	pub, closePub := buildPublisher(ctx, logger, cfg)
+	defer closePub()
+
+	published, err := workflows.NewBackfill(backfillers, pub).Run(ctx, from)
+	switch {
+	// Ctrl+C is how a run measured in hours is meant to be cut short, so it
+	// reports what got out and exits clean — the same courtesy the poll loop
+	// already extends. Exiting non-zero here called every deliberate stop a
+	// failure.
+	case errors.Is(err, context.Canceled):
+		logger.Info("backfill stopped early", "published", published)
+	case err != nil:
 		logger.Error("backfill finished with errors", "published", published, "error", err)
 		os.Exit(1)
+	default:
+		logger.Info("backfill complete", "published", published)
 	}
-	logger.Info("backfill complete", "published", published)
 }
 
 // splitList parses a comma-separated flag value, ignoring empty entries.
@@ -278,4 +435,19 @@ func splitList(raw string) []string {
 		}
 	}
 	return out
+}
+
+// logLevel maps the configured name onto a slog level. An unknown name is
+// info: a typo in a log setting must not silence the worker.
+func logLevel(name string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }

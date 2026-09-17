@@ -50,7 +50,7 @@ var _ = Describe("ScanWatchlist use case", func() {
 			errs: map[string]error{"broken/repo": errors.New("404 not found")},
 		}
 
-		n, err := workflows.NewScanWatchlist(list, client, &fakePublisher{}, rescan, retry).Run(ctx, time.Time{})
+		n, err := workflows.NewScanWatchlist(list, client, &fakePublisher{}, rescan, retry).Run(ctx)
 
 		// A repository failing is its own reported state, not a failed pass.
 		Expect(err).ToNot(HaveOccurred())
@@ -71,7 +71,7 @@ var _ = Describe("ScanWatchlist use case", func() {
 
 	It("fails the pass only when the watchlist itself is unreachable", func() {
 		list := &fakeWatchlist{listErr: errors.New("cortex down")}
-		_, err := workflows.NewScanWatchlist(list, &fakeRepoClient{}, &fakePublisher{}, rescan, retry).Run(ctx, time.Time{})
+		_, err := workflows.NewScanWatchlist(list, &fakeRepoClient{}, &fakePublisher{}, rescan, retry).Run(ctx)
 		Expect(err).To(MatchError(ContainSubstring("cortex down")))
 	})
 })

@@ -62,32 +62,138 @@ func (g *Graph) Ready(ctx context.Context) error {
 	return nil
 }
 
-// constraints are idempotent and double as indexes: Neo4j backs every
-// uniqueness constraint with one, which is what keeps MERGE from degrading
-// into a full label scan as the graph grows.
-var constraints = []string{
-	`CREATE CONSTRAINT repository_full_name IF NOT EXISTS
-	 FOR (r:Repository) REQUIRE r.full_name IS UNIQUE`,
-	`CREATE CONSTRAINT library_key IF NOT EXISTS
-	 FOR (l:Library) REQUIRE l.key IS UNIQUE`,
-	`CREATE CONSTRAINT author_login IF NOT EXISTS
-	 FOR (a:Author) REQUIRE a.login IS UNIQUE`,
-	`CREATE CONSTRAINT vulnerability_cve_id IF NOT EXISTS
-	 FOR (v:Vulnerability) REQUIRE v.cve_id IS UNIQUE`,
+// migration is one versioned change to the graph's schema.
+//
+// Versioned for the same reason the Postgres migrations are: a statement that
+// creates something can be written idempotently and re-run forever, but one
+// that *changes* something cannot, and there was previously no way to tell
+// which had already happened. Appending here is how the graph schema evolves.
+type migration struct {
+	version string
+	stmt    string
 }
 
-// EnsureSchema creates the uniqueness constraints the MERGEs rely on. Without
-// them a concurrent MERGE can create a duplicate node under the same key.
+// migrations run in order, once each. The constraints double as indexes: Neo4j
+// backs every uniqueness constraint with one, which is what keeps MERGE from
+// degrading into a full label scan as the graph grows.
+var migrations = []migration{
+	{"0001_repository_full_name", `CREATE CONSTRAINT repository_full_name IF NOT EXISTS
+	 FOR (r:Repository) REQUIRE r.full_name IS UNIQUE`},
+	{"0002_library_key", `CREATE CONSTRAINT library_key IF NOT EXISTS
+	 FOR (l:Library) REQUIRE l.key IS UNIQUE`},
+	{"0003_author_login", `CREATE CONSTRAINT author_login IF NOT EXISTS
+	 FOR (a:Author) REQUIRE a.login IS UNIQUE`},
+	{"0004_vulnerability_cve_id", `CREATE CONSTRAINT vulnerability_cve_id IF NOT EXISTS
+	 FOR (v:Vulnerability) REQUIRE v.cve_id IS UNIQUE`},
+
+	// Library keys were the name as written, so a .csproj requiring
+	// `newtonsoft.json` and an advisory against `Newtonsoft.Json` became two
+	// nodes and never met. Keys are normalized per registry now (see
+	// valueobject.NormalizeName); these are the nodes written before that.
+	//
+	// Only the ones that can move without colliding, and there are two ways
+	// to collide: the normalized key may already exist as its own node, and
+	// several mis-keyed nodes may normalize to the *same* key —
+	// `CefSharp.OffScreen` and `CefSharp.Offscreen` are one package written
+	// two ways. Grouping by the target and moving one of each covers both.
+	// What is left stops being written to, because new observations attach to
+	// the normalized node.
+	//
+	// This is the first migration that changes data rather than creating
+	// something, which the version register is what makes possible.
+	{"0005_normalize_library_keys", `
+	 MATCH (l:Library)
+	 WHERE (l.key STARTS WITH 'nuget:' OR l.key STARTS WITH 'packagist:' OR l.key STARTS WITH 'pypi:')
+	   AND l.key <> toLower(l.key)
+	 WITH toLower(l.key) AS target, collect(l) AS candidates
+	 WHERE NOT EXISTS { MATCH (other:Library {key: target}) }
+	 WITH target, head(candidates) AS l
+	 SET l.key = target`},
+
+	// What 0005 had to leave: nodes whose normalized key already belonged to
+	// another node. Both are the same package, so the advisories filed
+	// against the old spelling belong to the new one — left apart, a
+	// repository requiring the package reaches only half of what affects it,
+	// and exposure reads as smaller than it is.
+	//
+	// Only AFFECTED_BY edges exist on these (dependency edges are written
+	// from manifests, which already normalize), so this moves those and
+	// deletes what is then an empty duplicate.
+	{"0006_merge_split_library_keys", `
+	 MATCH (old:Library)
+	 WHERE (old.key STARTS WITH 'nuget:' OR old.key STARTS WITH 'packagist:' OR old.key STARTS WITH 'pypi:')
+	   AND old.key <> toLower(old.key)
+	 MATCH (canonical:Library {key: toLower(old.key)})
+	 CALL (old, canonical) {
+	   OPTIONAL MATCH (old)-[r:AFFECTED_BY]->(v:Vulnerability)
+	   WITH old, canonical, r, v WHERE v IS NOT NULL
+	   MERGE (canonical)-[:AFFECTED_BY]->(v)
+	   DELETE r
+	 }
+	 WITH DISTINCT old
+	 DETACH DELETE old`},
+}
+
+// schemaVersionConstraint keeps the migration register honest: two cortex
+// instances starting at once must not both record the same version.
+const schemaVersionConstraint = `CREATE CONSTRAINT schema_migration_version IF NOT EXISTS
+	 FOR (m:SchemaMigration) REQUIRE m.version IS UNIQUE`
+
+// EnsureSchema applies any graph migration that has not run yet.
+//
+// The constraints the MERGEs rely on are created here; without them a
+// concurrent MERGE can create a duplicate node under the same key.
 func (g *Graph) EnsureSchema(ctx context.Context) error {
 	session := g.session(ctx, driver.AccessModeWrite)
 	defer session.Close(ctx)
 
-	for _, stmt := range constraints {
-		if _, err := session.Run(ctx, stmt, nil); err != nil {
-			return fmt.Errorf("neo4j: ensure schema: %w", err)
+	// The register itself first — it is what decides whether anything else
+	// runs, so it cannot be one of the things it decides about.
+	if _, err := session.Run(ctx, schemaVersionConstraint, nil); err != nil {
+		return fmt.Errorf("neo4j: ensure schema register: %w", err)
+	}
+
+	applied, err := g.appliedVersions(ctx, session)
+	if err != nil {
+		return err
+	}
+
+	for _, m := range migrations {
+		if applied[m.version] {
+			continue
+		}
+		if _, err := session.Run(ctx, m.stmt, nil); err != nil {
+			return fmt.Errorf("neo4j: apply %s: %w", m.version, err)
+		}
+		if _, err := session.Run(ctx,
+			`MERGE (m:SchemaMigration {version: $version})
+			 ON CREATE SET m.applied_at = datetime()`,
+			map[string]any{"version": m.version}); err != nil {
+			return fmt.Errorf("neo4j: record %s: %w", m.version, err)
 		}
 	}
 	return nil
+}
+
+// appliedVersions reads which graph migrations have already run.
+func (g *Graph) appliedVersions(ctx context.Context, session driver.SessionWithContext) (map[string]bool, error) {
+	result, err := session.Run(ctx, `MATCH (m:SchemaMigration) RETURN m.version AS version`, nil)
+	if err != nil {
+		return nil, fmt.Errorf("neo4j: read schema migrations: %w", err)
+	}
+
+	applied := map[string]bool{}
+	for result.Next(ctx) {
+		if v, ok := result.Record().Get("version"); ok {
+			if name, ok := v.(string); ok {
+				applied[name] = true
+			}
+		}
+	}
+	if err := result.Err(); err != nil {
+		return nil, fmt.Errorf("neo4j: read schema migrations: %w", err)
+	}
+	return applied, nil
 }
 
 func (g *Graph) session(ctx context.Context, mode driver.AccessMode) driver.SessionWithContext {
@@ -261,7 +367,34 @@ MERGE (pub)-[e:DEPENDS_ON]->(l)
 SET e.version = dep.version,
     e.direct = true,
     e.manifest_path = dep.manifest_path,
-    e.observed_at = $observed_at`
+    e.observed_at = $observed_at,
+    e.learned_from = $full_name`
+
+// pruneStaleLibraryEdgesCypher removes library-to-library edges nothing has
+// confirmed for a while.
+//
+// These edges outlive the repository that taught them on purpose: "ajv depends
+// on fast-uri" stays true whether or not anyone tracks ajv, and deleting them
+// when a repository is untracked would silently shorten every other
+// repository's blast radius. What they cannot do is stay right forever —
+// nothing re-reads a manifest nobody scans any more — so they carry when they
+// were last seen, and this is how the ones that have gone quiet are retired.
+//
+// Repository-to-library edges are deliberately untouched: those are refreshed
+// on every scan, so an old one means the repository is gone, not that the fact
+// has aged.
+const pruneStaleLibraryEdgesCypher = `
+MATCH (:Library)-[e:DEPENDS_ON]->(:Library)
+WHERE e.observed_at IS NULL OR e.observed_at < $cutoff
+WITH e LIMIT $limit
+DELETE e
+RETURN count(*) AS pruned`
+
+// countStaleLibraryEdgesCypher counts what a prune would remove.
+const countStaleLibraryEdgesCypher = `
+MATCH (:Library)-[e:DEPENDS_ON]->(:Library)
+WHERE e.observed_at IS NULL OR e.observed_at < $cutoff
+RETURN count(e) AS stale`
 
 const linkVulnerabilityCypher = `
 MERGE (v:Vulnerability {cve_id: $cve_id})
@@ -391,4 +524,69 @@ func (g *Graph) RemoveRepository(ctx context.Context, fullName string) error {
 		return fmt.Errorf("neo4j: remove repository %s: %w", fullName, err)
 	}
 	return nil
+}
+
+// StaleLibraryEdges counts library-to-library edges not confirmed since cutoff.
+func (g *Graph) StaleLibraryEdges(ctx context.Context, cutoff time.Time) (int, error) {
+	session := g.session(ctx, driver.AccessModeRead)
+	defer session.Close(ctx)
+
+	result, err := session.ExecuteRead(ctx, func(tx driver.ManagedTransaction) (any, error) {
+		records, err := tx.Run(ctx, countStaleLibraryEdgesCypher, map[string]any{
+			"cutoff": cutoff.UTC().Format(time.RFC3339),
+		})
+		if err != nil {
+			return 0, err
+		}
+		record, err := records.Single(ctx)
+		if err != nil {
+			return 0, err
+		}
+		return int(record.Values[0].(int64)), nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("neo4j: count stale library edges: %w", err)
+	}
+	return result.(int), nil
+}
+
+// PruneStaleLibraryEdges removes library-to-library edges not confirmed since
+// cutoff, in batches, and reports how many went.
+func (g *Graph) PruneStaleLibraryEdges(ctx context.Context, cutoff time.Time, batch int) (int, error) {
+	if batch <= 0 {
+		batch = 1000
+	}
+	session := g.session(ctx, driver.AccessModeWrite)
+	defer session.Close(ctx)
+
+	total := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+		pruned, err := session.ExecuteWrite(ctx, func(tx driver.ManagedTransaction) (any, error) {
+			records, err := tx.Run(ctx, pruneStaleLibraryEdgesCypher, map[string]any{
+				"cutoff": cutoff.UTC().Format(time.RFC3339),
+				"limit":  batch,
+			})
+			if err != nil {
+				return 0, err
+			}
+			record, err := records.Single(ctx)
+			if err != nil {
+				return 0, err
+			}
+			return int(record.Values[0].(int64)), nil
+		})
+		if err != nil {
+			return total, fmt.Errorf("neo4j: prune stale library edges: %w", err)
+		}
+
+		n := pruned.(int)
+		total += n
+		// A pass that removed nothing means there is nothing left to remove.
+		if n == 0 {
+			return total, nil
+		}
+	}
 }

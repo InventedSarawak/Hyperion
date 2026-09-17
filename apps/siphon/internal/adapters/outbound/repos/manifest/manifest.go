@@ -30,7 +30,8 @@ type Parser interface {
 // Parsers returns every manifest format siphon understands.
 func Parsers() []Parser {
 	return []Parser{
-		PackageLock{}, PnpmLock{}, CargoLock{}, PoetryLock{}, ComposerLock{},
+		PackageLock{}, PnpmLock{}, YarnLock{}, CargoLock{}, PoetryLock{}, ComposerLock{},
+		PackagesLock{},
 		GoMod{}, PackageJSON{},
 		Requirements{}, Pyproject{}, Pipfile{},
 		Cargo{},

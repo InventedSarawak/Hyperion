@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	alertingv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/alerting/v1"
 	commonv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/common/v1"
 	intelv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/intelligence/v1"
 	watchlistv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/watchlist/v1"
@@ -25,6 +26,7 @@ type Client struct {
 	conn      *grpc.ClientConn
 	stub      intelv1.IntelligenceServiceClient
 	watchlist watchlistv1.WatchlistServiceClient
+	alerting  alertingv1.AlertingServiceClient
 	timout    time.Duration
 }
 
@@ -39,6 +41,7 @@ func Dial(addr string) (*Client, error) {
 		conn:      conn,
 		stub:      intelv1.NewIntelligenceServiceClient(conn),
 		watchlist: watchlistv1.NewWatchlistServiceClient(conn),
+		alerting:  alertingv1.NewAlertingServiceClient(conn),
 		timout:    10 * time.Second,
 	}, nil
 }

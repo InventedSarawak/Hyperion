@@ -1,11 +1,15 @@
 package consumer_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -15,6 +19,7 @@ import (
 	eventsv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/events/v1"
 
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/adapters/inbound/consumer"
+	"github.com/inventedsarawak/hyperion/apps/cortex/internal/application/commands"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/model"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/valueobject"
 )
@@ -22,10 +27,14 @@ import (
 // captureIngester records what the consumer would ingest.
 type captureIngester struct {
 	got []model.Vulnerability
+	// historical records the provenance of each observation, so a spec can
+	// assert that a replayed event is recognised as one.
+	historical []bool
 }
 
-func (c *captureIngester) Handle(_ context.Context, v model.Vulnerability) error {
-	c.got = append(c.got, v)
+func (c *captureIngester) Handle(_ context.Context, obs commands.Observation) error {
+	c.got = append(c.got, obs.Vulnerability)
+	c.historical = append(c.historical, obs.Historical)
 	return nil
 }
 
@@ -158,7 +167,8 @@ type orderIngester struct {
 	order map[string][]string
 }
 
-func (o *orderIngester) Handle(_ context.Context, v model.Vulnerability) error {
+func (o *orderIngester) Handle(_ context.Context, obs commands.Observation) error {
+	v := obs.Vulnerability
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.order[v.CVEID] = append(o.order[v.CVEID], v.Title)
@@ -192,5 +202,157 @@ var _ = Describe("Consumer with several workers", func() {
 			Expect(seen).To(HaveLen(20), cve)
 			Expect(sort.StringsAreSorted(seen)).To(BeTrue(), "events for %s arrived out of order: %v", cve, seen)
 		}
+	})
+})
+
+var _ = Describe("Consumer progress", func() {
+	ctx := context.Background()
+
+	// captured collects what the consumer logged, at any level.
+	captured := func(buf *bytes.Buffer) []map[string]any {
+		var out []map[string]any
+		for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+			if line == "" {
+				continue
+			}
+			var entry map[string]any
+			Expect(json.Unmarshal([]byte(line), &entry)).To(Succeed())
+			out = append(out, entry)
+		}
+		return out
+	}
+
+	events := func(ids ...string) string {
+		var b strings.Builder
+		for _, id := range ids {
+			b.WriteString(eventLine(id, commonv1.Severity_SEVERITY_HIGH) + "\n")
+		}
+		return b.String()
+	}
+
+	It("reports progress as it goes, so a long run is not silence", func() {
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+		n, err := consumer.NewConsumer(&captureIngester{},
+			consumer.WithProgressEvery(2), consumer.WithLogger(logger)).
+			Run(ctx, strings.NewReader(events("CVE-2021-0001", "CVE-2021-0002", "CVE-2021-0003", "CVE-2021-0004")))
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(n).To(Equal(4))
+
+		var progress []map[string]any
+		for _, entry := range captured(&buf) {
+			if entry["msg"] == "ingest progress" {
+				progress = append(progress, entry)
+			}
+		}
+		Expect(progress).To(HaveLen(2), "one line every two findings")
+		Expect(progress[1]["ingested"]).To(BeNumerically("==", 4))
+		Expect(progress[1]).To(HaveKey("per_second"))
+		Expect(progress[1]).To(HaveKey("latest"))
+	})
+
+	It("says nothing per finding at info, and names each one at debug", func() {
+		var quiet, verbose bytes.Buffer
+		lines := events("CVE-2021-0001", "CVE-2021-0002")
+
+		_, err := consumer.NewConsumer(&captureIngester{}, consumer.WithProgressEvery(0),
+			consumer.WithLogger(slog.New(slog.NewJSONHandler(&quiet, &slog.HandlerOptions{Level: slog.LevelInfo})))).
+			Run(ctx, strings.NewReader(lines))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(strings.TrimSpace(quiet.String())).To(BeEmpty(), "nothing to say when all is well")
+
+		_, err = consumer.NewConsumer(&captureIngester{}, consumer.WithProgressEvery(0),
+			consumer.WithLogger(slog.New(slog.NewJSONHandler(&verbose, &slog.HandlerOptions{Level: slog.LevelDebug})))).
+			Run(ctx, strings.NewReader(lines))
+		Expect(err).ToNot(HaveOccurred())
+
+		var ingested []string
+		for _, entry := range captured(&verbose) {
+			if entry["msg"] == "ingested" {
+				ingested = append(ingested, entry["id"].(string))
+			}
+		}
+		Expect(ingested).To(ConsistOf("CVE-2021-0001", "CVE-2021-0002"))
+	})
+})
+
+// interruptingIngester ingests one finding, then cancels the run the way a
+// Ctrl+C would, and records anything it is asked to do afterwards.
+type interruptingIngester struct {
+	mu     sync.Mutex
+	cancel context.CancelFunc
+	calls  int
+}
+
+func (i *interruptingIngester) Handle(_ context.Context, _ commands.Observation) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.calls++
+	if i.calls == 1 {
+		// Long enough for the reader to fill the lane behind this worker, so
+		// the cancellation lands with work already queued — the situation an
+		// interrupted backfill is always in.
+		time.Sleep(50 * time.Millisecond)
+		i.cancel()
+	}
+	return nil
+}
+
+func (i *interruptingIngester) handled() int {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.calls
+}
+
+// loggedLines parses whatever the consumer wrote to its JSON logger.
+func loggedLines(buf *bytes.Buffer) []map[string]any {
+	var out []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var entry map[string]any
+		Expect(json.Unmarshal([]byte(line), &entry)).To(Succeed())
+		out = append(out, entry)
+	}
+	return out
+}
+
+var _ = Describe("Consumer interrupted", func() {
+	// An interrupted run used to hand every queued finding to the ingester
+	// anyway, where each failed instantly against the dead context and was
+	// logged as an error — hundreds of lines that hid why it stopped.
+	It("drops what it had queued instead of failing each one against a dead context", func() {
+		var lines []string
+		for seq := 0; seq < 300; seq++ {
+			lines = append(lines, eventLine(fmt.Sprintf("CVE-2026-%04d", seq), commonv1.Severity_SEVERITY_HIGH))
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		var buf bytes.Buffer
+		ing := &interruptingIngester{cancel: cancel}
+
+		// One worker, so "what happened after the cancellation" is not a race.
+		n, err := consumer.NewConsumer(ing, consumer.WithWorkers(1), consumer.WithProgressEvery(0),
+			consumer.WithLogger(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))).
+			Run(ctx, strings.NewReader(strings.Join(lines, "\n")))
+
+		Expect(err).To(MatchError(context.Canceled))
+		Expect(n).To(Equal(1), "the one finding ingested before the interrupt")
+		Expect(ing.handled()).To(Equal(1), "no work begun after the context was cancelled")
+
+		var dropped map[string]any
+		for _, entry := range loggedLines(&buf) {
+			Expect(entry["msg"]).ToNot(Equal("ingest failed"), "shutdown is not a per-finding failure")
+			if entry["msg"] == "stopped before every finding read was ingested; the rest were dropped" {
+				dropped = entry
+			}
+		}
+		Expect(dropped).ToNot(BeNil(), "an interrupted run must say it left a gap")
+		Expect(dropped["dropped"]).To(BeNumerically(">", 0))
 	})
 })

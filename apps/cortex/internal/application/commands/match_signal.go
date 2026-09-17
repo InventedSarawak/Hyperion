@@ -26,6 +26,35 @@ type MatchSignal struct {
 	window  time.Duration
 	now     func() time.Time
 	log     *slog.Logger
+
+	// reach, when set, decides whether a malicious package is worth telling
+	// anyone about.
+	reach Reach
+}
+
+// Reach answers whether anything Hyperion tracks actually depends on what a
+// finding affects (consumer-side interface; the graph implements it).
+type Reach interface {
+	FindBlastRadius(ctx context.Context, cveID string, maxDepth, limit int) (model.BlastRadius, error)
+}
+
+// WithReach triages malicious packages by whether a tracked repository depends
+// on them.
+//
+// OSV's malware dataset is about 240,000 records, nearly all of them typosquats
+// of popular package names that nobody has ever installed. They are worth
+// storing — a compromised package is the most urgent thing a dependency can be,
+// and a MAL- id is often the only record one ever gets — but a subscription
+// with a broad rule would otherwise be told about every one of them, which is
+// indistinguishable from being told about none.
+//
+// A vulnerability is different: an advisory against a library is worth hearing
+// about whether or not that library is on the watchlist today, because the
+// watchlist changes. Malware is only ever about packages that are actually
+// installed.
+func (c *MatchSignal) WithReach(r Reach) *MatchSignal {
+	c.reach = r
+	return c
 }
 
 // NewMatchSignal wires the use case with its outbound ports. A nil dedupe
@@ -52,6 +81,9 @@ func NewMatchSignal(
 // One subscription failing does not silence the others: errors are collected
 // and returned together, after every candidate has been attempted.
 func (c *MatchSignal) Handle(ctx context.Context, v model.Vulnerability) ([]model.Alert, error) {
+	if !c.worthTelling(ctx, v) {
+		return nil, nil
+	}
 	if err := v.Validate(); err != nil {
 		return nil, err
 	}
@@ -128,3 +160,39 @@ func (c *MatchSignal) raise(ctx context.Context, subscriptionID string, v model.
 		"subscription", sub.Name, "tenant", sub.Tenant, "cve", v.CVEID, "reason", alert.Reason)
 	return alert, true, nil
 }
+
+// worthTelling decides whether a finding should reach anyone at all, before
+// any subscription is considered.
+//
+// Only malware is filtered here, and only when the graph can answer. A graph
+// that is unavailable, or an error asking it, means the alert goes out: being
+// told about a malicious package nobody depends on is noise, and not being told
+// about one somebody does is the failure that matters.
+func (c *MatchSignal) worthTelling(ctx context.Context, v model.Vulnerability) bool {
+	if c.reach == nil || v.Kind != model.KindMalware {
+		return true
+	}
+
+	// One repository is enough to know the answer; the full radius is not
+	// needed and is expensive on a dense graph.
+	radius, err := c.reach.FindBlastRadius(ctx, v.CVEID, malwareReachDepth, 1)
+	if err != nil {
+		if !errors.Is(err, ports.ErrGraphUnavailable) {
+			c.log.Warn("could not check whether anything depends on a malicious package; alerting anyway",
+				"id", v.CVEID, "error", err)
+		}
+		return true
+	}
+
+	if len(radius.Repositories) == 0 {
+		c.log.Debug("malicious package reaches nothing tracked; not alerting",
+			"id", v.CVEID, "packages", len(v.AffectedPackages))
+		return false
+	}
+	return true
+}
+
+// malwareReachDepth is how far to look for a dependant. A malicious package is
+// usually a direct dependency of whatever installed it — that is how it gets
+// in — but it can arrive through one that is itself compromised.
+const malwareReachDepth = 3

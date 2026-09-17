@@ -13,6 +13,7 @@ import (
 	"time"
 
 	graphqladapter "github.com/inventedsarawak/hyperion/apps/nexus/internal/adapters/inbound/graphql"
+	sseadapter "github.com/inventedsarawak/hyperion/apps/nexus/internal/adapters/inbound/sse"
 	grpcadapter "github.com/inventedsarawak/hyperion/apps/nexus/internal/adapters/outbound/grpc"
 	"github.com/inventedsarawak/hyperion/apps/nexus/internal/application/queries"
 	"github.com/inventedsarawak/hyperion/apps/nexus/internal/platform/config"
@@ -41,7 +42,10 @@ func main() {
 	schema, err := graphqladapter.NewSchema(search, blast,
 		graphqladapter.WithVulnerability(queries.NewGetVulnerability(intelligence)),
 		graphqladapter.WithWatchlist(queries.NewWatchlist(intelligence)),
-		graphqladapter.WithRepositoryExposure(queries.NewGetRepositoryExposure(intelligence)))
+		graphqladapter.WithRepositoryExposure(queries.NewGetRepositoryExposure(intelligence)),
+		// Alerting through the gateway: it was reachable only over gRPC, so
+		// grpcurl was the only way to use it.
+		graphqladapter.WithAlerting(queries.NewAlerting(intelligence)))
 	if err != nil {
 		logger.Error("graphql schema build failed", "error", err)
 		os.Exit(1)
@@ -49,6 +53,9 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/graphql", graphqladapter.NewHandler(schema))
+	// The live feed, relayed through the edge rather than straight from
+	// cortex, so it passes the same door as every other client request.
+	mux.Handle("/stream", sseadapter.NewHandler(intelligence, logger))
 	mux.Handle("/playground", graphqladapter.NewPlaygroundHandler())
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

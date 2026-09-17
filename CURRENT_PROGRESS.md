@@ -5,7 +5,114 @@ before each commit; move superseded entries into the changelog at the bottom.
 
 ---
 
-## Latest Update — 2026-09-07
+## Latest Update — 2026-09-17
+
+### Overall status
+
+**v3: Hyperion runs on an event backbone.** siphon publishes to Kafka and cortex consumes
+it, with per-finding ordering, committed offsets and replay verified against a live
+broker. `task up` now starts them as **independent services** — siphon keeps publishing
+while cortex is down, and cortex resumes from its last committed offset when it returns.
+The `siphon | cortex` pipe survives only where it is wanted: `task ingest` and
+`task backfill`, which opt out explicitly.
+
+### What landed
+
+| Area           | What landed                                                                                                                                                                                                                                                                        |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Infrastructure | **Kafka 4.1.0 in KRaft mode** in compose — single node, no ZooKeeper (removed in Kafka 4.0), healthchecked, three listeners so the host, other containers and the controller each reach it correctly; 5 MiB max record size, because a long advisory exceeds Kafka's 1 MiB default |
+| Shared package | **`packages/common/kafka`** (franz-go): producer, consumer group, protobuf codec, `EnsureTopic`, group-free `Tail`, lag reporting. Only this package imports a Kafka client — services depend on its `Message`/`Handler` types                                                     |
+| siphon         | `kafka_publisher.go` beside the stdout publisher, both behind `SignalPublisher`. Records keyed by **finding id**                                                                                                                                                                   |
+| Port change    | `SignalPublisher` gained **`Flush`**: publishing is batched, so a poll must confirm durability before the scheduler advances its watermark, or a restart skips a window that was never published                                                                                   |
+| cortex         | `KafkaHandler` reusing the stdin consumer's proto→domain mapping; runs **alongside** the gRPC API, and a consumer that gives up takes the server down with it                                                                                                                      |
+| Tooling        | `topic:tail` (decodes records to protojson), `topic:lag`, `topic:describe`; `task up` starts siphon as its own service and reports ingest lag in `task status`                                                                                                                     |
+
+### Verified end to end
+
+Live NVD → siphon → Kafka → cortex → Postgres/Elasticsearch/Neo4j:
+
+- **416 records** on `hyperion.signals.v1`, spread across all 6 partitions (52–82 each)
+- cortex consumed all 416 as group `intel-indexer`; **lag 0 on every partition** afterwards,
+  so a restart resumes rather than re-reads
+- 16 specs in `packages/common/kafka`, 4 of them against the real broker: per-key
+  ordering, commit-and-resume, poison-record skip, and failure-without-commit replay
+
+Two real defects surfaced in that testing and were fixed: every poll must re-allow group
+rebalancing or `Close` hangs forever, and lag read from a group that has not formed yet
+reports nothing, which must not be read as "caught up".
+
+**Then the switch itself was tested.** cortex was killed with `SIGKILL` before it had
+committed anything (`CURRENT-OFFSET` still `-`); on restart it re-read the whole topic —
+787 records, `ingested_this_run: 787` — and finished at `committed=787 end=787 LAG=0`.
+The full stack was then torn down and brought back up on the broker: every component up,
+lag 0, Postgres and Elasticsearch in agreement at 546,868, and a GraphQL query through
+nexus returning findings with cross-source provenance (`["package_feed","nvd"]`) intact.
+
+### Since then
+
+- **Ingestion watermark persisted (2026-09-17).** A `CheckpointStore` port with a Redis
+  adapter; the scheduler resumes from the stored watermark and advances it only on a
+  successful poll. Restarting with a 2h lookback used to re-fetch 526 records; resuming
+  from a 54-second-old watermark fetched 59. It also closes a real gap — an outage longer
+  than the lookback used to skip everything published in between. Redis being unreachable
+  is a warning, not a stop.
+
+- **Observations deduplicated (2026-09-17).** A `DedupeStore` port on Redis, applied in
+  the poll workflow: each observation is fingerprinted by **content** — id, title,
+  description, scores, references, aliases, kind, dates, affected packages — and an
+  identical one inside the window (24h) is not published again. One 3h NVD window re-read
+  from scratch: 885 suppressed, 25 published. Keying on the `SignalID` alone would have
+  suppressed corrections, which is why the digest covers content rather than identity.
+  New trap, documented: wiping cortex's stores no longer refills them from the next poll —
+  clear `hyperion:siphon:seen:*` or backfill.
+
+- **Dead-letter topic (2026-09-17).** A record that exhausts its retries goes to
+  `hyperion.signals.v1.dlq` — original bytes untouched, with the reason, origin
+  partition/offset and attempt count in headers — and ingest continues past it. The trap
+  avoided: a dead-letter queue alone turns a database outage into a silent migration of
+  the whole topic, so the consumer counts **consecutive** dead-letters and stops after ten.
+  A success resets the count; an unreachable dead-letter topic stops the consumer
+  uncommitted. `task topic:dlq` reads it, `task topic:dlq -- -replay` puts records back
+  (verified live: 3168 -> 3170 records on the signal topic after a replay).
+
+- **Repository scans moved onto the bus (2026-09-17).** A new `DependencyObserved`
+  contract, published to `hyperion.dependencies.v1` keyed by repository, consumed by
+  cortex as group `intel-graph` — its own topic and group so a backlog of advisories
+  cannot hold up the supply-chain graph. The `DependencyPublisher` port stopped returning
+  "edges written", which only an RPC can answer; siphon now reports what it read.
+  Verified by scanning `charmbracelet/bubbletea` with **cortex stopped**: the scan
+  succeeded, and cortex wrote the edges when it came back. That scan would previously
+  have failed outright.
+
+- **Live feed, end to end (2026-09-17).** `StreamFindings` (server-streaming gRPC) on
+  cortex, fed by an in-memory broadcaster that ingest notifies after each store; nexus
+  relays it to HTTP clients as SSE at `GET /stream`; deck subscribes on start and
+  refreshes on arrival. Three calls worth recording: **ingest never blocks on a watcher**
+  (a full buffer drops updates instead), **deck refreshes rather than inserting the
+  streamed record** (the query stays the single source of what the list shows), and the
+  **feed goes through the gateway**, not straight from cortex, so it passes the same door
+  as every other client. The port was split — `FindingStreamClient` separate from
+  `IntelligenceClient` — so no existing caller or test stub had to implement a streaming
+  method it never uses.
+
+- **Load test (2026-09-17).** `task loadtest` publishes synthetic findings at a target
+  rate and consumes them back, on a throwaway topic it deletes afterwards — it cannot
+  touch the signal topic or the databases. On the dev laptop: **1,000/s sustained with
+  6ms mean latency** (18ms max) and **~9,200/s unpaced**, about 10x the roadmap's target.
+  Building it caught a measurement bug worth recording: timing the consumer from the end
+  of publishing reported "1.8M/s", because the consumer had already drained almost
+  everything while producing — it now measures between the first and last record actually
+  consumed, after a warm-up record proves the group has joined.
+
+### What is deliberately not done
+
+- Repository scans still call cortex over synchronous gRPC
+- No dead-letter topic: a record that fails ingest past its retries halts the consumer
+- No streaming to deck, no load test — both still open in v3
+
+---
+
+## v2 complete — 2026-09-07
 
 ### Overall status
 
@@ -325,6 +432,12 @@ not started.**
 
 ## Changelog
 
+- **2026-09-17** — v3: Kafka 4.1 (KRaft) in compose, `packages/common/kafka` (franz-go
+  producer/consumer/codec/admin/tail), siphon Kafka publisher, cortex Kafka consumer
+  group `intel-indexer`, `Flush` on the `SignalPublisher` port, topic tooling, and
+  `task up` switched to run siphon and cortex as independent services over the broker.
+  The pipe remains for `task ingest` / `task backfill`. Verified by SIGKILL-and-replay
+  (787 records, lag 0) and a full stack restart.
 - **2026-09-09** — Real-time alerts: `Subscription`/`AlertRule`/`Alert` domain,
   Elasticsearch percolator for reverse search, Redis deduplication, `AlertingService` gRPC
   API, and alert raising wired into ingest. Redis added to compose.

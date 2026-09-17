@@ -28,6 +28,11 @@ service IntelligenceService {
   // repository reaches through its dependencies, each judged by comparing the
   // version it declares with the versions the advisory says are affected.
   rpc GetRepositoryExposure(GetRepositoryExposureRequest) returns (GetRepositoryExposureResponse);
+  // StreamFindings pushes each finding as it is ingested, for as long as the
+  // caller keeps the stream open. It is a live feed, not a query: it carries
+  // what arrives from now on and never replays history — a client that wants
+  // what came before asks Search for it.
+  rpc StreamFindings(StreamFindingsRequest) returns (stream StreamFindingsResponse);
 }
 
 // SearchSort orders search results.
@@ -148,4 +153,17 @@ message GetRepositoryExposureResponse {
   // False when the graph has no such repository — not scanned yet, or no
   // manifest it could read — so an empty list means "unknown", not "safe".
   bool scanned = 4;
+}
+
+// StreamFindingsRequest opens a live feed.
+message StreamFindingsRequest {
+  // kinds limits the feed to those kinds of finding. Empty means every kind —
+  // including malware, which is most of what arrives by volume.
+  repeated hyperion.common.v1.FindingKind kinds = 1;
+}
+
+// StreamFindingsResponse is one finding, as it was stored.
+message StreamFindingsResponse {
+  hyperion.common.v1.Vulnerability vulnerability = 1;
+  google.protobuf.Timestamp ingested_at = 2;
 }

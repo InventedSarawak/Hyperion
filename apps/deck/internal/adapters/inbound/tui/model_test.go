@@ -977,3 +977,55 @@ var _ = Describe("Malware in the feed", func() {
 		Expect(view).To(ContainSubstring("MALICIOUS PACKAGE"))
 	})
 })
+
+// liveModel is a model with a feed loaded, for exercising the live feed's
+// effect on refreshes.
+func liveModel() tui.Model {
+	return tui.New(&stubSearch{}, &stubExplorer{}, tui.Options{Query: "cve", PageSize: 25})
+}
+
+var _ = Describe("live feed", func() {
+	It("collapses a burst of arrivals into a single refresh", func() {
+		m := liveModel()
+
+		// A backfill lands thousands of findings a second. One refresh per
+		// finding would queue thousands of queries at cortex and redraw the
+		// terminal into uselessness.
+		var cmds []tea.Cmd
+		for range 50 {
+			var cmd tea.Cmd
+			m, cmd = apply(m, tui.StreamedFinding("CVE-2021-44228"))
+			cmds = append(cmds, cmd)
+		}
+
+		Expect(m.StreamRefreshPending()).To(BeTrue())
+		Expect(cmds).To(HaveLen(50), "every arrival keeps listening")
+	})
+
+	It("allows the next refresh once the scheduled one has fired", func() {
+		m := liveModel()
+
+		m, _ = apply(m, tui.StreamedFinding("CVE-2021-44228"))
+		Expect(m.StreamRefreshPending()).To(BeTrue())
+
+		m, _ = apply(m, tui.StreamRefreshDue())
+		Expect(m.StreamRefreshPending()).To(BeFalse())
+
+		m, _ = apply(m, tui.StreamedFinding("CVE-2021-45046"))
+		Expect(m.StreamRefreshPending()).To(BeTrue())
+	})
+
+	It("keeps working when the feed ends, because the poll timer never stopped", func() {
+		m := liveModel()
+
+		m, cmd := apply(m, tui.StreamEnded())
+
+		Expect(m.Live()).To(BeFalse())
+		Expect(cmd).To(BeNil())
+
+		// The timer still drives a refresh, exactly as it did before there
+		// was a stream at all.
+		m, cmd = apply(m, tui.PollTick())
+		Expect(cmd).ToNot(BeNil())
+	})
+})

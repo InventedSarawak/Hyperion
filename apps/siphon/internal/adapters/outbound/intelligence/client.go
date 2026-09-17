@@ -54,21 +54,25 @@ func Dial(addr string) (*Client, error) {
 // Close releases the connection.
 func (c *Client) Close() error { return c.conn.Close() }
 
-// Publish sends one manifest read and reports how many edges cortex wrote.
-func (c *Client) Publish(ctx context.Context, snapshot model.RepositorySnapshot) (int, error) {
+// Publish sends one manifest read over gRPC and waits for cortex to write it.
+//
+// This is the synchronous path, kept for running without a broker. cortex
+// answers with the number of edges it wrote; the port no longer carries that
+// number, because the event path cannot know it and a port that promises what
+// only one of its adapters can deliver is not a port.
+func (c *Client) Publish(ctx context.Context, snapshot model.RepositorySnapshot) error {
 	if err := snapshot.Validate(); err != nil {
-		return 0, err
+		return err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	resp, err := c.stub.IngestDependencies(ctx, toProtoRequest(snapshot))
-	if err != nil {
-		return 0, fmt.Errorf("intelligence: ingest dependencies for %s: %w",
+	if _, err := c.stub.IngestDependencies(ctx, toProtoRequest(snapshot)); err != nil {
+		return fmt.Errorf("intelligence: ingest dependencies for %s: %w",
 			snapshot.Repository.FullName(), err)
 	}
-	return int(resp.GetDependenciesWritten()), nil
+	return nil
 }
 
 // Tracked lists the repositories on cortex's watchlist.

@@ -10,6 +10,10 @@ import (
 	"time"
 
 	"github.com/inventedsarawak/hyperion/packages/common/config"
+	"github.com/inventedsarawak/hyperion/packages/common/kafka"
+
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/checkpoint"
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/adapters/outbound/dedupe"
 )
 
 // Service is the config namespace for this microservice.
@@ -18,7 +22,10 @@ const Service = "siphon"
 // Config holds siphon's runtime settings.
 type Config struct {
 	PollInterval time.Duration
-	Lookback     time.Duration
+	// LogLevel is debug, info, warn or error. At debug every signal
+	// published is logged as it goes out.
+	LogLevel string
+	Lookback time.Duration
 
 	NVD           NVDConfig
 	GitHub        GitHubConfig
@@ -31,9 +38,54 @@ type Config struct {
 	Shodan        ShodanConfig
 	GSD           GSDConfig
 
-	RepoScan RepoScanConfig
+	RepoScan   RepoScanConfig
+	Kafka      KafkaConfig
+	Checkpoint CheckpointConfig
+	Dedupe     DedupeConfig
 
 	loader *config.Loader
+}
+
+// CheckpointConfig controls whether the ingestion watermark outlives the
+// process. With it off, every restart reaches back exactly one Lookback — which
+// re-reads what was already read, and misses anything published during an
+// outage longer than that window.
+type CheckpointConfig struct {
+	Enabled   bool
+	RedisAddr string
+}
+
+// DedupeConfig suppresses republishing observations that have not changed.
+//
+// The Window is a cost boundary, not a correctness one: forgetting early means
+// publishing something unchanged again, which is merely wasteful. It is worth
+// knowing that clearing the store (or waiting out the window) is what makes
+// siphon republish everything it has seen — after wiping cortex's databases,
+// do one or the other, or run a backfill.
+type DedupeConfig struct {
+	Enabled   bool
+	RedisAddr string
+	Window    time.Duration
+}
+
+// KafkaConfig chooses where published events go.
+//
+// Kafka is the default: the running system needs durability and replay, which
+// a pipe cannot give it. Stdout is kept, not left behind — `task ingest` and
+// `task backfill` set SIPHON_KAFKA_ENABLED=false and pipe siphon into cortex,
+// which is still the simplest way to run the whole chain in one command. Both
+// are adapters behind the same port, which is the point of the hexagon: the
+// workflow above them cannot tell the difference.
+type KafkaConfig struct {
+	// Enabled publishes to Kafka instead of stdout.
+	Enabled bool
+	Brokers []string
+	Topic   string
+	// Partitions applies only when siphon has to create the topic.
+	Partitions int
+	// DependencyTopic carries repository manifest reads. When Kafka is on,
+	// scans are published here instead of being sent to cortex over gRPC.
+	DependencyTopic string
 }
 
 // RepoScanConfig drives the supply-chain half of ingestion: reading tracked
@@ -156,6 +208,7 @@ func Load() Config {
 	return Config{
 		loader:       l,
 		PollInterval: l.Duration("POLL_INTERVAL", 10*time.Minute),
+		LogLevel:     l.String("LOG_LEVEL", "info"),
 		Lookback:     l.Duration("LOOKBACK", 2*time.Hour),
 
 		NVD: NVDConfig{
@@ -222,6 +275,27 @@ func Load() Config {
 			BaseURL:       l.String("GITHUB_BASE_URL", DefaultGitHubBaseURL),
 			Token:         l.Secret("GITHUB_TOKEN"),
 			CortexAddr:    l.String("CORTEX_GRPC_ADDR", DefaultCortexGRPCAddr),
+		},
+
+		Checkpoint: CheckpointConfig{
+			Enabled:   l.Bool("CHECKPOINT_ENABLED", true),
+			RedisAddr: l.String("REDIS_ADDR", checkpoint.DefaultAddr),
+		},
+
+		Dedupe: DedupeConfig{
+			Enabled:   l.Bool("DEDUPE_ENABLED", true),
+			RedisAddr: l.String("REDIS_ADDR", dedupe.DefaultAddr),
+			// Comfortably longer than any lookback window, so an advisory is
+			// published once rather than on every poll that still sees it.
+			Window: l.Duration("DEDUPE_WINDOW", 24*time.Hour),
+		},
+
+		Kafka: KafkaConfig{
+			Enabled:         l.Bool("KAFKA_ENABLED", true),
+			Brokers:         l.List("KAFKA_BROKERS", []string{kafka.DefaultBroker}),
+			Topic:           l.String("KAFKA_TOPIC", kafka.TopicSignals),
+			Partitions:      l.Int("KAFKA_PARTITIONS", kafka.DefaultPartitions),
+			DependencyTopic: l.String("KAFKA_DEPENDENCY_TOPIC", kafka.TopicDependencies),
 		},
 	}
 }

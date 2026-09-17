@@ -40,6 +40,8 @@ and the repository scanner use it.
 | `7687`  | Neo4j (bolt — the driver)       |
 | `7474`  | Neo4j (browser UI)              |
 | `6379`  | Redis (alert deduplication)     |
+| `9092`  | Kafka (the signal topic)        |
+| `8081`  | Kafka console (web UI)          |
 | `50051` | cortex (gRPC)                   |
 | `8080`  | nexus (GraphQL + `/playground`) |
 
@@ -56,41 +58,50 @@ task up
 
 That single command:
 
-1. starts Postgres, Elasticsearch and Neo4j via Docker Compose;
-2. **waits until each one actually answers** — Neo4j is probed with `cypher-shell`, not a
-   port check, so "up" means Bolt will accept a session;
+1. starts Postgres, Elasticsearch, Neo4j, Redis and Kafka via Docker Compose;
+2. **waits until each one actually answers** — Neo4j is probed with `cypher-shell` and
+   Kafka by listing topics, not by a port check, so "up" means the thing will accept work;
 3. applies cortex's Postgres migrations;
-4. builds and launches `cortex` (gRPC) and `nexus` (GraphQL) as detached host processes,
-   recording their PIDs in `.run/` so `task down` stops exactly what it started;
+4. builds and launches `cortex` (gRPC + Kafka consumer), `nexus` (GraphQL) and `siphon`
+   (ingest) as detached host processes, recording their PIDs in `.run/` so `task down`
+   stops exactly what it started;
 5. prints a status table.
 
 Expected output:
 
 ```
   ready: postgres (0s)
-  ready: elasticsearch (10s)
+  ready: elasticsearch (13s)
   ready: neo4j (0s)
+  ready: redis (0s)
+  ready: kafka (0s)
   ready: cortex gRPC :50051 (0s)
   ready: nexus HTTP :8080 (0s)
-  ready: ingest loop (pid 497024)
+  ready: siphon (pid 1562946)
 
   COMPONENT        STATUS     DETAIL
   postgres         UP         accepting connections on :5432
   elasticsearch    UP         cluster yellow on :9200
   neo4j            UP         bolt on :7687, browser on :7474
-  cortex           UP         pid 303430 on :50051
-  nexus            UP         pid 303519 on :8080
-  ingest           UP         pid 497024, polling every 10m
-  data             -          postgres rows=2671 elasticsearch docs=2964
-  graph            -          neo4j nodes=788 relationships=1104
+  cortex           UP         pid 1562608 on :50051
+  nexus            UP         pid 1562790 on :8080
+  redis            UP         responding on :6379
+  kafka            UP         broker on :9092, ingest lag 0
+  siphon           UP         pid 1562946, polling every 10m
+  data             -          postgres rows=546848 elasticsearch docs=546848
+  graph            -          neo4j nodes=525776 relationships=287727
 ```
 
-`task up` also starts a **continuous ingest loop** — `siphon | cortex` running detached, so
-the system keeps pulling fresh advisories on `SIPHON_POLL_INTERVAL` (default 10m) without
-you holding a terminal open. It is tracked as its own process group, so `task down` stops
-both halves.
+`task up` also starts **continuous ingestion**: siphon polls every
+`SIPHON_POLL_INTERVAL` (default 10m) and publishes to the Kafka topic, and cortex consumes
+that topic while it serves the API. They are **independent processes** — siphon keeps
+publishing while cortex is down, and cortex resumes from its last committed offset when it
+comes back. Nothing is lost in between, which is the whole reason the broker is there.
 
-Skip it when you want a quiet stack:
+`ingest lag` in the status table is the number to watch: steady means ingest is merely
+busy, climbing without bound means it has stopped.
+
+Skip ingestion when you want a quiet stack:
 
 ```bash
 HYPERION_INGEST=0 task up
@@ -477,23 +488,214 @@ legitimately return nothing. Confirm with `task sources:check`.
 
 ---
 
+## 7a. The event backbone
+
+Two topics carry everything siphon observes:
+
+| Topic                      | Carries                                                               | Consumer group  |
+| :------------------------- | :-------------------------------------------------------------------- | :-------------- |
+| `hyperion.signals.v1`      | advisories (`SignalDiscovered`), keyed by finding id                  | `intel-indexer` |
+| `hyperion.dependencies.v1` | repository manifest reads (`DependencyObserved`), keyed by repository | `intel-graph`   |
+
+They are separate so a backlog of advisories cannot hold up the supply-chain graph. `task up` runs both,
+so there is nothing to turn on. To run them by hand, in two terminals:
+
+```bash
+task run:cortex          # consumes the topic, and serves the gRPC API
+task run:siphon          # polls the feeds and publishes
+```
+
+### Measuring what it can carry
+
+```bash
+task loadtest                              # 10k findings at 1000/s
+task loadtest -- -count 50000 -rate 0      # unpaced: find the ceiling
+```
+
+It uses a throwaway topic and deletes it afterwards, so it cannot touch the signal topic
+or the databases. Measured on a dev laptop: **1,000/s sustained, 6ms mean latency** (18ms
+max), and **~9,200/s unpaced**. High latency in an unpaced run is backlog, not slowness —
+the producer is simply faster than the consumer.
+
+That measures the broker and the client. To measure **cortex's ingest**, which is bounded
+by Postgres, Elasticsearch and Neo4j rather than by Kafka, publish into the real topic and
+watch it drain:
+
+```bash
+task loadtest -- -topic hyperion.signals.v1 -no-consume -count 5000
+task topic:lag     # repeatedly, to watch cortex work through it
+```
+
+Note what that does: those synthetic findings are **really ingested**, under ids of the
+form `CVE-9000-*`. Remove them afterwards, or do it on a stack you do not mind refilling.
+
+### Watching findings arrive
+
+```bash
+curl -N http://localhost:8080/stream                 # every finding, as it lands
+curl -N 'http://localhost:8080/stream?kind=malware'  # one kind only
+```
+
+`deck` subscribes to this on start, so its feed updates on arrival rather than on its
+30-second timer. If the stream cannot connect, deck falls back to that timer and keeps
+working — there is nothing to turn on and nothing that breaks when it is unavailable.
+
+### In a browser
+
+**<http://localhost:8081>** — the Kafka console, started with the rest of the
+infrastructure. It shows topics, live messages, consumer groups and per-partition lag
+without a single command.
+
+```bash
+task topic:ui     # opens it
+```
+
+Messages are **binary protobuf**, so the console is pointed at
+`packages/contracts/proto` and decodes `hyperion.signals.v1` as
+`hyperion.events.v1.SignalDiscovered` — you read events as JSON, straight from the
+contracts, with no second copy to drift. If you add a topic carrying a different message
+type, add a mapping to [`deploy/kafka-console.yaml`](../deploy/kafka-console.yaml) or its
+records will show as base64.
+
+The three views worth knowing:
+
+| Where                                       | What it answers                                                           |
+| :------------------------------------------ | :------------------------------------------------------------------------ |
+| **Topics → hyperion.signals.v1 → Messages** | what is actually being published, decoded, newest first                   |
+| **Consumer Groups → intel-indexer**         | is cortex attached, which partitions does it hold, how far behind is each |
+| **Topics → … → Partitions**                 | whether records are spread evenly, or one key is hot                      |
+
+It has **no authentication**, like everything else in the compose file. Local only.
+
+### From the terminal
+
+```bash
+task topic:lag                           # per-partition lag for group intel-indexer
+task topic:describe                      # partitions, leaders, settings
+task topic:tail -- -limit 5 -from-start  # the events themselves, decoded to protojson
+task topic:tail -- -keys                 # one line per record: key, partition, offset
+```
+
+**What to expect.** `task topic:lag` climbing means ingest is falling behind; climbing
+without bound means it has stopped. Lag returning to 0 after a poll means everything
+published has been stored _and committed_ — restarting cortex will not re-read it.
+
+**Stopping cortex mid-batch is safe.** Offsets are committed only after the records they
+cover are ingested, so the batch in flight is replayed on the next start. Duplicate
+ingests merge to the same record, so the replay is invisible in the data. Verified by
+killing cortex with `SIGKILL` before it had committed anything: on restart it re-read the
+whole topic and finished at lag 0.
+
+**Changing the search mapping.** `task index:swap` builds the next index alongside the
+live one, copies the documents server-side, and moves the alias onto it atomically —
+search keeps answering from the old index until the instant it answers from the new. Use
+it after changing a field type, which Elasticsearch cannot do in place. `task reindex` is
+the other tool: it rebuilds from Postgres, which is slower but is what you want when the
+documents themselves are wrong rather than their mapping. A document written in the few
+seconds a swap takes is not carried across; `task reindex` settles that.
+
+**When ingest sets a record aside.** `task topic:dlq` lists what failed, with the reason,
+the attempt count and where it came from. An empty list is the healthy state, and the
+command returns immediately when there is nothing there. `task topic:dlq -- -replay`
+republishes them onto the signal topic unchanged, which is what to run after fixing
+whatever rejected them. If cortex stopped with `records in a row could not be processed`,
+that is the circuit breaker: something shared was broken, not the records — fix it and
+restart, and nothing will have been lost.
+
+**Which log is which.** `task logs` tails all three; individually,
+`.run/cortex.log` is the **consumer** (group joins, ingest progress, retries, skipped
+records), `.run/ingest.log` is **siphon** (per-source polls and what it published), and
+`docker logs hyperion-kafka` is the **broker** (group coordination, rebalances). The lines
+worth grepping:
+
+```bash
+grep 'consuming signals from kafka' .run/cortex.log                  # consumer attached?
+grep -E 'retrying record|unprocessable|kafka ingest stopped' .run/cortex.log   # trouble
+grep 'poll complete' .run/ingest.log | tail -3                       # is siphon publishing?
+docker logs hyperion-kafka 2>&1 | grep 'group intel-indexer'         # rebalances
+```
+
+Note `.run/ingest.log` is appended to across runs, so older lines can predate the current
+one — read the tail. And `ingest progress` only prints every 1000 findings, so a quiet
+consumer log is not evidence of a stalled consumer; lag is.
+
+**To bypass the broker entirely**, `task ingest` and `task backfill` still run
+`siphon | cortex` as a pipe — one command, one self-contained report of what was stored.
+They set `SIPHON_KAFKA_ENABLED=false` and `CORTEX_CONSUME_STDIN=true` themselves. The pipe
+has no durability and no replay; it is for loading data on demand, not for running the
+system.
+
+**If ingest stops with an error**, cortex exits rather than skipping the record — a
+database outage must not look like successful ingest. Fix the cause and restart; it
+resumes at the last committed offset. A record that will not _decode_ is skipped and
+logged instead, so one bad record cannot block the ones behind it.
+
+---
+
 ## 8. Command reference
 
-| Command                    | What it does                                       |
-| :------------------------- | :------------------------------------------------- |
-| `task up`                  | infra + cortex + nexus, with health gates          |
-| `task down`                | stop services, then infra (volumes kept)           |
-| `task restart`             | rebuild + restart services; infra keeps running    |
-| `task status`              | health, row/document/graph counts                  |
-| `task logs`                | tail cortex + nexus                                |
-| `task ingest`              | one siphon poll piped into cortex (Ctrl-C to stop) |
-| `task backfill`            | load 10 years of NVD + OSV history, then exit      |
-| `task scan`                | scan every tracked repository now, then exit       |
-| `task blast -- <CVE>`      | blast radius for one CVE (needs `grpcurl`)         |
-| `task run:deck`            | the terminal UI                                    |
-| `task sources:check`       | probe all ten ingestion sources and report         |
-| `task infra:up` / `:down`  | containers only                                    |
-| `task test:go`             | all Go tests                                       |
-| `task test:go:integration` | including Postgres / Elasticsearch / Neo4j suites  |
-| `task build:go`            | compile every Go service                           |
-| `task codegen`             | regenerate Go from the protobuf contracts          |
+| Command                     | What it does                                         |
+| :-------------------------- | :--------------------------------------------------- |
+| `task up`                   | infra + cortex + nexus, with health gates            |
+| `task down`                 | stop services, then infra (volumes kept)             |
+| `task restart`              | rebuild + restart services; infra keeps running      |
+| `task status`               | health, row/document/graph counts                    |
+| `task logs`                 | tail cortex + nexus                                  |
+| `task ingest`               | one siphon poll piped into cortex, bypassing Kafka   |
+| `task backfill`             | load 10 years of NVD + OSV history, then exit        |
+| `task scan`                 | scan every tracked repository now, then exit         |
+| `task blast -- <CVE>`       | blast radius for one CVE (needs `grpcurl`)           |
+| `task run:deck`             | the terminal UI                                      |
+| `task sources:check`        | probe all ten ingestion sources and report           |
+| `task run:siphon`           | ingestion worker, publishing to the signal topic     |
+| `task run:cortex`           | intelligence service: consumes the topic, serves API |
+| `task topic:tail`           | print the topic's events, decoded                    |
+| `task topic:ui`             | open the Kafka console at :8081                      |
+| `task topic:dlq`            | records ingest could not process, and why            |
+| `task topic:dlq -- -replay` | put those records back on the signal topic           |
+| `task topic:lag`            | how far behind ingest is, per partition              |
+| `task topic:describe`       | the signal topic's partitions and settings           |
+| `task infra:up` / `:down`   | containers only                                      |
+| `task test:go`              | all Go tests                                         |
+| `task test:go:integration`  | including Postgres / Elasticsearch / Neo4j / Kafka   |
+| `task build:go`             | compile every Go service                             |
+| `task codegen`              | regenerate Go from the protobuf contracts            |
+
+## Watching ingest
+
+Both halves of the pipe say what they are doing, and how much to say is a
+setting rather than a rebuild.
+
+| Setting                        | Default | Does                                                               |
+| :----------------------------- | :------ | :----------------------------------------------------------------- |
+| `CORTEX_INGEST_PROGRESS_EVERY` | 1000    | findings between cortex's `ingest progress` lines; 0 silences them |
+| `CORTEX_LOG_LEVEL`             | info    | `debug` names every finding as it lands                            |
+| `SIPHON_LOG_LEVEL`             | info    | `debug` names every signal as it is published                      |
+
+At the default level a long run reports progress rather than going quiet:
+
+```json
+{
+  "level": "INFO",
+  "msg": "ingest progress",
+  "ingested": 20000,
+  "failed": 0,
+  "per_second": 181,
+  "latest": "CVE-2026-12345"
+}
+```
+
+`failed` counts findings that could not be stored; the reasons are logged as
+they happen, and a run that ends with any failures says so once more at the end.
+`per_second` is the rate since the run began — useful for telling a slow
+backfill from a stalled one.
+
+To follow a single finding through, turn the level up for one run:
+
+```bash
+SIPHON_LOG_LEVEL=debug CORTEX_LOG_LEVEL=debug task ingest
+```
+
+That logs a line per signal published and a line per finding ingested, which is
+far too much for a backfill of hundreds of thousands and exactly right when
+something specific is missing.

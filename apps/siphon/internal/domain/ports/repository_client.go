@@ -14,13 +14,16 @@ type RepositoryClient interface {
 	Scan(ctx context.Context, owner, name string) (model.RepositorySnapshot, error)
 }
 
-// DependencyPublisher is an OUTBOUND port: hand a manifest read to the
-// intelligence service, which owns the dependency graph. siphon does not
-// store; it observes and reports.
+// DependencyPublisher is an OUTBOUND port: report a manifest read to whoever
+// owns the dependency graph. siphon does not store; it observes and reports.
+//
+// Publish reports success at handing the observation over, not what was done
+// with it. It used to return the number of edges cortex wrote, which only an
+// RPC can answer — and paying for that answer meant a scan failed outright
+// whenever cortex was restarting. What siphon actually knows is what it read,
+// so that is what it reports.
 type DependencyPublisher interface {
-	// Publish sends the snapshot and reports how many dependency edges the
-	// receiving service wrote.
-	Publish(ctx context.Context, snapshot model.RepositorySnapshot) (int, error)
+	Publish(ctx context.Context, snapshot model.RepositorySnapshot) error
 }
 
 // RepositoryDiscoverer is an OUTBOUND port: enumerate the repositories an

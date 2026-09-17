@@ -259,17 +259,20 @@ func isGHSA(id string) bool { return strings.HasPrefix(id, "GHSA-") }
 // isMAL matches OSV's malicious-packages ids, which are issued for nothing else.
 func isMAL(id string) bool { return strings.HasPrefix(strings.ToUpper(id), "MAL-") }
 
-// scoresFor is the record's scores, with one domain rule on top: a malicious
-// package is critical. OSV's malware records (MAL-*) carry no severity at all,
-// which would list the axios compromise as UNKNOWN — below every ordinary
-// bug. Installing one means the machine is compromised, and GitHub rates every
-// malware advisory critical for the same reason.
+// scoresFor is the record's scores, exactly as the feed gave them.
+//
+// A malicious package used to get a fabricated entry here — severity critical,
+// base score 0, no vector — because severity was only ever read off a score,
+// and without one the axios compromise listed as UNKNOWN. That entry was a
+// severity label wearing CVSS clothes: anything reading the number saw 0, so
+// the first rule written as "score at least 7" would have excluded every
+// malicious package, which are the findings such a rule most wants.
+//
+// The rating now lives on the finding itself (model.Vulnerability.Severity,
+// set for malware in Normalized), so it can be critical without a score being
+// invented for it.
 func scoresFor(v Vulnerability) []model.CVSS {
-	scores := toScores(v)
-	if len(scores) == 0 && isMalware(v) {
-		return []model.CVSS{{Severity: model.SeverityCritical}}
-	}
-	return scores
+	return toScores(v)
 }
 
 // isMalware reports whether the record is from OSV's malicious-package data.

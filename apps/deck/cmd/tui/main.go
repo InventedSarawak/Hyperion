@@ -48,6 +48,7 @@ func main() {
 			Details:         queries.NewGetVulnerability(client),
 			Repositories:    commands.NewManageWatchlist(client),
 			Findings:        queries.NewGetRepositoryExposure(client),
+			Stream:          findingStream(client),
 		},
 	)
 
@@ -55,6 +56,20 @@ func main() {
 		fmt.Fprintf(os.Stderr, "deck: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// findingStream returns the live feed when the chosen transport has one.
+//
+// Both do, by different routes — SSE through the gateway, gRPC straight to
+// cortex — so this is a type assertion rather than a branch on the transport:
+// whichever client was built either streams or it does not, and deck falls
+// back to its refresh timer when it does not.
+func findingStream(client intelligenceAPI) ports.FindingStream {
+	stream, ok := client.(ports.FindingStream)
+	if !ok {
+		return nil
+	}
+	return stream
 }
 
 // intelligenceAPI is what both transports satisfy: the outbound ports plus a

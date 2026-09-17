@@ -12,4 +12,5 @@ use (
 	./packages/contracts
 	./packages/telemetry
 	./tests/e2e
+	./tests/load
 )

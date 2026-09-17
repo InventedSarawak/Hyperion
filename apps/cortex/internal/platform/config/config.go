@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/inventedsarawak/hyperion/packages/common/config"
+	"github.com/inventedsarawak/hyperion/packages/common/kafka"
 )
 
 // Service is the config namespace for this microservice.
@@ -23,6 +24,10 @@ const (
 	DefaultNeo4jDatabase    = "neo4j"
 	DefaultRedisAddr        = "localhost:6379"
 	DefaultSubscriptionIdx  = "hyperion-subscriptions"
+	// DefaultConsumerGroup names cortex's ingest group on the signal topic.
+	DefaultConsumerGroup = "intel-indexer"
+	// DefaultDependencyGroup names cortex's group on the dependency topic.
+	DefaultDependencyGroup = "intel-graph"
 )
 
 // Config holds cortex's runtime settings.
@@ -36,6 +41,22 @@ type Config struct {
 	// IngestWorkers is how many events are ingested concurrently. Each is
 	// I/O-bound, so this is what sets backfill throughput.
 	IngestWorkers int
+	// IngestProgressEvery is how many ingested findings pass between progress
+	// lines. A backfill runs for half an hour; silence is indistinguishable
+	// from a stall.
+	IngestProgressEvery int
+	// ReconcileInterval is how often cortex looks for records whose search
+	// document is behind the stored row, and settles them. Zero turns it off.
+	ReconcileInterval time.Duration
+	// ShutdownGrace is how long a batch already being ingested may finish
+	// after a stop is asked for, so a record is not left half-written.
+	ShutdownGrace time.Duration
+	// StreamBuffer is how many findings a live watcher can fall behind by
+	// before it starts missing them. Ingest never waits for a watcher.
+	StreamBuffer int
+	// LogLevel is debug, info, warn or error. At debug every finding ingested
+	// is logged as it lands.
+	LogLevel string
 
 	Neo4jURI            string
 	Neo4jUsername       string
@@ -53,7 +74,42 @@ type Config struct {
 	GitHubBaseURL string
 	GitHubToken   string
 
+	Kafka KafkaConfig
+
 	loader *config.Loader
+}
+
+// KafkaConfig drives the event-backbone consumer, which is how cortex is fed
+// by default.
+//
+// This is a second inbound adapter, not a second service: cortex consumes the
+// topic and serves the API in one process. ConsumeStdin remains for the pipe
+// (`task ingest`, `task backfill`) and takes precedence over this when set —
+// a piped run reads its events from stdin and exits at EOF.
+type KafkaConfig struct {
+	Enabled bool
+	Brokers []string
+	Topic   string
+	// Group is the consumer group. Every member of one group shares the
+	// partitions between them; a second group would read the same records
+	// again, independently — which is how relic (v4) will archive the same
+	// firehose without disturbing ingest.
+	Group string
+	// Partitions applies only when cortex has to create the topic.
+	Partitions int
+
+	// DeadLetter sends records that exhaust their retries to another topic
+	// instead of stopping ingest. MaxConsecutive bounds that: a run of
+	// failures that long is the world being broken, not the records, and
+	// cortex stops rather than draining the topic into the dead-letter queue.
+	DeadLetterEnabled bool
+	DeadLetterTopic   string
+	MaxConsecutiveDLQ int
+
+	// DependencyTopic carries repository manifest reads, on its own consumer
+	// group: a backlog of advisories must not hold up the supply-chain graph.
+	DependencyTopic string
+	DependencyGroup string
 }
 
 // Load reads configuration from the environment, applying defaults.
@@ -68,14 +124,19 @@ func Load() Config {
 	}
 
 	return Config{
-		loader:           l,
-		DatabaseURL:      l.String("DATABASE_URL", DefaultDatabaseURL),
-		ElasticsearchURL: l.String("ELASTICSEARCH_URL", DefaultElasticsearchURL),
-		IndexName:        l.String("INDEX_NAME", DefaultIndexName),
-		GRPCAddr:         l.String("GRPC_ADDR", DefaultGRPCAddr),
-		ServeGRPC:        l.Bool("SERVE_GRPC", true),
-		ConsumeStdin:     l.Bool("CONSUME_STDIN", false),
-		IngestWorkers:    l.Int("INGEST_WORKERS", 8),
+		loader:              l,
+		DatabaseURL:         l.String("DATABASE_URL", DefaultDatabaseURL),
+		ElasticsearchURL:    l.String("ELASTICSEARCH_URL", DefaultElasticsearchURL),
+		IndexName:           l.String("INDEX_NAME", DefaultIndexName),
+		GRPCAddr:            l.String("GRPC_ADDR", DefaultGRPCAddr),
+		ServeGRPC:           l.Bool("SERVE_GRPC", true),
+		ConsumeStdin:        l.Bool("CONSUME_STDIN", false),
+		IngestWorkers:       l.Int("INGEST_WORKERS", 8),
+		IngestProgressEvery: l.Int("INGEST_PROGRESS_EVERY", 1000),
+		ReconcileInterval:   l.Duration("RECONCILE_INTERVAL", 5*time.Minute),
+		ShutdownGrace:       l.Duration("SHUTDOWN_GRACE", 30*time.Second),
+		StreamBuffer:        l.Int("STREAM_BUFFER", 256),
+		LogLevel:            l.String("LOG_LEVEL", "info"),
 
 		Neo4jURI:      l.String("NEO4J_URI", DefaultNeo4jURI),
 		Neo4jUsername: l.String("NEO4J_USERNAME", DefaultNeo4jUsername),
@@ -95,6 +156,21 @@ func Load() Config {
 
 		GitHubBaseURL: l.String("GITHUB_BASE_URL", "https://api.github.com"),
 		GitHubToken:   l.Secret("GITHUB_TOKEN"),
+
+		Kafka: KafkaConfig{
+			Enabled:    l.Bool("KAFKA_ENABLED", true),
+			Brokers:    l.List("KAFKA_BROKERS", []string{kafka.DefaultBroker}),
+			Topic:      l.String("KAFKA_TOPIC", kafka.TopicSignals),
+			Group:      l.String("KAFKA_GROUP", DefaultConsumerGroup),
+			Partitions: l.Int("KAFKA_PARTITIONS", kafka.DefaultPartitions),
+
+			DeadLetterEnabled: l.Bool("KAFKA_DLQ_ENABLED", true),
+			DeadLetterTopic:   l.String("KAFKA_DLQ_TOPIC", ""),
+			MaxConsecutiveDLQ: l.Int("KAFKA_DLQ_MAX_CONSECUTIVE", 10),
+
+			DependencyTopic: l.String("KAFKA_DEPENDENCY_TOPIC", kafka.TopicDependencies),
+			DependencyGroup: l.String("KAFKA_DEPENDENCY_GROUP", DefaultDependencyGroup),
+		},
 	}
 }
 

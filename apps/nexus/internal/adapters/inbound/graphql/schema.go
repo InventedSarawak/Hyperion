@@ -43,6 +43,7 @@ type resolvers struct {
 	vulnerability VulnerabilityResolver
 	watchlist     WatchlistResolver
 	exposure      RepositoryExposureResolver
+	alerting      AlertingResolver
 }
 
 // RepositoryExposureResolver answers which vulnerabilities a repository has.
@@ -555,6 +556,16 @@ func NewSchema(searcher Searcher, blast BlastRadiusResolver, opts ...Option) (gr
 			},
 		},
 	})
+
+	// Alerting is added after the objects are built rather than inlined above,
+	// so one feature's fields live together in one file instead of being
+	// scattered through two very large literals.
+	for name, field := range alertingFields(&rs) {
+		query.AddFieldConfig(name, field)
+	}
+	for name, field := range alertingMutations(&rs) {
+		mutation.AddFieldConfig(name, field)
+	}
 
 	schema, err := graphql.NewSchema(graphql.SchemaConfig{Query: query, Mutation: mutation})
 	if err != nil {

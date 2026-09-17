@@ -252,3 +252,99 @@ var _ = Describe("MatchSignal use case", func() {
 		Expect(raised).To(HaveLen(1), "suppression is per CVE, not per subscription")
 	})
 })
+
+// stubReach answers whether anything depends on a finding.
+type stubReach struct {
+	repositories []model.ImpactedRepository
+	err          error
+	asked        []string
+}
+
+func (s *stubReach) FindBlastRadius(_ context.Context, cveID string, _, _ int) (model.BlastRadius, error) {
+	s.asked = append(s.asked, cveID)
+	if s.err != nil {
+		return model.BlastRadius{}, s.err
+	}
+	return model.BlastRadius{Repositories: s.repositories}, nil
+}
+
+var _ = Describe("MatchSignal and malicious packages", func() {
+	ctx := context.Background()
+
+	malware := model.Vulnerability{
+		CVEID: "MAL-2026-1234",
+		Kind:  model.KindMalware,
+		Title: "malicious package",
+	}
+	anyRule := model.Subscription{
+		ID: "sub-1", Tenant: "acme", Name: "everything",
+		Rule: model.AlertRule{Term: "package"},
+	}
+
+	// A matcher that matches whatever it is given, so the only thing deciding
+	// the outcome is the triage under test.
+	setup := func() (*fakeMatcher, *fakeSubs, *fakeAlerts) {
+		repo := &fakeSubs{byID: map[string]model.Subscription{anyRule.ID: anyRule}}
+		return &fakeMatcher{ids: []string{anyRule.ID}}, repo, &fakeAlerts{}
+	}
+
+	It("says nothing about a malicious package nothing depends on", func() {
+		matcher, subs, alerts := setup()
+		reach := &stubReach{} // nothing impacted
+
+		raised, err := commands.NewMatchSignal(matcher, subs, alerts, nil, time.Hour).
+			WithReach(reach).Handle(ctx, malware)
+
+		Expect(err).ToNot(HaveOccurred())
+		// OSV's malware dataset is ~240,000 typosquats of popular names. A
+		// broad rule matching every one of them is the same as matching none.
+		Expect(raised).To(BeEmpty())
+		Expect(reach.asked).To(ConsistOf("MAL-2026-1234"))
+	})
+
+	It("alerts on a malicious package something does depend on", func() {
+		matcher, subs, alerts := setup()
+		reach := &stubReach{repositories: []model.ImpactedRepository{
+			{Repository: model.Repository{Owner: "acme", Name: "ledger"}},
+		}}
+
+		raised, err := commands.NewMatchSignal(matcher, subs, alerts, nil, time.Hour).
+			WithReach(reach).Handle(ctx, malware)
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(raised).To(HaveLen(1))
+	})
+
+	It("never filters an ordinary vulnerability by what depends on it", func() {
+		matcher, subs, alerts := setup()
+		reach := &stubReach{}
+
+		// The title has to carry the rule's term: the domain re-verifies every
+		// candidate the matcher proposes, so a fixture that does not match is
+		// rejected before triage is ever consulted.
+		raised, err := commands.NewMatchSignal(matcher, subs, alerts, nil, time.Hour).
+			WithReach(reach).Handle(ctx, model.Vulnerability{
+			CVEID: "CVE-2021-44228", Kind: model.KindVulnerability,
+			Title: "Log4Shell in the log4j-core package",
+		})
+
+		// An advisory is worth hearing about whether or not the library is on
+		// the watchlist today — the watchlist changes.
+		Expect(err).ToNot(HaveOccurred())
+		Expect(raised).To(HaveLen(1))
+		Expect(reach.asked).To(BeEmpty())
+	})
+
+	It("alerts anyway when the graph cannot answer", func() {
+		matcher, subs, alerts := setup()
+		reach := &stubReach{err: errors.New("neo4j is down")}
+
+		raised, err := commands.NewMatchSignal(matcher, subs, alerts, nil, time.Hour).
+			WithReach(reach).Handle(ctx, malware)
+
+		// Noise is an annoyance; silence about a package someone has actually
+		// installed is the failure that matters.
+		Expect(err).ToNot(HaveOccurred())
+		Expect(raised).To(HaveLen(1))
+	})
+})

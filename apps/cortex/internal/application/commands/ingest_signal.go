@@ -6,10 +6,28 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/model"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/ports"
 )
+
+// Observation is one report of a finding, with the provenance that changes what
+// ingest does with it.
+//
+// The flag lives here rather than on the finding because it describes the
+// report, not the vulnerability: the same advisory is historical when a
+// backfill replays it and current when a poll finds it, and what is stored is
+// identical either way.
+type Observation struct {
+	Vulnerability model.Vulnerability
+	// Historical marks a replay of the past. It is stored exactly as anything
+	// else is, and nobody is told about it.
+	Historical bool
+	// Withdrawn marks a finding the source has retracted. It is not stored —
+	// and if it was stored before it was retracted, it is removed.
+	Withdrawn bool
+}
 
 // IngestSignal stores an incoming vulnerability, reconciling it with any
 // existing record via the domain's Merge rule, then makes it searchable.
@@ -19,6 +37,25 @@ type IngestSignal struct {
 	graph   ports.DependencyGraph
 	alerter Alerter
 	log     *slog.Logger
+
+	// notifier, when set, announces each stored finding to live watchers.
+	notifier ports.FindingNotifier
+	// reconciler, when set, records which rows are in step with the index.
+	reconciler ports.IndexReconciler
+}
+
+// WithReconciler records which records reached the index, so the ones that did
+// not can be found and repaired instead of silently staying unsearchable.
+func (c *IngestSignal) WithReconciler(r ports.IndexReconciler) *IngestSignal {
+	c.reconciler = r
+	return c
+}
+
+// WithNotifier announces every stored finding, so a watcher sees it as it
+// lands instead of discovering it on its next poll.
+func (c *IngestSignal) WithNotifier(n ports.FindingNotifier) *IngestSignal {
+	c.notifier = n
+	return c
 }
 
 // Alerter raises alerts for the subscriptions a vulnerability matches
@@ -46,10 +83,17 @@ const maxStoreAttempts = 3
 // persists, and indexes. Postgres is the source of truth: a failure there
 // fails the ingest, while a search-index failure is logged and tolerated (the
 // record can be reindexed).
-func (c *IngestSignal) Handle(ctx context.Context, incoming model.Vulnerability) error {
-	incoming = incoming.Normalized()
+func (c *IngestSignal) Handle(ctx context.Context, obs Observation) error {
+	incoming := obs.Vulnerability.Normalized()
 	if err := incoming.Validate(); err != nil {
 		return err
+	}
+
+	// A retracted finding is not a finding. Storing it would leave a record
+	// with no score, no severity and a "Rejected reason:" description sitting
+	// in the feed looking like everything else.
+	if obs.Withdrawn {
+		return c.withdraw(ctx, incoming)
 	}
 
 	// Another worker can file a report of the same finding under a different
@@ -85,8 +129,17 @@ func (c *IngestSignal) Handle(ctx context.Context, incoming model.Vulnerability)
 
 	if c.index != nil {
 		if err := c.index.Index(ctx, incoming); err != nil {
-			c.log.Warn("indexing failed; record is stored but not searchable",
+			// Not fatal — the record is stored, which is what matters — but no
+			// longer merely logged either. The row stays marked as behind, and
+			// the reconciler settles it later. A warning alone meant the index
+			// stayed wrong until somebody thought to rebuild it by hand.
+			c.log.Warn("indexing failed; record is stored but not searchable until reconciled",
 				"cve", incoming.CVEID, "error", err)
+		} else if c.reconciler != nil {
+			if err := c.reconciler.MarkIndexed(ctx, time.Now(), incoming.CVEID); err != nil {
+				// Worst case the record is reindexed once unnecessarily.
+				c.log.Debug("could not mark the record as indexed", "cve", incoming.CVEID, "error", err)
+			}
 		}
 	}
 
@@ -118,11 +171,26 @@ func (c *IngestSignal) Handle(ctx context.Context, incoming model.Vulnerability)
 	// the rest — the record is already stored, and a matcher outage must not
 	// cost us the finding itself. A failure here is logged loudly because a
 	// silent alerting outage is indistinguishable from "nothing happened".
-	if c.alerter != nil {
+	//
+	// Except for history. A backfill publishes the same events polling would —
+	// which is what makes them merge identically — but loading ten years of
+	// advisories is not ten years of news, and a subscription that matched
+	// them would fire thousands of times for things long since fixed.
+	if c.alerter != nil && !obs.Historical {
 		if _, err := c.alerter.Handle(ctx, incoming); err != nil {
 			c.log.Error("alert matching failed; record is stored but nobody was told",
 				"cve", incoming.CVEID, "error", err)
 		}
+	}
+
+	// Last, and only once everything above has settled: what watchers receive
+	// is the finding as it was actually stored. Notify does not block — a
+	// viewer that has stopped reading misses updates rather than holding up
+	// ingestion.
+	// Live watchers are told about what is arriving now, for the same reason:
+	// a backfill would otherwise scroll ten years past a terminal.
+	if c.notifier != nil && !obs.Historical {
+		c.notifier.Notify(ctx, incoming)
 	}
 	return nil
 }
@@ -153,8 +221,52 @@ func (c *IngestSignal) store(ctx context.Context, incoming model.Vulnerability) 
 			retired = append(retired, e.CVEID)
 		}
 	}
+	if len(retired) > 0 {
+		// Two records turning out to be one finding is ordinary, and it
+		// deletes a row — so it is worth a line. Rows that vanish with
+		// nothing recording why are impossible to account for later.
+		c.log.Info("merged findings under one id",
+			"cve", merged.CVEID, "retired", retired, "ids", merged.IDs())
+	}
+
 	if err := c.repo.Upsert(ctx, merged, retired...); err != nil {
 		return model.Vulnerability{}, nil, fmt.Errorf("ingest: upsert %s: %w", merged.CVEID, err)
 	}
 	return merged, retired, nil
+}
+
+// withdraw removes a finding the source has retracted, from everywhere it was
+// put.
+//
+// Removed rather than flagged: a rejected CVE id is not a finding whose
+// severity is unknown, it is an id that was assigned and then disowned, and
+// keeping it would mean every consumer has to know to filter it out. The id
+// itself is not blocked — if it is ever reassigned and published properly, the
+// next observation stores it like any other.
+func (c *IngestSignal) withdraw(ctx context.Context, v model.Vulnerability) error {
+	ids := v.IDs()
+
+	// Postgres first: it is the store of record, and the others are derived
+	// from it. If this fails, nothing else should have happened.
+	if err := c.repo.Delete(ctx, ids...); err != nil {
+		return fmt.Errorf("withdraw %s: %w", v.CVEID, err)
+	}
+
+	if c.index != nil {
+		for _, id := range ids {
+			if err := c.index.Delete(ctx, id); err != nil {
+				c.log.Warn("withdrawn finding is still in the search index",
+					"cve", id, "error", err)
+			}
+		}
+	}
+	if c.graph != nil {
+		if err := c.graph.RemoveVulnerabilities(ctx, ids); err != nil && !errors.Is(err, ports.ErrGraphUnavailable) {
+			c.log.Warn("withdrawn finding is still in the dependency graph",
+				"cve", v.CVEID, "error", err)
+		}
+	}
+
+	c.log.Debug("withdrew a retracted finding", "cve", v.CVEID, "ids", ids)
+	return nil
 }

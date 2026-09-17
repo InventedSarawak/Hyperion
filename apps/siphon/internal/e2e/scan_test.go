@@ -139,9 +139,10 @@ packages:
 		Expect(err).ToNot(HaveOccurred())
 		defer client.Close()
 
-		written, err := client.Publish(ctx, snapshot)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(written).To(BeNumerically(">", 0))
+		// Publish reports that cortex accepted the observation. What it wrote
+		// is checked below, against what cortex actually received — which is
+		// the assertion that survives the move to the event bus.
+		Expect(client.Publish(ctx, snapshot)).To(Succeed())
 
 		By("checking what cortex was told")
 		req := cortex.received()

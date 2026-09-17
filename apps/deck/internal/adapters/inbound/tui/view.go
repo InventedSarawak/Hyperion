@@ -129,7 +129,7 @@ func (m Model) feedView() string {
 		return panel("Error", styleError.Render(err.Error()), m.width)
 	}
 
-	loaded := len(m.feed.Hits)
+	loaded := len(m.rows)
 	start, end := window(m.offset, m.bodyRows(), loaded)
 	title := m.fit("Findings  " + m.feedCounter(start, end))
 
@@ -143,7 +143,11 @@ func (m Model) feedView() string {
 
 	rows := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
-		rows = append(rows, m.feedRow(m.feed.Hits[i].Vulnerability, i == m.cursor))
+		if row := m.rows[i]; row.IsBatch() {
+			rows = append(rows, m.batchRow(*row.Batch, i == m.cursor))
+		} else {
+			rows = append(rows, m.feedRow(row.Vulnerability, i == m.cursor, row.Nested))
+		}
 	}
 	return panel(title, strings.Join(rows, "\n"), m.width)
 }
@@ -155,6 +159,7 @@ func (m Model) feedView() string {
 //	query "next" · best match — 25 of 187  ·  loading more…
 func (m Model) feedCounter(start, end int) string {
 	loaded := len(m.feed.Hits)
+	rows := len(m.rows)
 
 	what := "latest findings"
 	if m.active != "" {
@@ -174,7 +179,17 @@ func (m Model) feedCounter(start, end int) string {
 		counter += " findings"
 	}
 
-	if end-start < loaded {
+	if folded := m.foldedRuns(); folded > 0 {
+		// Say so, or the row count below looks like findings have gone
+		// missing. Runs rather than findings: how many are inside is on the
+		// fold's own row, and both numbers here would only confuse.
+		counter += fmt.Sprintf("  ·  %d run", folded)
+		if folded > 1 {
+			counter += "s"
+		}
+		counter += " folded"
+	}
+	if end-start < rows {
 		// Only say where we are when there is somewhere else to be.
 		counter += fmt.Sprintf("  ·  %d–%d", start+1, end)
 	}
@@ -183,10 +198,21 @@ func (m Model) feedCounter(start, end int) string {
 		counter += "  ·  " + spinnerFrame(m.spinner) + " loading more…"
 	case m.moreErr != nil:
 		counter += "  ·  couldn't load more (n to retry)"
-	case m.feed.HasMore() && end == loaded:
+	case m.feed.HasMore() && end == rows:
 		counter += "  ·  ↓ more"
 	}
 	return counter
+}
+
+// foldedRuns is how many runs are currently closed.
+func (m Model) foldedRuns() int {
+	n := 0
+	for _, r := range m.rows {
+		if r.IsBatch() && !m.folds[r.Batch.Signature] {
+			n++
+		}
+	}
+	return n
 }
 
 // thousands renders 6771 as "6,771".
@@ -205,12 +231,9 @@ func thousands(n int64) string {
 // feedRow renders one row. Selected and unselected rows are laid out by the
 // same code on purpose: when the two were built separately they drifted, and a
 // row that measured correctly in one path wrapped in the other.
-func (m Model) feedRow(v model.Vulnerability, selected bool) string {
-	severity := v.SeverityLabel()
-	if v.IsMalware() {
-		// Not a severity, but it outranks every one: say what it is.
-		severity = labelMalware
-	}
+func (m Model) feedRow(v model.Vulnerability, selected, nested bool) string {
+	// Not a severity, but it outranks every one: say what it is.
+	severity := v.DisplayLabel()
 
 	// Narrower than the fixed columns: a plain row, truncated. Legibility
 	// beats colour, and a row that wraps costs two lines of the budget.
@@ -222,15 +245,56 @@ func (m Model) feedRow(v model.Vulnerability, selected bool) string {
 		return "  " + row
 	}
 
-	id := pad(truncate(v.CVEID, colID), colID)
+	// A finding inside an open run is indented out of the id column rather
+	// than off the front of the row, so every column below stays where the
+	// rows above put it.
+	indent, width := "", colID
+	if nested {
+		indent, width = "  ", colID-2
+	}
+	id := indent + pad(truncate(v.CVEID, width), width)
 	sev := pad(severity, colSeverity)
 	headline := truncate(v.Headline(), m.headlineWidth())
 
 	if selected {
 		return styleSelect.Render("▸ " + id + " " + sev + " " + headline)
 	}
-	return "  " + styleCVE.Render(id) + " " +
+	return "  " + indent + styleCVE.Render(pad(truncate(v.CVEID, width), width)) + " " +
 		severityStyle(severity).Render(sev) + " " + headline
+}
+
+// batchRow renders a folded run: how many findings it holds, the worst rating
+// among them, the opening they share, and what the rest of them are rated.
+// Everything a reader needs to decide whether to open it — a fold that hid
+// the one urgent finding in two hundred would be worse than the flood it
+// replaces.
+func (m Model) batchRow(b model.Batch, selected bool) string {
+	// Not a triangle: the cursor is already "▸", and two of them on one row
+	// read as one marker with a stutter rather than as a fold.
+	marker := "+"
+	if m.folds[b.Signature] {
+		marker = "−"
+	}
+	count := fmt.Sprintf("%s %d findings", marker, b.Len())
+	worst := b.Worst()
+
+	if m.innerWidth() < fixedColumns {
+		row := truncate(count+" "+worst, m.innerWidth()-colMarker)
+		if selected {
+			return styleSelect.Render("▸ " + row)
+		}
+		return "  " + row
+	}
+
+	label := pad(truncate(count, colID), colID)
+	sev := pad(worst, colSeverity)
+	headline := truncate(b.Label()+"  ·  "+b.Breakdown(), m.headlineWidth())
+
+	if selected {
+		return styleSelect.Render("▸ " + label + " " + sev + " " + headline)
+	}
+	return "  " + styleFaint.Render(label) + " " +
+		severityStyle(worst).Render(sev) + " " + styleDim.Render(headline)
 }
 
 func (m Model) graphView() string {
@@ -341,6 +405,15 @@ func (m Model) footer() string {
 		hints = m.repoHints()
 	default:
 		hints = "  ↑/↓ move · enter details · b blast radius · n more · s sort · m malware · / search · tab switch · r refresh · q quit"
+		if row, ok := m.row(); ok && row.IsBatch() {
+			// The row under the cursor is a run, not a finding, so the keys
+			// that act on a finding do not apply to it.
+			verb := "open"
+			if m.folds[row.Batch.Signature] {
+				verb = "close"
+			}
+			hints = "  ↑/↓ move · enter " + verb + " this run · n more · s sort · m malware · / search · tab switch · r refresh · q quit"
+		}
 	}
 	return styleFaint.Render(m.fitPlain(hints))
 }

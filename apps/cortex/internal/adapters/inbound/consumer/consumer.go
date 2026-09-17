@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -22,6 +23,7 @@ import (
 	commonv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/common/v1"
 	eventsv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/events/v1"
 
+	"github.com/inventedsarawak/hyperion/apps/cortex/internal/application/commands"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/model"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/valueobject"
 )
@@ -30,14 +32,17 @@ const maxLineBytes = 4 * 1024 * 1024 // events can be large (many references)
 
 // Ingester is the use case this adapter drives (consumer-side interface).
 type Ingester interface {
-	Handle(ctx context.Context, v model.Vulnerability) error
+	Handle(ctx context.Context, obs commands.Observation) error
 }
 
 // Consumer reads protojson events from an io.Reader and ingests each one.
 type Consumer struct {
-	ingester Ingester
-	workers  int
-	log      *slog.Logger
+	// progressEvery is how many ingested findings pass between progress
+	// lines; 0 silences them.
+	progressEvery int
+	ingester      Ingester
+	workers       int
+	log           *slog.Logger
 }
 
 // Option customizes a Consumer.
@@ -58,7 +63,7 @@ func WithWorkers(n int) Option {
 // NewConsumer wires the adapter to the ingest use case. It ingests on one
 // worker, in input order, unless told otherwise.
 func NewConsumer(ingester Ingester, opts ...Option) *Consumer {
-	c := &Consumer{ingester: ingester, workers: 1, log: slog.Default()}
+	c := &Consumer{ingester: ingester, workers: 1, progressEvery: 1000, log: slog.Default()}
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -78,33 +83,97 @@ func NewConsumer(ingester Ingester, opts ...Option) *Consumer {
 func (c *Consumer) Run(ctx context.Context, r io.Reader) (int, error) {
 	var (
 		processed atomic.Int64
+		failed    atomic.Int64
+		dropped   atomic.Int64
 		wg        sync.WaitGroup
-		lanes     = make([]chan model.Vulnerability, c.workers)
+		started   = time.Now()
+		lanes     = make([]chan commands.Observation, c.workers)
 	)
 	for i := range lanes {
-		lanes[i] = make(chan model.Vulnerability, laneBuffer)
+		lanes[i] = make(chan commands.Observation, laneBuffer)
 		wg.Add(1)
-		go func(lane <-chan model.Vulnerability) {
+		go func(lane <-chan commands.Observation) {
 			defer wg.Done()
-			for v := range lane {
-				if err := c.ingester.Handle(ctx, v); err != nil {
+			for obs := range lane {
+				v := obs.Vulnerability
+				// Shutting down: keep draining, so the reader is never left
+				// blocked on a full lane, but do not begin work a dead
+				// context will only refuse. These are counted rather than
+				// logged one line each — every lane is full when a backfill
+				// is interrupted, and hundreds of instant failures bury the
+				// reason it stopped.
+				if ctx.Err() != nil {
+					dropped.Add(1)
+					continue
+				}
+				if err := c.ingester.Handle(ctx, obs); err != nil {
+					// The same shutdown, caught a moment later: this event
+					// was in flight when the context was cancelled. Not a
+					// failure of the event, and not worth an error line.
+					if errors.Is(err, context.Canceled) {
+						dropped.Add(1)
+						continue
+					}
+					failed.Add(1)
 					c.log.Error("ingest failed", "cve", v.CVEID, "error", err)
 					continue
 				}
-				processed.Add(1)
+				done := processed.Add(1)
+				c.log.Debug("ingested", "id", v.CVEID, "kind", v.Kind,
+					"packages", len(v.AffectedPackages), "sources", v.Sources)
+				// A heartbeat rather than a line per finding: a backfill is
+				// hundreds of thousands of them, and what a reader needs to
+				// know is that it is moving, and how fast.
+				if c.progressEvery > 0 && done%int64(c.progressEvery) == 0 {
+					c.log.Info("ingest progress",
+						"ingested", done,
+						"failed", failed.Load(),
+						"per_second", int64(float64(done)/time.Since(started).Seconds()),
+						"latest", v.CVEID)
+				}
 			}
 		}(lanes[i])
 	}
 
-	err := c.read(ctx, r, func(v model.Vulnerability) {
-		lanes[laneFor(v.CVEID, len(lanes))] <- v
+	err := c.read(ctx, r, func(obs commands.Observation) {
+		lanes[laneFor(obs.Vulnerability.CVEID, len(lanes))] <- obs
 	})
 
 	for _, lane := range lanes {
 		close(lane)
 	}
 	wg.Wait()
+	if n := failed.Load(); n > 0 {
+		c.log.Warn("some findings could not be ingested", "failed", n, "ingested", processed.Load())
+	}
+	// Whatever was still queued when the context was cancelled was never
+	// stored. Say how many, so an interrupted run is known to have left a
+	// gap rather than assumed to have finished what it read.
+	if n := dropped.Load(); n > 0 {
+		c.log.Warn("stopped before every finding read was ingested; the rest were dropped",
+			"dropped", n, "ingested", processed.Load())
+	}
 	return int(processed.Load()), err
+}
+
+// WithProgressEvery sets how many ingested findings pass between progress
+// lines. Zero silences them.
+func WithProgressEvery(n int) Option {
+	return func(c *Consumer) {
+		if n >= 0 {
+			c.progressEvery = n
+		}
+	}
+}
+
+// WithLogger sends the consumer's own logging somewhere other than the
+// default logger.
+func WithLogger(l *slog.Logger) Option {
+	return func(c *Consumer) {
+		if l != nil {
+			c.log = l
+		}
+	}
 }
 
 // laneBuffer lets the reader run a little ahead of each worker.
@@ -118,7 +187,7 @@ func laneFor(id string, lanes int) int {
 }
 
 // read decodes one event per line and hands each to dispatch.
-func (c *Consumer) read(ctx context.Context, r io.Reader, dispatch func(model.Vulnerability)) error {
+func (c *Consumer) read(ctx context.Context, r io.Reader, dispatch func(commands.Observation)) error {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineBytes)
 
@@ -137,7 +206,7 @@ func (c *Consumer) read(ctx context.Context, r io.Reader, dispatch func(model.Vu
 			c.log.Warn("skipping malformed event", "error", err)
 			continue
 		}
-		dispatch(toDomain(&msg))
+		dispatch(toObservation(&msg))
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("consumer: scan: %w", err)
@@ -147,9 +216,19 @@ func (c *Consumer) read(ctx context.Context, r io.Reader, dispatch func(model.Vu
 
 // --- mapping: wire contract -> cortex domain ---
 
-// toDomain maps an event onto the domain and normalises its identity before
+// toObservation maps an event onto the domain, keeping the provenance that
+// decides whether anyone is told about it, and normalises its identity before
 // it is sharded, so reports of one finding that led with different ids (the
 // CVE from NVD, the GHSA from GitHub) land on the same worker.
+func toObservation(msg *eventsv1.SignalDiscovered) commands.Observation {
+	return commands.Observation{
+		Vulnerability: toDomain(msg),
+		Historical:    msg.GetHistorical(),
+		Withdrawn:     msg.GetWithdrawn(),
+	}
+}
+
+// toDomain maps the finding itself.
 func toDomain(msg *eventsv1.SignalDiscovered) model.Vulnerability {
 	v := msg.GetVulnerability()
 	return model.Vulnerability{

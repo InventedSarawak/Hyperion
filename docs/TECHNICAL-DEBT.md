@@ -73,150 +73,353 @@ Containers have healthchecks but no `restart:` policy and no memory/CPU bounds
 
 ## 2. Data Flow & Correctness
 
-### 🔴 Transport is a Unix pipe, not a message bus
+### 🟢 ~~Transport is a Unix pipe, not a message bus~~ — REPAID (v3, 2026-09-17)
 
-`siphon | cortex` — siphon writes protojson to stdout, cortex reads stdin.
+Kafka is the transport: topic `hyperion.signals.v1`, 6 partitions, consumer group
+`intel-indexer`, records keyed by finding id. `task up` runs siphon and cortex as
+independent services over the broker; `scripts/system.sh` no longer builds a pipeline.
+It cost exactly what the hexagon promised — one new outbound adapter in siphon, one
+new inbound adapter in cortex, and no change to a domain type or a use case.
 
-- **Why:** it proved the whole contract boundary end-to-end without standing up Kafka.
-- **Cost:** no durability, no replay, no consumer groups, no backpressure. If cortex
-  dies mid-stream those events are gone. Producer and consumer must run as a pair.
-- **Fix in v3:** Kafka `raw-signals` topic. Only the publisher and consumer adapters
-  change — the domain and use cases do not (this is the payoff of the hexagon).
+- **What the system gained:** durability (7-day retention), replay from the last
+  committed offset, consumer groups, backpressure, and two services that no longer
+  have to live and die together.
+- **What remains of the pipe:** `task ingest` and `task backfill` still run
+  `siphon | cortex` deliberately — one command that loads data and reports what it
+  stored is genuinely the point there. They opt out explicitly.
 
-### 🟡 Ingestion watermark is in-memory only
+### 🟢 ~~No dead-letter topic~~ — REPAID (v3, 2026-09-17)
 
-`scheduler.since` is a struct field. Restarting siphon resets it to
-`now - SIPHON_LOOKBACK`.
+A record that exhausts its retries is forwarded to `hyperion.signals.v1.dlq`
+with the failure, origin partition/offset and attempt count in headers, and
+committed past — so one poisonous record no longer blocks its partition.
 
-- **Cost:** every restart re-fetches the whole lookback window, wasting rate-limit
-  budget. Correctness is saved only because cortex upserts by CVE id — the duplicate
-  work is invisible but real. A crash longer than the lookback window **loses signals**.
-- **Fix in v3:** the `CheckpointStore` port already sketched in
-  `docs/PROJECT-STRUCTURE.md`, backed by Redis or Postgres.
+- **The trap that was avoided:** a dead-letter queue on its own turns a
+  database outage into a silent migration of the whole topic. The consumer
+  therefore counts _consecutive_ dead-letters and stops after ten
+  (`CORTEX_KAFKA_DLQ_MAX_CONSECUTIVE`): one bad record is a record, ten in a
+  row is the world being broken. A success resets the count.
+- **If the dead-letter topic itself is unreachable,** the consumer stops
+  without committing, which is the only remaining way not to lose the record.
+- **Draining it:** `task topic:dlq` reads it with reasons attached,
+  `task topic:dlq -- -replay` republishes the records unchanged.
+- **What remains:** nothing alerts on the topic being non-empty — it has to be
+  looked at. A metric belongs in v6 with the rest of the telemetry.
 
-### 🟡 No dedupe store
+### 🟢 Topics are created by the services that use them
 
-`DedupeStore` is designed but not implemented. Deduplication happens implicitly at
-the cortex upsert.
+`EnsureTopic` runs at startup in both siphon and cortex.
 
-- **Cost:** siphon republishes unchanged signals on every poll; cortex does a
-  read-modify-write per event regardless. Wasteful, and it will not scale to a real
-  firehose.
-- **Fix in v3:** Redis-backed `DedupeStore` keyed on the domain `SignalID`.
+- **Why:** the alternative during development is broker auto-creation, which gives
+  whatever partition count the broker defaults to — and partition count is the one
+  setting that cannot be lowered later.
+- **Cost:** topology is defined in application startup code rather than declared with
+  the infrastructure, so it is invisible to anyone reading `deploy/`.
+- **Fix in v4:** declare topics with the rest of the infrastructure, and drop the
+  startup call.
 
-### 🟡 Single global lookback across sources of wildly different cadence
+### 🟢 ~~Ingestion watermark is in-memory only~~ — REPAID (v3, 2026-09-17)
 
-One `SIPHON_LOOKBACK` drives all ten sources. NVD/GitHub/Shodan publish hundreds of
-signals a day; exploit-db, OSINT and package-feed publish a handful a _week_.
+The watermark is persisted to Redis (`hyperion:siphon:watermark:advisories`, no
+expiry) through a `CheckpointStore` port, so a restart resumes where the last
+successful poll finished. Measured on a restart with a 2h lookback: 526 records
+re-fetched before, 59 after.
 
-- **Cost:** at the 2h default, three sources return 0 essentially always — which
-  looks like a broken adapter but is not. Verified against upstream: the data
-  genuinely is not there.
-- **Fix:** per-source lookback/interval in config. Small change, high clarity win.
-- **Mitigated (2026-09-11):** history no longer depends on the lookback at all —
-  `task backfill` loads it directly (NVD published-date windows + OSV exports).
+- **What it fixed:** an outage longer than the lookback window used to skip
+  everything published in between, permanently. That gap is closed.
+- **What remains:** one watermark for all ten sources, so a single slow source
+  cannot be tracked separately — the same shape as the global-lookback entry
+  below, and worth fixing together.
+- **Degraded mode:** Redis unreachable is a warning, not a stop; siphon falls
+  back to the in-memory watermark and keeps polling.
 
-### 🟢 A re-keyed finding can alert a subscription once more
+### 🟢 ~~No dedupe store~~ — REPAID (v3, 2026-09-17)
 
-Findings are filed under a canonical id (CVE, else GHSA, else MAL) with every other id
-as an alias; when a report links a GHSA-keyed record to its new CVE, the two merge and
-the record moves to the CVE (see CURRENT-FUNCTIONALITIES 1.3).
+`DedupeStore` is implemented on Redis and applied in the poll workflow. Each
+observation is fingerprinted (a digest of its content, not just its id) and an
+identical one inside the window is not published again. Measured on one 3h NVD
+window re-read from scratch: 885 suppressed, 25 published.
 
-- **Resolved (2026-09-12):** the old split — one advisory as two records, `GHSA-…` and
-  `CVE-…` — is gone; existing alerts are moved to the new id in the same transaction.
-- **Cost that remains:** an alert's id is derived from the subscription and the finding
-  id, so after a re-key the same subscription can be alerted once more under the CVE.
-- **Fix:** derive the alert id from the subscription and the finding's first-stored id,
-  or dedupe on every id the finding carries.
+- **Why a content fingerprint:** the `SignalID` is source + id, so suppressing
+  on it would drop _corrections_ — a score the advisory did not carry
+  yesterday, a newly named affected package. Those must still be published.
+- **New operational trap:** wiping cortex's databases no longer refills them
+  from the next poll, because siphon remembers having published those records.
+  Clear `hyperion:siphon:seen:*` or run a backfill. Documented in
+  CURRENT-FUNCTIONALITIES 1.1 and `.env.sample`.
+- **Fails open:** a store that errors publishes the observation anyway. A
+  duplicate costs a merge that changes nothing; a suppressed signal is lost
+  until the advisory is next amended.
+- **Not applied to the backfill:** it is a one-off load of hundreds of
+  thousands of records, and fingerprinting them all would fill Redis to no
+  purpose.
 
-### 🟢 Two lockfile formats are still unread
+### 🟢 ~~Single global lookback across sources of wildly different cadence~~ — REPAID (v3, 2026-09-17)
 
-A version matters twice over: what a manifest allows ("^1.13.2") can only ever be judged
-"possibly affected", while what a lockfile installs (1.13.2) settles it outright.
+Each source now has its own interval, its own first window and its own
+watermark (`hyperion:siphon:watermark:source:<name>`). Defaults run from 10m/2h
+for NVD to 6h/14d for Exploit-DB and the package feeds; `SIPHON_<SOURCE>_INTERVAL`
+and `_LOOKBACK` override one feed.
 
-- **Resolved (2026-09-16):** `package-lock.json`, `pnpm-lock.yaml`, `Cargo.lock`,
-  `poetry.lock`, `composer.lock` and `Gemfile.lock` are read alongside their manifests, and
-  a locked version wins over a declared range. They also carry the transitive dependencies,
-  where most exposure actually sits.
-- **What remains:** `yarn.lock` (its own text format) and NuGet's `packages.lock.json` are
-  not read, so those versions are still ranges. `go.mod` and pinned `==` requirements were
-  already exact.
+- **What it fixed:** at the old global 2h window three sources returned nothing
+  essentially always. Measured after: `vendor_advisory` fetched 13 records over
+  its 48h window where 2h found none, and dedupe suppressed the repeats so the
+  wider window costs nothing downstream.
+- **What it cost:** the scheduler stopped owning a watermark at all. It is a
+  plain ticker now, and how far back to read is answered by the poller — which
+  is the only thing that can answer it per source.
+- **Migration:** `SIPHON_POLL_INTERVAL` and `SIPHON_LOOKBACK` still work and
+  still override every source at once. They are commented out in `.env.sample`,
+  because leaving them set silently flattens all ten feeds back to one cadence.
 
-### 🟡 NuGet and RubyGems names must match the advisory's spelling
+### 🟢 ~~A re-keyed finding can alert a subscription once more~~ — REPAID (v3, 2026-09-17)
 
-Library nodes are keyed by the package name as written. PyPI names are normalised on the
-scanner's side (PEP 503, as advisories store them) and Packagist names are lower case, but
-NuGet ids are case-insensitive and advisories store them with capitals (`Newtonsoft.Json`).
+"One subscription hearing about one finding is one alert" was expressed only
+through the alert's id, `subscription:cve` — which holds until the finding
+changes its id, and a record first stored under a GHSA moves to its CVE the
+moment a feed links the two. The same subscription then alerted again under the
+new key.
 
-- **Cost:** a `.csproj` that writes `newtonsoft.json` does not reach the advisories for
-  `Newtonsoft.Json`.
-- **Fix:** normalise the key per registry in cortex (lower case for NuGet) and migrate the
-  existing library nodes.
+It is a unique constraint now, `(subscription_id, cve_id)`, so it holds however
+the id is spelled. Retiring a key moves its alerts to the surviving id and drops
+any that would collide — the alert raised first wins, because when someone was
+told is the fact worth keeping. The migration collapses existing duplicates the
+same way.
 
-### 🟡 Descriptions and scores are last-writer-wins
+### 🟢 ~~Two lockfile formats are still unread~~ — REPAID (v3, 2026-09-17)
 
-`Merge` unions sources, references and affected packages, but for the description and
-the score set the newest non-empty observation wins, whichever feed it came from.
+`yarn.lock` and NuGet's `packages.lock.json` are read alongside the others, so
+every lockfile format the scanner meets now settles versions outright instead of
+leaving them as ranges. Verified on `yarnpkg/berry`: 1,794 dependencies read
+from its `yarn.lock`, where before the repository contributed only what its
+`package.json` files declared.
 
-- **Cost:** which description you read depends on which feed reported last — NVD's
-  one-paragraph summary or GitHub's full Markdown write-up can replace each other on
-  every poll. Nothing is lost that matters for matching, but the display wobbles.
-- **Fix:** keep one description and score set per source and choose by source priority
-  at read time.
+- **yarn.lock is its own format,** not YAML despite appearing to be — a v1 file
+  has bare `name@range:` headers and `version "1.2.3"` lines, which a YAML
+  parser rejects. One line-oriented reader handles both v1 and Berry.
+- **Scoped packages** contain an `@` in the name itself, so a descriptor splits
+  on its _last_ `@`, not its first.
+- **packages.lock.json** reports the restored version rather than the requested
+  range, keeps the lockfile's own word on which packages are direct, and leaves
+  out sibling projects, which are not packages from a registry.
 
-### 🟡 Malware is ingested in full but only hidden, not triaged
+### 🟢 ~~NuGet and RubyGems names must match the advisory's spelling~~ — REPAID (v3, 2026-09-17)
 
-OSV's malicious-package dataset (`MAL-…`) is ingested whole, as findings of kind
-`malware`. deck leaves them out of the feed unless `m` is pressed; searching for an
-exact id finds one either way.
+Library keys are normalized per registry (`valueobject.NormalizeName`): NuGet
+and Packagist folded to lower case, PyPI to PEP 503. The original spelling is
+kept for display; only the join key changes.
 
-- **Why:** a compromised package is the most urgent thing a dependency can be, and a
-  `MAL-` id is often the only record it ever gets — skipping them made that invisible.
-- **Cost:** npm alone has ~220,000 `MAL-` records, nearly all typosquats nobody installs.
-  They cost storage and index space, and a subscription with a broad rule can match them.
-- **Fix in v3:** rank malware by whether a tracked repository depends on the package —
-  the graph can answer that — and alert only on those.
+Two graph migrations moved what was already stored: 1,322 mis-keyed nodes
+re-keyed, then 33 that could not move — because both spellings existed as
+separate nodes — merged, advisories and all. One example, `Magick.NET-Q8-AnyCPU`
+and `magick.net-q8-anycpu`, held 164 and 1 advisories apart and now holds 165
+together. A repository requiring that package previously reached one of them.
 
-### 🟢 A backfill can raise alerts for old findings
+- **RubyGems deliberately left alone:** gem ids are case-sensitive by
+  specification, so folding them would merge two packages that the registry
+  says are different — inventing a fact rather than applying one. The entry's
+  original framing was wrong about RubyGems.
+- **Found while doing it:** re-keying can collide two ways, not one. Several
+  mis-keyed nodes can normalize to the _same_ key (`CefSharp.OffScreen` and
+  `CefSharp.Offscreen`), which a naive "does the target exist?" guard does not
+  catch — the first migration failed on exactly that and disabled the graph
+  until it was fixed.
 
-The backfill publishes the same events as polling, so a subscription matching a
-2017 advisory fires when the backfill replays it.
+### 🟡 Findings disappeared from the store — hole closed, cause unproven
 
-- **Cost:** a backfill run with subscriptions in place produces a burst of historical
-  alerts. After a full reset (no subscriptions) it produces none.
-- **Fix:** mark backfilled events as historical in the contract and skip alerting for them.
+Between two counts eleven hours apart on a running stack, **9,239 rows vanished**
+from `vulnerabilities` (548,097 -> 539,892, against ~1,000 new arrivals). Sampled
+ids (`CVE-2019-4798`, `CVE-2016-6339`) were gone entirely — not as records, not
+in `finding_aliases`, which a merge would have left behind.
 
-### 🟡 Naive migration runner
+**What was found.** Retiring a key is how two records become one finding: the
+loser's row is deleted and its id lives on as an alias of the winner. Proven by
+test, that path preserves the id _when the winning record carries it_ — and the
+store would obey just as readily when it does not, deleting the row and leaving
+nothing that resolves the id. That is a finding disappearing rather than
+merging, and nothing logged it.
 
-`postgres.Migrate` executes every embedded `.sql` file in filename order on every
-boot. Idempotency relies on `IF NOT EXISTS`.
+**What was done.**
 
-- **Cost:** no version table, no down-migrations, no drift detection. A non-idempotent
-  migration would corrupt state or fail the boot.
-- **Fix in v2/v3:** adopt `goose` or `golang-migrate` with a schema-version table.
+- `Upsert` now **refuses** to retire an id the surviving record does not carry
+  (`ErrOrphanedRetire`). There is no caller for whom that is the intent.
+- Every merge that retires a key is logged with the ids involved.
+- Two integration specs pin the invariant.
 
-### 🟢 No Elasticsearch alias or reindex strategy
+**What is unproven.** Whether that hole is what emptied those 9,239 rows, or
+something else did. The evidence was gone by the time it was noticed. The
+guard makes a recurrence impossible and the logging makes it explainable, which
+is as far as it can be taken without the original event.
 
-Documents are written straight to a fixed index name.
+### 🟢 ~~Descriptions and scores are last-writer-wins~~ — REPAID (v3, 2026-09-17)
 
-- **Cost:** a mapping change requires deleting and rebuilding the index with downtime.
-- **Fix in v3:** write through an alias, reindex into a new concrete index, flip atomically.
+Both are chosen by ranking the feeds rather than by which reported most
+recently, and the record remembers which feed each value came from
+(`description_source`, `scores_source`).
+
+- **Descriptions:** GitHub first — it writes full advisories with reproduction
+  and remediation — then NVD's analyst paragraph, then vendors, then the rest.
+- **Scores:** NVD first, because its vectors are assigned by NIST analysts and
+  are what most tooling quotes; then GitHub, then the vendor, who is useful and
+  not disinterested about its own product.
+- **A feed always replaces itself,** so a correction is never refused.
+- **Unattributed values rank last,** so everything stored before this settles
+  into order as feeds re-report. Attribution is recorded whether the value was
+  replaced _or kept_ — a kept value that forgot its source would be displaced
+  by the next observation from anywhere, which is the wobble this removes.
+- **Not** one description stored per source, as the entry originally proposed:
+  that is a schema of its own and a read-time choice, for a problem that
+  ranking solves at merge time.
+
+### 🟡 ~~Malware is ingested in full but only hidden~~ — PARTLY REPAID (v3, 2026-09-17)
+
+Two things were wrong, and both are fixed.
+
+**Alerting.** It now asks the graph whether any tracked repository depends on
+the malicious package, and says nothing when the answer is no. Ordinary
+vulnerabilities are never filtered this way: an advisory is worth hearing about
+whether or not the library is on the watchlist today. A graph that cannot answer
+alerts anyway — noise is an annoyance, silence about an installed package is not.
+
+**The fabricated score (fixed 2026-09-17).** Severity used to be read only off a
+CVSS score, and OSV's `MAL-` records carry none — so the adapter invented an
+entry: `severity: critical, base_score: 0, vector: ""`. A severity label wearing
+CVSS clothes, and the two halves contradicted each other. Harmless while nothing
+sorted on the number, and a trap the moment anything did: the first rule written
+as "score at least 7" would have excluded **every** malicious package, which is
+exactly what such a rule is for.
+
+`model.Vulnerability` now carries `Severity` of its own, set for malware in
+`Normalized()` — the domain's rule, not a feed's. The adapter invents nothing,
+`TopSeverity` prefers the worst of the stated rating and any score, and the
+search document falls back to the rating's CVSS floor (critical -> 9.0) when
+there is no score, so "critical" sorts as critical rather than as zero.
+
+**The rating was never stored (fixed 2026-09-18).** `Severity` was added to the
+entity above but not to the table, so `upsertSQL` did not write it and
+`selectVulnerability` did not read it. The rating survived ingestion, where
+`Normalized` runs, and was dropped on the way to disk — every read back, including
+the `task reindex` that rebuilds the search index from Postgres, saw only what the
+scores happened to say. Most malware also carries a feed's own "critical" among its
+scores, which is what kept this from being visible; a finding the domain rated
+before any feed rated it had nothing to fall back on. Migration
+`0009_stated_severity.sql` adds the column; null means "no stated rating", which is
+not the same as `unknown`. Existing rows fill in as feeds re-report them.
+
+- **What remains:** the records still cost storage and index space. Not indexing
+  them would make an exact-id search stop finding them, which is a product
+  decision rather than a cleanup.
+
+### 🟢 ~~A backfill can raise alerts for old findings~~ — REPAID (v3, 2026-09-17)
+
+`SignalDiscovered` carries a `historical` flag, set by the backfill workflow.
+cortex stores such an event exactly as it stores a polled one — which is what
+lets a backfilled record and a polled one merge into each other — and skips
+both alerting and the live feed for it.
+
+- **Why a contract field rather than a heuristic:** "is this old?" cannot be
+  answered from the advisory's dates. A 2017 CVE amended yesterday is current
+  news; the same record replayed from an export is not. Only the publisher
+  knows which it is sending.
+- **Modelled on the observation, not the finding:** the same advisory is
+  historical when a backfill replays it and current when a poll finds it, so
+  the flag belongs to the report. Ingest takes an `Observation` now.
+
+### 🟢 ~~Naive migration runner~~ — REPAID (v3, 2026-09-17)
+
+`schema_migrations` records what has been applied, by filename and checksum.
+Each file runs once, in its own transaction, together with the row that records
+it — a migration that succeeded but was not recorded would run again on the next
+boot, which is the failure the register exists to prevent.
+
+- **What it unlocks:** a migration that _changes_ data, not just creates
+  things. Under the old runner every file ran on every boot, so correctness
+  rested entirely on `IF NOT EXISTS`, and a one-time backfill was impossible to
+  write safely. The very next migration needed one.
+- **Drift detection:** editing a migration that has already run is refused,
+  because it is a silent way for two databases built from the same source tree
+  to end up with different schemas.
+- **What remains:** no down-migrations and no CLI. `goose` or `golang-migrate`
+  would bring both; this is the register they were wanted for.
+
+### 🟢 ~~No Elasticsearch alias or reindex strategy~~ — REPAID (v3, 2026-09-17)
+
+`hyperion-vulnerabilities` is an alias onto a numbered concrete index. A mapping
+change is now `task index:swap`: build the next index alongside the live one,
+copy the documents server-side, refresh, and move the alias in a single atomic
+request. Readers see the old index until the instant they see the new one.
+
+Migrated live: 547,973 documents, `hyperion-vulnerabilities` -> alias onto
+`hyperion-vulnerabilities-000001`, search unaffected throughout.
+
+Three real bugs surfaced while building it, all now fixed:
+
+- **`scores.base_score` was never declared in the mapping**, so Elasticsearch
+  inferred it from whichever document arrived first. A first score of exactly
+  10 makes it a `long`, and every later 9.8 is then rejected outright. Whether
+  a fresh install could store decimal scores was a coin toss.
+- **The copy read only what was searchable**, so anything written in the second
+  before a swap was silently left behind. The source is refreshed first now.
+- **The destination was not refreshed before the alias moved**, so there was a
+  moment when the alias pointed at an index answering nothing.
+
+- **What remains:** a document written to the old index between the copy and
+  the alias move is not carried across. `task reindex` rebuilds from Postgres
+  and settles it; quiescing ingest for the few seconds a swap takes avoids it.
 
 ---
 
 ## 3. Dependency Graph & Supply Chain (v2)
 
-### 🟡 Dependency reporting is a synchronous gRPC call
+### 🟢 ~~Dependency reporting is a synchronous gRPC call~~ — REPAID (v3, 2026-09-17)
 
-siphon calls `IntelligenceService.IngestDependencies` directly. The advisory path
-publishes events; this one blocks on a reply.
+siphon publishes `DependencyObserved` to `hyperion.dependencies.v1`, keyed by
+repository full name; cortex consumes it as group `intel-graph` and writes the
+graph edges. Verified by scanning with cortex stopped: the scan succeeded, and
+cortex applied the observation when it came back.
 
-- **Why:** v2 has no message bus. "Send to the intelligence service" was the
-  shape the roadmap called for, and a real RPC proved the contract end to end.
-- **Cost:** a scan fails when cortex is down, with no replay. siphon and cortex
-  are coupled at runtime in a way the event path deliberately is not.
-- **Fix in v3:** publish `DependencyObserved` to Kafka. Only the outbound
-  adapter changes — the workflow and domain do not.
+- **What changed beyond the adapter:** the `DependencyPublisher` port used to
+  return the number of edges cortex wrote, which only an RPC can answer. A port
+  that promises what one of its adapters cannot deliver is not a port, so it now
+  returns an error alone and the workflow reports what it _read_. That is the
+  honest number for siphon to know.
+- **Its own topic and group,** not the signal topic: a backlog of advisories
+  must not hold up the supply-chain graph, and a consumer of one has no use for
+  the other.
+- **No dead-letter topic on this path,** deliberately. A manifest read that
+  cannot be written is almost always the graph being unavailable — the case that
+  should stop and be retried — and a later read of the same repository
+  supersedes the one that failed.
+- **The RPC remains** for callers that want the edge count synchronously, and as
+  the fallback when the broker is unreachable.
+
+### 🟢 ~~One publisher's batch fills the whole feed~~ — REPAID (2026-09-18)
+
+The Linux kernel CNA files findings in runs of hundreds: consecutively numbered,
+every one opening "In the Linux kernel, the following vulnerability has been
+resolved", and unscored, because that CNA assigns no CVSS at all. Sorted
+newest-first they arrive adjacent, so one batch filled the screen and everything
+else published that day was pushed below the fold. In the store they are 14,496
+records, 2,970 of them unscored — but in the last 30 days they are only 1,691
+findings out of ~17,230, about 10%. They did not look like 10% because they
+arrived in a block.
+
+deck now folds six or more consecutive findings sharing an opening into one row,
+which carries the count, **the worst rating inside the run** and the breakdown by
+rating; `enter` opens the run in place. The threshold is a run length, not a
+publisher list: nothing here knows what the kernel is, so any publisher filing in
+bulk folds the same way. Five or fewer are left alone.
+
+- **What was deliberately not done:** the findings are not hidden, filtered or
+  deleted. "Has been resolved" is that CNA's boilerplate for _a patch exists
+  upstream_ — findings scored 8.8 carry the same sentence — so it says nothing
+  about whether a reader is exposed, and dropping them would discard the largest
+  single publisher of real CVEs. The rejected-finding path (`vulnStatus: Rejected`
+  -> `Withdrawn` -> `task purge:withdrawn`) is the one that means retracted, and
+  it is unrelated.
+- **What remains:** the unscored ones are still unscored. That is NVD's analysis
+  backlog, not something this repo can fix — the fold reports them as `unknown`
+  rather than guessing.
 
 ### 🟡 Library-to-library edges reach only as far as the watchlist
 
@@ -263,14 +466,19 @@ have a small GitHub listing adapter.
 - **Cost:** a GitHub API change has to be fixed twice.
 - **Fix:** retire siphon's `-orgs` flag once scripts use the watchlist instead.
 
-### 🟢 Untracking keeps what a repository taught the graph about libraries
+### 🟢 ~~Untracking keeps what a repository taught the graph about libraries~~ — REPAID (v3, 2026-09-17)
 
-Removing a repository deletes it and its own edges, but library-to-library edges
-learned from the module it published stay.
+The edges still outlive the repository that taught them, and deliberately:
+"ajv depends on fast-uri" stays true whether or not anyone tracks ajv, and
+deleting them on untrack would silently shorten every other repository's blast
+radius. The cost was never that they are wrong, only that nothing re-reads a
+manifest nobody scans, so they can go stale unnoticed.
 
-- **Why:** "ajv depends on fast-uri" stays true whether or not anyone tracks ajv, and
-  removing it would silently shorten other repositories' transitive blast radius.
-- **Cost:** those edges are no longer refreshed, so they can go stale.
+They now record **when they were last confirmed** and **which repository taught
+them** (`observed_at`, `learned_from`), and `task graph:prune` retires the ones
+nothing has confirmed for 90 days — `-dry-run` first. Repository-to-library
+edges are left alone: those are refreshed on every scan, so an old one means the
+repository is gone rather than that the fact has aged.
 
 ### 🟢 The gateway adds a hop for the terminal client
 
@@ -286,14 +494,14 @@ directly.
 - **Escape hatch:** `DECK_TRANSPORT=grpc` keeps the direct path for debugging a
   cortex the gateway cannot reach.
 
-### 🟢 Neo4j migrations are implicit
+### 🟢 ~~Neo4j migrations are implicit~~ — REPAID (v3, 2026-09-17)
 
-`EnsureSchema` creates uniqueness constraints idempotently on boot. There is no
-version table and no way to evolve a constraint.
+The graph keeps the same register, as `(:SchemaMigration {version})` nodes with
+a uniqueness constraint so two instances starting at once cannot both record the
+same version. Constraints are applied once and appending to the list is how the
+graph schema changes.
 
-- **Cost:** the same shortcut as the Postgres migration runner, one layer over.
-- **Fix in v3:** fold the graph schema into whatever versioned migration tool
-  replaces the Postgres runner.
+- **What remains:** as with Postgres, no way back down.
 
 ---
 
@@ -315,6 +523,20 @@ port can query everything.
 - **Cost:** fine while both ends are on localhost; unacceptable the moment the
   services are on separate hosts.
 - **Fix in v4:** mTLS, or a service mesh handling transport security.
+
+### 🟡 Kafka runs plaintext with no authentication
+
+The broker listens PLAINTEXT on 9092 with no SASL, no TLS and no ACLs, and runs as a
+single node with replication factor 1.
+
+- **Why:** same trade as Postgres and Elasticsearch below — local development only.
+- **Cost:** anyone who can reach the port can read every advisory event or publish
+  forged ones. A single broker also means no durability against losing that broker.
+- **Fix in v4:** SASL/TLS and ACLs per service, and a replicated cluster.
+
+The Kafka console on `:8081` inherits this: no login, and anyone who reaches it can read
+every event on the topic. It is a development tool in the compose file, and must not be
+exposed anywhere shared.
 
 ### 🟡 Elasticsearch security disabled
 
@@ -365,13 +587,31 @@ empty module.
 - **Cost:** no visibility into rate-limit consumption, ingest lag, or query latency.
 - **Fix in v6:** OpenTelemetry, Prometheus, Grafana, Loki, Tempo.
 
-### 🟡 Ingest has no graceful shutdown
+### 🟢 ~~Ingest has no graceful shutdown~~ — REPAID (v3, 2026-09-17)
 
-Ctrl-C during ingestion drops whatever is in flight. There is no transaction spanning
-the store-and-index pair, so Postgres can hold a record that Elasticsearch does not.
+Two halves, because the entry was really two problems.
 
-- **Cost:** search results can silently lag storage after an abrupt stop.
-- **Fix in v3:** drain on shutdown; a reconciliation job to reindex from Postgres.
+**Stopping cleanly.** The Kafka consumer now finishes the batch already in hand
+when a stop is asked for, within a bounded grace period
+(`CORTEX_SHUTDOWN_GRACE`, 30s), and commits it. Ctrl-C used to abandon a record
+mid-write — stored in Postgres, not yet indexed — and replay the whole batch on
+the next start.
+
+**Noticing when the stores disagree.** Ingest tolerates a failed index write on
+purpose: losing the finding would be worse than it being briefly unsearchable.
+That tolerance used to end at a log line, and the index stayed wrong until
+someone ran a full reindex by hand. Rows now carry `indexed_at`, a partial index
+covers only those behind (normally none), and a reconciler settles them every
+`CORTEX_RECONCILE_INTERVAL` (5m). Verified live: 131 rows drifted during an
+upgrade and were repaired automatically — `search index reconciled: records 131,
+still_behind 0`.
+
+- **Bounded, not a rebuild:** only rows known to be behind are read, so
+  repairing one document does not mean rewriting 500,000.
+- **`task reindex` still exists** for a mapping change or drift that predates
+  the column.
+- **What remains:** Neo4j has no equivalent marker, so a failed graph link is
+  still only a log line.
 
 ### 🟢 Elasticsearch cluster runs yellow
 
@@ -397,4 +637,8 @@ Not debt — planned roadmap work, listed so the gap between the docs and realit
   (`DECK_TRANSPORT=grpc` still bypasses it for debugging). This matters because
   auth, rate limiting and metering all land at the edge in v4; a client that
   skips the gateway would skip all of them.
-- **gRPC streaming for the live feed** — `deck` polls; v3.
+- ~~**gRPC streaming for the live feed**~~ — **built in v3**: cortex broadcasts each
+  stored finding over `StreamFindings`, nexus relays it as SSE at `/stream`, and `deck`
+  refreshes on arrival instead of on its timer. The timer stays as the fallback. What
+  remains: nothing replays findings missed while disconnected, and the stream is
+  unauthenticated like the rest of the API (v4).

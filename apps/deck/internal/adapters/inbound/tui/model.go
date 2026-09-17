@@ -57,6 +57,12 @@ func (t Tab) Short() string {
 	}
 }
 
+// FindingStreamer is the live feed (consumer-side interface). Optional: with
+// no stream, deck refreshes on its timer exactly as it always has.
+type FindingStreamer interface {
+	StreamFindings(ctx context.Context) (<-chan model.Vulnerability, error)
+}
+
 // Searcher loads the feed a page at a time (consumer-side interface).
 type Searcher interface {
 	// Handle loads the first page. An empty query is the live feed; malware
@@ -97,6 +103,9 @@ type Options struct {
 	Details      VulnerabilityLoader
 	Repositories RepositoryManager
 	Findings     RepositoryFindingsLoader
+	// Stream, when set, pushes findings as they are ingested instead of
+	// waiting for the next refresh.
+	Stream FindingStreamer
 }
 
 // RepositoryFindingsLoader lists the vulnerabilities one repository has
@@ -107,6 +116,15 @@ type RepositoryFindingsLoader interface {
 
 // Model is the Bubble Tea state.
 type Model struct {
+	// live is the channel the stream delivers on, nil when there is none.
+	// liveOn says the feed is connected, which the header shows: "live" and
+	// "polling" are different enough that a reader should be told which.
+	live   <-chan model.Vulnerability
+	liveOn bool
+	// livePending is a stream-triggered refresh already scheduled, so a burst
+	// of arrivals collapses into one.
+	livePending bool
+
 	search   Searcher
 	explorer BlastRadiusExplorer
 	opts     Options
@@ -115,6 +133,20 @@ type Model struct {
 	feed   model.Feed
 	cursor int
 	radius model.BlastRadius
+
+	// rows is the feed as the list draws it, with each run of findings from
+	// one publisher folded to a single header. The cursor indexes this, not
+	// the feed: a closed fold is one row standing for two hundred findings.
+	rows []model.FeedRow
+	// folds holds the signatures the reader has opened. Keeping it here
+	// rather than in the feed means a refresh — which replaces the feed
+	// wholesale — leaves open runs open.
+	folds map[string]bool
+	// foldGen counts fold changes, and flowed is the feed state rows was
+	// last built from. Grouping walks every loaded finding, so it runs when
+	// something has actually changed rather than on every keystroke.
+	foldGen int
+	flowed  flowKey
 
 	// offset is the first feed row on screen; graphOffset the first tree
 	// line; detailOffset the first details line. All are kept in range by
@@ -229,9 +261,32 @@ type detailMsg struct {
 	err error
 }
 
-// tickMsg drives the polling refresh. The feed polls because v2 has no
-// streaming transport yet; v3's Kafka pipeline is what makes it push.
+// tickMsg drives the polling refresh. With a live feed connected this is a
+// safety net rather than the mechanism: it catches anything that arrived while
+// the stream was down, and keeps the feed moving if it never connects at all.
 type tickMsg time.Time
+
+// streamMsg says a finding was ingested just now. It carries the finding, but
+// the feed is not rebuilt from it: what the list shows is what the query
+// returns, and reproducing the query's ordering, filtering and version
+// verdicts here would be a second implementation of it, free to disagree.
+// The arrival is the signal; the refresh is still the answer.
+type streamMsg struct{ v model.Vulnerability }
+
+// streamEndedMsg says the live feed closed, or never opened. deck keeps
+// polling either way.
+type streamEndedMsg struct{}
+
+// streamOpenedMsg carries the connected feed.
+type streamOpenedMsg struct{ updates <-chan model.Vulnerability }
+
+// streamDebounce is the shortest gap between two stream-triggered refreshes.
+// A backfill lands thousands of findings a second and no terminal needs — or
+// survives — a refresh per finding.
+const streamDebounce = 2 * time.Second
+
+// streamRefreshMsg fires when a debounced refresh is due.
+type streamRefreshMsg time.Time
 
 // spinnerMsg advances the working indicator. It is a separate, much faster
 // timer than tickMsg, and it only re-arms while something is in flight — an
@@ -306,14 +361,90 @@ func (m Model) tick() tea.Cmd {
 }
 
 // Init starts the first load, the polling timer, and the spinner.
-func (m Model) Init() tea.Cmd { return tea.Batch(m.fresh(), m.tick(), m.spin()) }
+func (m Model) Init() tea.Cmd {
+	cmds := []tea.Cmd{m.fresh(), m.tick(), m.spin()}
+	if m.opts.Stream != nil {
+		cmds = append(cmds, m.connectStream())
+	}
+	return tea.Batch(cmds...)
+}
 
-// Selected returns the vulnerability under the cursor, if any.
+// connectStream opens the live feed. Failing to connect is not an error the
+// user needs to see: deck falls back to the timer it has always used.
+func (m Model) connectStream() tea.Cmd {
+	stream := m.opts.Stream
+	return func() tea.Msg {
+		updates, err := stream.StreamFindings(context.Background())
+		if err != nil {
+			return streamEndedMsg{}
+		}
+		return streamOpenedMsg{updates: updates}
+	}
+}
+
+// awaitFinding blocks on the live feed until something arrives or it closes.
+func awaitFinding(updates <-chan model.Vulnerability) tea.Cmd {
+	return func() tea.Msg {
+		v, ok := <-updates
+		if !ok {
+			return streamEndedMsg{}
+		}
+		return streamMsg{v: v}
+	}
+}
+
+// scheduleStreamRefresh coalesces a burst of arrivals into one refresh.
+func scheduleStreamRefresh() tea.Cmd {
+	return tea.Tick(streamDebounce, func(t time.Time) tea.Msg { return streamRefreshMsg(t) })
+}
+
+// flowKey fingerprints the state rows was built from.
+type flowKey struct {
+	hits    int
+	updated time.Time
+	folds   int
+}
+
+// reflow rebuilds the folded row list when the feed or the folds have moved.
+// It is called after every message, so the rows on screen can never describe
+// a feed that has since been replaced — which would put the cursor on a
+// different finding than the one under it.
+func (m Model) reflow() Model {
+	key := flowKey{hits: len(m.feed.Hits), updated: m.feed.UpdatedAt, folds: m.foldGen}
+	if m.rows != nil && key == m.flowed {
+		return m
+	}
+	m.rows, m.flowed = m.feed.Rows(m.folds), key
+	return m
+}
+
+// toggleFold opens or closes the run under the cursor.
+func (m Model) toggleFold(b *model.Batch) Model {
+	if m.folds == nil {
+		m.folds = map[string]bool{}
+	}
+	m.folds[b.Signature] = !m.folds[b.Signature]
+	m.foldGen++
+	return m
+}
+
+// Selected returns the vulnerability under the cursor, if any. A fold's
+// header is not a finding, so it selects nothing: there is no single record
+// for two hundred of them to open.
 func (m Model) Selected() (model.Vulnerability, bool) {
-	if m.cursor < 0 || m.cursor >= len(m.feed.Hits) {
+	row, ok := m.row()
+	if !ok || row.IsBatch() {
 		return model.Vulnerability{}, false
 	}
-	return m.feed.Hits[m.cursor].Vulnerability, true
+	return row.Vulnerability, true
+}
+
+// row returns the display row under the cursor, if any.
+func (m Model) row() (model.FeedRow, bool) {
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return model.FeedRow{}, false
+	}
+	return m.rows[m.cursor], true
 }
 
 // open shows a finding in the Details tab and starts loading both its full

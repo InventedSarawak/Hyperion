@@ -44,8 +44,12 @@ func (p PackageRef) IsZero() bool { return p.Name == "" && p.Ecosystem == Ecosys
 
 // Key is the version-independent identity, e.g. "npm:lodash". Two references
 // with the same key point at the same library node in the graph.
+//
+// The name is normalized per registry, so a manifest and an advisory that spell
+// one package differently still meet. Name keeps the original spelling, which
+// is what a reader should see.
 func (p PackageRef) Key() string {
-	return fmt.Sprintf("%s:%s", p.Ecosystem, p.Name)
+	return fmt.Sprintf("%s:%s", p.Ecosystem, NormalizeName(p.Ecosystem, p.Name))
 }
 
 // String renders the reference for logs and display, version included.

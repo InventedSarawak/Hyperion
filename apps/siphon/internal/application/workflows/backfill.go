@@ -83,18 +83,33 @@ func (b *Backfill) runSource(ctx context.Context, source ports.Backfiller, from 
 			if sig.Validate() != nil {
 				continue
 			}
-			evt := events.NewSignalDiscovered(kind, sig, discoveredAt, "")
+			// Marked historical: cortex stores it exactly as it would a polled
+			// event, and does not alert on it. Without this, a ten-year load
+			// fires a subscription for every advisory since 2016.
+			evt := events.NewSignalDiscovered(kind, sig, discoveredAt, "").AsHistorical()
 			if err := b.publisher.Publish(ctx, evt); err != nil {
 				return publishError{fmt.Errorf("backfill %s: publish %s: %w", kind, sig.CVEID, err)}
 			}
 			published++
+			b.log.Debug("published", "source", kind.String(), "id", sig.CVEID,
+				"kind", string(sig.Kind), "packages", len(sig.AffectedPackages))
 			if b.progressEvery > 0 && published%b.progressEvery == 0 {
 				b.log.Info("backfill progress", "source", kind.String(), "published", published)
 			}
 		}
 		return nil
 	})
-	return published, err
+	if err != nil {
+		return published, err
+	}
+
+	// The source is only reported as backfilled once the broker holds every
+	// event: a backfill runs for half an hour and is not repeated, so an
+	// unflushed tail would be history quietly missing from the store.
+	if err := b.publisher.Flush(ctx); err != nil {
+		return published, publishError{fmt.Errorf("backfill %s: flush: %w", kind, err)}
+	}
+	return published, nil
 }
 
 // publishError marks a failure to hand an event downstream, as opposed to a
