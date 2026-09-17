@@ -84,6 +84,10 @@ func (e SignalDiscovered) Fingerprint() string {
 
 	s := e.Signal
 	write(e.SignalID, e.Source.String(), s.CVEID, string(s.Kind), s.Title, s.Description)
+	// A retraction must change the fingerprint: the record is otherwise
+	// identical to the one already published, and dedupe would suppress the
+	// very observation that says it is no longer a finding.
+	write(strconv.FormatBool(s.Withdrawn))
 	write(sorted(s.Aliases)...)
 	write(sorted(s.References)...)
 	write(s.PublishedAt.UTC().Format(time.RFC3339Nano), s.ModifiedAt.UTC().Format(time.RFC3339Nano))

@@ -49,6 +49,10 @@ import (
 func main() {
 	reindex := flag.Bool("reindex", false,
 		"rebuild the search index from Postgres, then exit (after a mapping change, or to repair drift)")
+	purgeWithdrawn := flag.Bool("purge-withdrawn", false,
+		"remove findings whose source has retracted them (rejected CVE ids stored before the check existed), then exit")
+	dryRun := flag.Bool("dry-run", false,
+		"with -purge-withdrawn: report what would be removed, and remove nothing")
 	swapIndex := flag.Bool("swap-index", false,
 		"rebuild the search index under the current mapping alongside the live one, then move the alias onto it, then exit")
 	flag.Parse()
@@ -125,6 +129,15 @@ func main() {
 	blast := queries.NewCalculateBlastRadius(graph, cfg.BlastRadiusMaxDepth).WithResolver(repo)
 	exposure := queries.NewRepositoryExposure(graph, repo, cfg.BlastRadiusMaxDepth)
 	listWatchlist.WithExposure(exposure)
+
+	if *purgeWithdrawn {
+		purge := commands.NewPurgeWithdrawn(repo, ingest)
+		if *dryRun {
+			purge = purge.DryRun()
+		}
+		runPurgeWithdrawn(ctx, logger, purge, *dryRun)
+		return
+	}
 
 	if *swapIndex {
 		runSwapIndex(ctx, logger, index)
@@ -439,6 +452,27 @@ func buildDedupeStore(ctx context.Context, logger *slog.Logger, cfg config.Confi
 	}
 	logger.Info("redis ready", "addr", cfg.RedisAddr)
 	return store, func() { _ = store.Close() }
+}
+
+// runPurgeWithdrawn removes retracted findings and exits non-zero on failure,
+// so it is usable from a script.
+func runPurgeWithdrawn(ctx context.Context, logger *slog.Logger, purge *commands.PurgeWithdrawn, dryRun bool) {
+	what := "removing findings whose source has retracted them"
+	if dryRun {
+		what = "listing findings whose source has retracted them (removing nothing)"
+	}
+	logger.Info(what)
+
+	removed, err := purge.Run(ctx)
+	if err != nil {
+		logger.Error("purge failed", "found", removed, "error", err)
+		os.Exit(1)
+	}
+	if dryRun {
+		logger.Info("dry run complete; nothing was removed", "would_remove", removed)
+		return
+	}
+	logger.Info("purge complete", "removed", removed)
 }
 
 // runSwapIndex rebuilds the index under the current mapping and moves the alias.

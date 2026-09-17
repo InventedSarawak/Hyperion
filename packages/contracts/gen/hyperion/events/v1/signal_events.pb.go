@@ -111,7 +111,16 @@ type SignalDiscovered struct {
 	// now: a backfill publishes the same events polling would, which is what
 	// makes them merge identically, but a ten-year load is not ten years of
 	// news. Consumers store it the same and skip telling anyone about it.
-	Historical    bool `protobuf:"varint,6,opt,name=historical,proto3" json:"historical,omitempty"`
+	Historical bool `protobuf:"varint,6,opt,name=historical,proto3" json:"historical,omitempty"`
+	// withdrawn marks a finding the upstream source has retracted: an NVD
+	// record whose vulnStatus is Rejected, a CVE id that was assigned and then
+	// disowned as a duplicate, disputed, or never a vulnerability at all.
+	//
+	// It is reported rather than silently skipped, because a CVE is often
+	// rejected *after* it was published and stored. A consumer that only ever
+	// hears about live findings has no way to learn that one it already holds
+	// has stopped being a finding.
+	Withdrawn     bool `protobuf:"varint,7,opt,name=withdrawn,proto3" json:"withdrawn,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -184,6 +193,13 @@ func (x *SignalDiscovered) GetRawRef() string {
 func (x *SignalDiscovered) GetHistorical() bool {
 	if x != nil {
 		return x.Historical
+	}
+	return false
+}
+
+func (x *SignalDiscovered) GetWithdrawn() bool {
+	if x != nil {
+		return x.Withdrawn
 	}
 	return false
 }
@@ -287,7 +303,7 @@ var File_hyperion_events_v1_signal_events_proto protoreflect.FileDescriptor
 
 const file_hyperion_events_v1_signal_events_proto_rawDesc = "" +
 	"\n" +
-	"&hyperion/events/v1/signal_events.proto\x12\x12hyperion.events.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a hyperion/common/v1/package.proto\x1a#hyperion/common/v1/repository.proto\x1a&hyperion/common/v1/vulnerability.proto\"\xaa\x02\n" +
+	"&hyperion/events/v1/signal_events.proto\x12\x12hyperion.events.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a hyperion/common/v1/package.proto\x1a#hyperion/common/v1/repository.proto\x1a&hyperion/common/v1/vulnerability.proto\"\xc8\x02\n" +
 	"\x10SignalDiscovered\x12\x1b\n" +
 	"\tsignal_id\x18\x01 \x01(\tR\bsignalId\x126\n" +
 	"\x06source\x18\x02 \x01(\x0e2\x1e.hyperion.events.v1.SourceKindR\x06source\x12G\n" +
@@ -296,7 +312,8 @@ const file_hyperion_events_v1_signal_events_proto_rawDesc = "" +
 	"\araw_ref\x18\x05 \x01(\tR\x06rawRef\x12\x1e\n" +
 	"\n" +
 	"historical\x18\x06 \x01(\bR\n" +
-	"historical\"\xee\x02\n" +
+	"historical\x12\x1c\n" +
+	"\twithdrawn\x18\a \x01(\bR\twithdrawn\"\xee\x02\n" +
 	"\x12DependencyObserved\x12%\n" +
 	"\x0eobservation_id\x18\x01 \x01(\tR\robservationId\x12>\n" +
 	"\n" +

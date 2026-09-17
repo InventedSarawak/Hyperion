@@ -57,6 +57,11 @@ type SourceSignal struct {
 	References  []string
 	PublishedAt time.Time
 	ModifiedAt  time.Time
+	// Withdrawn marks a finding the source has retracted — an NVD record whose
+	// vulnStatus is Rejected. Such a record is still published: a CVE is often
+	// rejected after it was stored, and the only way for cortex to learn that
+	// is to be told.
+	Withdrawn bool
 	// AffectedPackages are the libraries the source names as vulnerable.
 	// Only advisory-shaped feeds (GitHub Advisory, OSV) supply these; they
 	// are what lets cortex connect a CVE into the dependency graph, so a

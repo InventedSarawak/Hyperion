@@ -224,6 +224,26 @@ together. A repository requiring that package previously reached one of them.
   catch — the first migration failed on exactly that and disabled the graph
   until it was fixed.
 
+### 🔴 Findings disappear from the store without explanation
+
+Between two counts about eleven hours apart, on a running stack, **9,239 rows
+vanished** from `vulnerabilities` (548,097 -> 539,892 total, against ~1,000 new
+rows arriving). Almost all of them were rejected CVEs, which is a suspicious
+skew rather than a comfort.
+
+- **Not merges:** sampled ids (`CVE-2019-4798`, `CVE-2016-6339`) are gone
+  entirely — not present as canonical records and not present in
+  `finding_aliases`, which a merge would have left behind.
+- **Not the withdrawal code:** the running binary predates it by an hour.
+- **Narrowed to** the retire path in `IngestSignal.store` — `Upsert(merged,
+retired...)` deletes the retired rows — but that path is supposed to carry
+  the retired ids forward as aliases, and here it did not.
+- **Why it matters:** if a row can be deleted without its id surviving as an
+  alias, the same mechanism can drop findings that are not rejected. Nothing
+  logs it, so there is no record of what went.
+- **Next:** log every retirement with the ids involved, and reproduce against
+  a throwaway schema by ingesting two observations that share an id.
+
 ### 🟢 ~~Descriptions and scores are last-writer-wins~~ — REPAID (v3, 2026-09-17)
 
 Both are chosen by ranking the feeds rather than by which reported most

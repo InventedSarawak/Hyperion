@@ -375,3 +375,18 @@ func (r *Repo) MarkIndexed(ctx context.Context, at time.Time, ids ...string) err
 	}
 	return nil
 }
+
+// deleteSQL removes findings by canonical id. Aliases go with them: the
+// finding_aliases rows are ON DELETE CASCADE.
+const deleteSQL = `DELETE FROM vulnerabilities WHERE cve_id = ANY($1);`
+
+// Delete removes the findings known by these ids.
+func (r *Repo) Delete(ctx context.Context, ids ...string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if _, err := r.pool.Exec(ctx, deleteSQL, ids); err != nil {
+		return fmt.Errorf("postgres: delete %v: %w", ids, err)
+	}
+	return nil
+}

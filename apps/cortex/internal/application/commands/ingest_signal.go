@@ -24,6 +24,9 @@ type Observation struct {
 	// Historical marks a replay of the past. It is stored exactly as anything
 	// else is, and nobody is told about it.
 	Historical bool
+	// Withdrawn marks a finding the source has retracted. It is not stored —
+	// and if it was stored before it was retracted, it is removed.
+	Withdrawn bool
 }
 
 // IngestSignal stores an incoming vulnerability, reconciling it with any
@@ -84,6 +87,13 @@ func (c *IngestSignal) Handle(ctx context.Context, obs Observation) error {
 	incoming := obs.Vulnerability.Normalized()
 	if err := incoming.Validate(); err != nil {
 		return err
+	}
+
+	// A retracted finding is not a finding. Storing it would leave a record
+	// with no score, no severity and a "Rejected reason:" description sitting
+	// in the feed looking like everything else.
+	if obs.Withdrawn {
+		return c.withdraw(ctx, incoming)
 	}
 
 	// Another worker can file a report of the same finding under a different
@@ -215,4 +225,40 @@ func (c *IngestSignal) store(ctx context.Context, incoming model.Vulnerability) 
 		return model.Vulnerability{}, nil, fmt.Errorf("ingest: upsert %s: %w", merged.CVEID, err)
 	}
 	return merged, retired, nil
+}
+
+// withdraw removes a finding the source has retracted, from everywhere it was
+// put.
+//
+// Removed rather than flagged: a rejected CVE id is not a finding whose
+// severity is unknown, it is an id that was assigned and then disowned, and
+// keeping it would mean every consumer has to know to filter it out. The id
+// itself is not blocked — if it is ever reassigned and published properly, the
+// next observation stores it like any other.
+func (c *IngestSignal) withdraw(ctx context.Context, v model.Vulnerability) error {
+	ids := v.IDs()
+
+	// Postgres first: it is the store of record, and the others are derived
+	// from it. If this fails, nothing else should have happened.
+	if err := c.repo.Delete(ctx, ids...); err != nil {
+		return fmt.Errorf("withdraw %s: %w", v.CVEID, err)
+	}
+
+	if c.index != nil {
+		for _, id := range ids {
+			if err := c.index.Delete(ctx, id); err != nil {
+				c.log.Warn("withdrawn finding is still in the search index",
+					"cve", id, "error", err)
+			}
+		}
+	}
+	if c.graph != nil {
+		if err := c.graph.RemoveVulnerabilities(ctx, ids); err != nil && !errors.Is(err, ports.ErrGraphUnavailable) {
+			c.log.Warn("withdrawn finding is still in the dependency graph",
+				"cve", v.CVEID, "error", err)
+		}
+	}
+
+	c.log.Debug("withdrew a retracted finding", "cve", v.CVEID, "ids", ids)
+	return nil
 }

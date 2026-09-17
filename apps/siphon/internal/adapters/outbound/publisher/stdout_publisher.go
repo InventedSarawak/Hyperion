@@ -65,6 +65,7 @@ func toProto(evt events.SignalDiscovered) *eventsv1.SignalDiscovered {
 		DiscoveredAt:  toTimestamp(evt.DiscoveredAt),
 		RawRef:        evt.RawRef,
 		Historical:    evt.Historical,
+		Withdrawn:     evt.Signal.Withdrawn,
 	}
 }
 

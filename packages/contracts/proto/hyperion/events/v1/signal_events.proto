@@ -36,6 +36,15 @@ message SignalDiscovered {
   // makes them merge identically, but a ten-year load is not ten years of
   // news. Consumers store it the same and skip telling anyone about it.
   bool historical = 6;
+  // withdrawn marks a finding the upstream source has retracted: an NVD
+  // record whose vulnStatus is Rejected, a CVE id that was assigned and then
+  // disowned as a duplicate, disputed, or never a vulnerability at all.
+  //
+  // It is reported rather than silently skipped, because a CVE is often
+  // rejected *after* it was published and stored. A consumer that only ever
+  // hears about live findings has no way to learn that one it already holds
+  // has stopped being a finding.
+  bool withdrawn = 7;
 }
 
 // DependencyObserved is emitted by siphon when it reads a repository's

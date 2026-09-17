@@ -408,9 +408,13 @@ type apiResponse struct {
 }
 
 type nvdCVE struct {
-	ID           string         `json:"id"`
-	Published    string         `json:"published"`
-	LastModified string         `json:"lastModified"`
+	ID           string `json:"id"`
+	Published    string `json:"published"`
+	LastModified string `json:"lastModified"`
+	// VulnStatus is where NVD is with the record: Received, Awaiting
+	// Analysis, Undergoing Analysis, Analyzed, Modified, Deferred — or
+	// Rejected, which means the id was assigned and then disowned.
+	VulnStatus   string         `json:"vulnStatus"`
 	Descriptions []nvdLangValue `json:"descriptions"`
 	Metrics      nvdMetrics     `json:"metrics"`
 	References   []nvdReference `json:"references"`
@@ -456,7 +460,20 @@ func toSourceSignal(cve nvdCVE) model.SourceSignal {
 		References:  toReferences(cve.References),
 		PublishedAt: parseNVDTime(cve.Published),
 		ModifiedAt:  parseNVDTime(cve.LastModified),
+		Withdrawn:   isRejected(cve.VulnStatus),
 	}
+}
+
+// statusRejected is the vulnStatus NVD gives an id that was assigned and then
+// disowned — a duplicate, a dispute, or something that was never a
+// vulnerability. Such a record keeps its CVE id and its dates, and its
+// description is replaced with a "Rejected reason:" note, so nothing else
+// about it says it is not a finding.
+const statusRejected = "Rejected"
+
+// isRejected reports whether NVD has retracted the record.
+func isRejected(status string) bool {
+	return strings.EqualFold(strings.TrimSpace(status), statusRejected)
 }
 
 func englishDescription(ds []nvdLangValue) string {

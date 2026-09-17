@@ -108,6 +108,12 @@ tasks:
         grpcurl -plaintext -d "{\"cve_id\":\"{{.CLI_ARGS}}\",\"max_depth\":5}" \
           localhost:50051 hyperion.intelligence.v1.IntelligenceService/GetBlastRadius
 
+  purge:withdrawn:
+    desc: 'Remove findings whose source retracted them. Look first: task purge:withdrawn -- -dry-run'
+    dir: apps/cortex
+    cmds:
+      - go run ./cmd/server -purge-withdrawn {{.CLI_ARGS}}
+
   index:swap:
     desc: Rebuild the search index under the current mapping and move the alias onto it (no downtime)
     dir: apps/cortex

@@ -224,6 +224,7 @@ func toObservation(msg *eventsv1.SignalDiscovered) commands.Observation {
 	return commands.Observation{
 		Vulnerability: toDomain(msg),
 		Historical:    msg.GetHistorical(),
+		Withdrawn:     msg.GetWithdrawn(),
 	}
 }
 

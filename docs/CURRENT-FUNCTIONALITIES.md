@@ -172,6 +172,21 @@ record and a polled one merge into each other — but skips alerting and the liv
 them. Loading ten years of advisories is not ten years of news, and a subscription
 matching them would otherwise fire thousands of times for findings long since fixed.
 
+**Retracted findings are not stored.** A CVE id can be assigned and then disowned — a
+duplicate, a dispute, or something that was never a vulnerability. NVD marks these
+`vulnStatus: Rejected` and replaces the description with a "Rejected reason:" note, so
+nothing else about the record says it is not a finding: it keeps its id, its dates and its
+place in the feed, with no score and no severity.
+
+siphon reads that status and marks the event `withdrawn`; cortex removes the finding from
+Postgres, the search index and the graph rather than storing it. The retraction is
+_published_ rather than silently skipped, because a CVE is often rejected **after** it was
+stored — a consumer that only hears about live findings has no way to learn that one it
+already holds has stopped being one.
+
+`task purge:withdrawn` removes those stored before this check existed;
+`task purge:withdrawn -- -dry-run` lists them without removing anything.
+
 ### 1.3 Record identity
 
 **What it does.** Keeps every id a finding is known by, and files it under one of them so

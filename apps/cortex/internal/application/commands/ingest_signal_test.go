@@ -71,6 +71,14 @@ func (m *memRepo) GetByID(ctx context.Context, id string) (model.Vulnerability, 
 
 func (m *memRepo) Count(_ context.Context) (int, error) { return len(m.store), nil }
 
+// Delete removes findings by any id they are stored under.
+func (m *memRepo) Delete(_ context.Context, ids ...string) error {
+	for _, id := range ids {
+		delete(m.store, id)
+	}
+	return nil
+}
+
 // Scan returns records in CVE-id order after afterCVE, like the real repo.
 func (m *memRepo) Scan(_ context.Context, afterCVE string, limit int) ([]model.Vulnerability, error) {
 	ids := make([]string, 0, len(m.store))
@@ -118,8 +126,27 @@ func (m *memIndex) IDs(context.Context) ([]string, error) {
 	return ids, nil
 }
 
+// Delete records the call and actually removes the document. Recording alone
+// made IDs() keep reporting documents the code under test had deleted, which
+// is a fake that answers differently from the thing it stands in for.
 func (m *memIndex) Delete(_ context.Context, id string) error {
 	m.deleted = append(m.deleted, id)
+
+	kept := m.indexed[:0]
+	for _, v := range m.indexed {
+		if v.CVEID != id {
+			kept = append(kept, v)
+		}
+	}
+	m.indexed = kept
+
+	remaining := m.extra[:0]
+	for _, e := range m.extra {
+		if e != id {
+			remaining = append(remaining, e)
+		}
+	}
+	m.extra = remaining
 	return nil
 }
 
@@ -434,4 +461,81 @@ var _ = Describe("IngestSignal and replayed history", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(alerter.seen).To(ConsistOf("CVE-2017-5638"))
 	})
+})
+
+var _ = Describe("IngestSignal and retracted findings", func() {
+	ctx := context.Background()
+
+	It("does not store a finding the source has retracted", func() {
+		repo := newMemRepo()
+
+		err := commands.NewIngestSignal(repo, &memIndex{}, nil, nil).Handle(ctx, commands.Observation{
+			Vulnerability: model.Vulnerability{
+				CVEID:       "CVE-2022-35253",
+				Description: "Rejected reason: DO NOT USE THIS CANDIDATE NUMBER.",
+				Sources:     []string{"nvd"},
+			},
+			Withdrawn: true,
+		})
+
+		Expect(err).ToNot(HaveOccurred())
+		count, _ := repo.Count(ctx)
+		Expect(count).To(BeZero())
+	})
+
+	It("removes one that was stored before it was retracted", func() {
+		repo := newMemRepo()
+		ingest := commands.NewIngestSignal(repo, &memIndex{}, nil, nil)
+		stored := model.Vulnerability{CVEID: "CVE-2022-35253", Description: "a real finding", Sources: []string{"nvd"}}
+
+		Expect(ingest.Handle(ctx, observed(stored))).To(Succeed())
+		count, _ := repo.Count(ctx)
+		Expect(count).To(Equal(1))
+
+		// A CVE is often rejected after it was published and stored, which is
+		// why the retraction is published rather than silently skipped.
+		Expect(ingest.Handle(ctx, commands.Observation{Vulnerability: stored, Withdrawn: true})).To(Succeed())
+
+		count, _ = repo.Count(ctx)
+		Expect(count).To(BeZero())
+	})
+
+	It("takes the search document with it", func() {
+		repo := newMemRepo()
+		index := &memIndex{}
+		ingest := commands.NewIngestSignal(repo, index, nil, nil)
+		stored := model.Vulnerability{CVEID: "CVE-2022-35253", Sources: []string{"nvd"}}
+
+		Expect(ingest.Handle(ctx, observed(stored))).To(Succeed())
+		Expect(ingest.Handle(ctx, commands.Observation{Vulnerability: stored, Withdrawn: true})).To(Succeed())
+
+		ids, err := index.IDs(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(ids).ToNot(ContainElement("CVE-2022-35253"))
+	})
+
+	It("stores the id again if it is ever published properly", func() {
+		repo := newMemRepo()
+		ingest := commands.NewIngestSignal(repo, &memIndex{}, nil, nil)
+		id := model.Vulnerability{CVEID: "CVE-2022-35253", Sources: []string{"nvd"}}
+
+		Expect(ingest.Handle(ctx, commands.Observation{Vulnerability: id, Withdrawn: true})).To(Succeed())
+		// Withdrawing removes the record; it does not blacklist the id.
+		Expect(ingest.Handle(ctx, observed(id))).To(Succeed())
+
+		count, _ := repo.Count(ctx)
+		Expect(count).To(Equal(1))
+	})
+})
+
+var _ = Describe("recognising a retraction in a stored record", func() {
+	DescribeTable("says whether a description marks the finding as disowned",
+		func(description string, retracted bool) {
+			Expect(commands.IsRetracted(model.Vulnerability{Description: description})).To(Equal(retracted))
+		},
+		Entry("NVD's current wording", "Rejected reason: DO NOT USE THIS CANDIDATE NUMBER.", true),
+		Entry("NVD's older marker", "** REJECT ** DO NOT USE THIS CANDIDATE NUMBER.", true),
+		Entry("an ordinary advisory", "A flaw in log4j allows remote code execution.", false),
+		Entry("no description at all", "", false),
+	)
 })
