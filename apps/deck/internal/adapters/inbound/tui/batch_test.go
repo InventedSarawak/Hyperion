@@ -114,3 +114,60 @@ var _ = Describe("Folding a publisher's batch in the feed", func() {
 		}
 	})
 })
+
+var _ = Describe("Filling the panel", func() {
+	// A page is a count of findings; what fills the panel is rows. The two
+	// come apart when a run folds two hundred findings into one row, and
+	// again whenever the terminal is taller than a page. Either way the panel
+	// used to sit half empty until the reader scrolled, which reads as the
+	// list having stopped.
+
+	It("fetches more when a page is shorter than the panel", func() {
+		// 10 findings, no folding, in a body 24 rows deep.
+		search := &stubSearch{feed: manyHits(400)}
+		m := tui.New(search, &stubExplorer{}, tui.Options{PageSize: 10, Endpoint: "nexus"})
+		m, _ = apply(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+		m = settle(m, m.Init())
+
+		Expect(search.moreCalls).To(BeNumerically(">", 0))
+		Expect(len(m.LoadedIDs())).To(BeNumerically(">=", 24), "the body is 24 rows deep")
+		Expect(stripANSI(m.View())).To(ContainSubstring(
+			fmt.Sprintf("— %d of 400", len(m.LoadedIDs()))))
+	})
+
+	It("keeps fetching while a folded run leaves the panel empty", func() {
+		// One kernel run folds to a single row however much of it arrives,
+		// so filling the panel means reading past the whole run.
+		feed := kernelFeed(300)
+		feed.Hits = append(feed.Hits, manyHits(300).Hits...)
+		search := &stubSearch{feed: feed}
+		m := tui.New(search, &stubExplorer{}, tui.Options{PageSize: 25, Endpoint: "nexus"})
+		m, _ = apply(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+		m = settle(m, m.Init())
+
+		view := stripANSI(m.View())
+		Expect(view).To(ContainSubstring("findings"))
+		Expect(len(m.LoadedIDs())).To(BeNumerically(">", 300),
+			"the run alone cannot fill the panel, so it has to be read past")
+	})
+
+	It("gives up rather than paging the whole corpus for one row", func() {
+		// Every finding belongs to one run, so no amount of reading will
+		// fill the panel. A short list beats paging half a million records.
+		search := &stubSearch{feed: kernelFeed(5000)}
+		m := tui.New(search, &stubExplorer{}, tui.Options{PageSize: 25, Endpoint: "nexus"})
+		m, _ = apply(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+		m = settle(m, m.Init())
+
+		Expect(len(m.LoadedIDs())).To(BeNumerically("<=", 25+5*200))
+	})
+
+	It("does not fetch when the page already fills the panel", func() {
+		search := &stubSearch{feed: manyHits(400)}
+		m := tui.New(search, &stubExplorer{}, tui.Options{PageSize: 200, Endpoint: "nexus"})
+		m, _ = apply(m, tea.WindowSizeMsg{Width: 120, Height: 40})
+		m = settle(m, m.Init())
+
+		Expect(search.moreCalls).To(Equal(0))
+	})
+})

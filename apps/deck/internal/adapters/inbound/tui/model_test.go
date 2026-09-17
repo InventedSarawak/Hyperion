@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -134,6 +136,38 @@ func deliver(m tui.Model, cmd tea.Cmd) tui.Model {
 		return m
 	}
 	m, _ = apply(m, msg)
+	return m
+}
+
+// settle delivers a command and keeps delivering whatever the model asks for
+// next, the way the Bubble Tea runtime does. deliver stops after one round,
+// which is enough for a single fetch but not for a chain — "the page arrived,
+// the panel is still short, fetch another" needs the follow-up commands run
+// too. Animation and timer messages are skipped: the spinner reschedules
+// itself every 100ms and would spin here forever.
+func settle(m tui.Model, cmd tea.Cmd) tui.Model {
+	GinkgoHelper()
+	timers := []reflect.Type{reflect.TypeOf(tui.SpinnerTick()), reflect.TypeOf(tui.PollTick())}
+	queue := []tea.Cmd{cmd}
+	for steps := 0; len(queue) > 0 && steps < 40; steps++ {
+		next := queue[0]
+		queue = queue[1:]
+		msg := runCmd(next)
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, inner := range batch {
+				queue = append(queue, tea.Cmd(inner))
+			}
+			continue
+		}
+		if msg == nil || slices.Contains(timers, reflect.TypeOf(msg)) {
+			continue
+		}
+		var out tea.Cmd
+		m, out = apply(m, msg)
+		if out != nil {
+			queue = append(queue, out)
+		}
+	}
 	return m
 }
 
@@ -895,8 +929,13 @@ var _ = Describe("Paging the feed", func() {
 
 var _ = Describe("Paging indicators", func() {
 	It("shows ↓ more at the bottom of a list that has more", func() {
+		// Height 26 makes the body exactly 10 rows, so the page fills it and
+		// nothing is fetched to top it up — see "Filling the panel" below.
 		search := &stubSearch{feed: manyHits(80)}
-		m := feedModel(search, "", 10) // 10 rows fit entirely on screen
+		m := tui.New(search, &stubExplorer{}, tui.Options{PageSize: 10, Endpoint: "nexus"})
+		m, _ = apply(m, tea.WindowSizeMsg{Width: 120, Height: 26})
+		m = deliver(m, m.Init())
+
 		Expect(stripANSI(m.View())).To(ContainSubstring("10 of 80  ·  ↓ more"))
 	})
 

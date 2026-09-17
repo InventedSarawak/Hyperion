@@ -147,6 +147,10 @@ type Model struct {
 	// something has actually changed rather than on every keystroke.
 	foldGen int
 	flowed  flowKey
+	// fills counts the pages fetched automatically to fill the panel for the
+	// current list, so a list that cannot fill it gives up instead of paging
+	// through the corpus.
+	fills int
 
 	// offset is the first feed row on screen; graphOffset the first tree
 	// line; detailOffset the first details line. All are kept in range by
@@ -329,8 +333,11 @@ func (m Model) fresh() tea.Cmd {
 }
 
 // more fetches the page after the last loaded one.
-func (m Model) more() tea.Cmd {
-	feed, size, search, generation := m.feed, m.opts.PageSize, m.search, m.generation
+func (m Model) more() tea.Cmd { return m.moreWith(m.opts.PageSize) }
+
+// moreWith fetches the following page at a given size.
+func (m Model) moreWith(size int) tea.Cmd {
+	feed, search, generation := m.feed, m.search, m.generation
 	return func() tea.Msg {
 		next, err := search.More(context.Background(), feed, size)
 		return moreMsg{feed: next, err: err, generation: generation}
@@ -423,9 +430,41 @@ func (m Model) toggleFold(b *model.Batch) Model {
 	if m.folds == nil {
 		m.folds = map[string]bool{}
 	}
-	m.folds[b.Signature] = !m.folds[b.Signature]
+	m.folds[b.Key] = !m.folds[b.Key]
 	m.foldGen++
 	return m
+}
+
+// maxAutoFill bounds the pages fetched to fill the panel for one list. A run
+// folded to a single row can leave the panel almost empty however much is
+// loaded, and paging the whole corpus looking for rows would be worse than a
+// short list.
+const maxAutoFill = 5
+
+// fillViewport asks for another page when the list on screen is shorter than
+// the panel holding it.
+//
+// A page is a count of findings, but what fills the panel is rows — and since
+// folding collapses a run of two hundred into one, a page can arrive and add
+// almost nothing to look at. The same gap opens without folding whenever the
+// terminal is taller than a page: 25 findings do not fill 34 rows. Both used
+// to leave a half-empty panel that only filled once the reader scrolled, which
+// reads as the list having stopped.
+//
+// It asks for a full-size page rather than the usual one: the reason it is
+// here at all is that findings are not converting into rows, so fetching them
+// a handful at a time would take several round trips to notice.
+func (m Model) fillViewport() (Model, tea.Cmd) {
+	if m.tab != TabFeed || m.loading || m.loadingMore || !m.feed.HasMore() {
+		return m, nil
+	}
+	// Before the first WindowSizeMsg there is no panel to fill yet.
+	if m.height <= 0 || len(m.rows) >= m.bodyRows() || m.fills >= maxAutoFill {
+		return m, nil
+	}
+	m.fills++
+	m.loadingMore = true
+	return m, tea.Batch(m.moreWith(maxPageSize), m.spin())
 }
 
 // Selected returns the vulnerability under the cursor, if any. A fold's

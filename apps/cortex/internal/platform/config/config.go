@@ -17,13 +17,17 @@ const (
 	DefaultDatabaseURL      = "postgres://hyperion:hyperion@localhost:5432/hyperion?sslmode=disable"
 	DefaultElasticsearchURL = "http://localhost:9200"
 	DefaultIndexName        = "hyperion-vulnerabilities"
-	DefaultGRPCAddr         = ":50051"
-	DefaultNeo4jURI         = "bolt://localhost:7687"
-	DefaultNeo4jUsername    = "neo4j"
-	DefaultNeo4jPassword    = "hyperion"
-	DefaultNeo4jDatabase    = "neo4j"
-	DefaultRedisAddr        = "localhost:6379"
-	DefaultSubscriptionIdx  = "hyperion-subscriptions"
+	// DefaultRelevanceFloor mirrors elasticsearch.DefaultRelevanceFloor,
+	// which carries the reasoning and the measurements. Config does not
+	// import the adapter — a spec holds the two together instead.
+	DefaultRelevanceFloor  = 0.15
+	DefaultGRPCAddr        = ":50051"
+	DefaultNeo4jURI        = "bolt://localhost:7687"
+	DefaultNeo4jUsername   = "neo4j"
+	DefaultNeo4jPassword   = "hyperion"
+	DefaultNeo4jDatabase   = "neo4j"
+	DefaultRedisAddr       = "localhost:6379"
+	DefaultSubscriptionIdx = "hyperion-subscriptions"
 	// DefaultConsumerGroup names cortex's ingest group on the signal topic.
 	DefaultConsumerGroup = "intel-indexer"
 	// DefaultDependencyGroup names cortex's group on the dependency topic.
@@ -35,9 +39,12 @@ type Config struct {
 	DatabaseURL      string
 	ElasticsearchURL string
 	IndexName        string
-	GRPCAddr         string
-	ServeGRPC        bool
-	ConsumeStdin     bool
+	// RelevanceFloor is the share of a query's best score a result must reach
+	// to be returned. 0 returns everything that matches at all.
+	RelevanceFloor float64
+	GRPCAddr       string
+	ServeGRPC      bool
+	ConsumeStdin   bool
 	// IngestWorkers is how many events are ingested concurrently. Each is
 	// I/O-bound, so this is what sets backfill throughput.
 	IngestWorkers int
@@ -128,6 +135,7 @@ func Load() Config {
 		DatabaseURL:         l.String("DATABASE_URL", DefaultDatabaseURL),
 		ElasticsearchURL:    l.String("ELASTICSEARCH_URL", DefaultElasticsearchURL),
 		IndexName:           l.String("INDEX_NAME", DefaultIndexName),
+		RelevanceFloor:      l.Float("RELEVANCE_FLOOR", DefaultRelevanceFloor),
 		GRPCAddr:            l.String("GRPC_ADDR", DefaultGRPCAddr),
 		ServeGRPC:           l.Bool("SERVE_GRPC", true),
 		ConsumeStdin:        l.Bool("CONSUME_STDIN", false),

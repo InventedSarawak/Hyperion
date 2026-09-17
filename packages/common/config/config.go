@@ -111,6 +111,15 @@ func (l *Loader) Bool(name string, def bool) bool {
 	return def
 }
 
+// Float reads a floating-point setting, falling back to def.
+func (l *Loader) Float(name string, def float64) float64 {
+	raw := l.record(name, strconv.FormatFloat(def, 'g', -1, 64), false)
+	if f, err := strconv.ParseFloat(strings.TrimSpace(raw), 64); err == nil {
+		return f
+	}
+	return def
+}
+
 // Duration reads a Go duration (30s, 10m, 1h), falling back to def.
 func (l *Loader) Duration(name string, def time.Duration) time.Duration {
 	raw := l.record(name, def.String(), false)

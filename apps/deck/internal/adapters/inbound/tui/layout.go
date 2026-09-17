@@ -36,10 +36,18 @@ const unbounded = 1 << 30
 // cursor off screen.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.update(msg)
-	if model, ok := next.(Model); ok {
-		return model.reflow().clampScroll(), cmd
+	model, ok := next.(Model)
+	if !ok {
+		return next, cmd
 	}
-	return next, cmd
+	model = model.reflow().clampScroll()
+	// Only now is the row count known, so this is the one place that can tell
+	// whether what was loaded actually fills the panel.
+	model, fill := model.fillViewport()
+	if fill == nil {
+		return model, cmd
+	}
+	return model, tea.Batch(cmd, fill)
 }
 
 // showBanner reports whether the logo fits alongside a usable list. It stays

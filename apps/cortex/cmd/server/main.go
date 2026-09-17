@@ -357,7 +357,7 @@ func buildDependencyGraph(ctx context.Context, logger *slog.Logger, cfg config.C
 // buildSearchIndex returns the Elasticsearch adapter when the cluster answers,
 // otherwise a no-op index so ingestion still works without search.
 func buildSearchIndex(ctx context.Context, logger *slog.Logger, cfg config.Config) ports.SearchIndex {
-	es := elasticsearch.New(nil, cfg.ElasticsearchURL, cfg.IndexName)
+	es := elasticsearch.New(nil, cfg.ElasticsearchURL, cfg.IndexName).WithRelevanceFloor(cfg.RelevanceFloor)
 	if err := es.Ready(ctx); err != nil {
 		logger.Warn("elasticsearch unavailable; search disabled, ingestion continues",
 			"url", cfg.ElasticsearchURL, "error", err)

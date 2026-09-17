@@ -26,7 +26,30 @@ type Index struct {
 	http    *http.Client
 	baseURL string
 	name    string
+	// floor is the fraction of a query's best score a result must reach to be
+	// returned. See DefaultRelevanceFloor.
+	floor float64
 }
+
+// DefaultRelevanceFloor is the share of the best score a result must reach.
+//
+// Every clause of relevanceQuery is a should, so anything matching any of them
+// comes back — and a fuzzy or phrase-prefix clause matches a very long tail
+// very weakly. Searching "react" matched 4,274 records: the first ~1,800 are
+// about react, and the rest run down to a record scoring 1.12 out of 92 whose
+// only connection is a fuzzy near-miss in its description. Past a point the
+// list stops being results and becomes the corpus.
+//
+// The floor is a fraction rather than a number because scores are not
+// comparable between queries: "react" tops out at 92 and "buffer overflow" at
+// 468, and one absolute cutoff would erase the first or pass everything in the
+// second. Measured against this corpus, a fifteenth of the best score keeps
+// what a reader would call a match and drops what they would not — "react"
+// 4,274 -> 1,862, "kubernetes" 1,449 -> 257 (the weakest kept is a real
+// Kubernetes advisory, the strongest dropped is an unrelated npm package),
+// while "buffer overflow" keeps everything, because there genuinely are that
+// many buffer overflows.
+const DefaultRelevanceFloor = 0.15
 
 // New builds an Elasticsearch-backed search index. A nil httpClient gets a
 // sane default; an empty index name falls back to DefaultIndexName.
@@ -41,7 +64,15 @@ func New(httpClient *http.Client, baseURL, indexName string) *Index {
 		http:    httpClient,
 		baseURL: strings.TrimRight(baseURL, "/"),
 		name:    indexName,
+		floor:   DefaultRelevanceFloor,
 	}
+}
+
+// WithRelevanceFloor sets the share of the best score a result must reach.
+// Zero or less turns the cutoff off and returns everything that matches at all.
+func (i *Index) WithRelevanceFloor(fraction float64) *Index {
+	i.floor = fraction
+	return i
 }
 
 // Ready reports whether the cluster answers, creating the index if absent.
@@ -328,7 +359,14 @@ func (i *Index) Search(ctx context.Context, q model.SearchQuery) (model.SearchPa
 			"elasticsearch: results beyond the first %d cannot be paged to; narrow the query", maxWindow)
 	}
 
-	raw, err := json.Marshal(searchBody(q))
+	body := searchBody(q)
+	if floor, err := i.relevanceFloor(ctx, q); err != nil {
+		return model.SearchPage{}, err
+	} else if floor > 0 {
+		body["min_score"] = floor
+	}
+
+	raw, err := json.Marshal(body)
 	if err != nil {
 		return model.SearchPage{}, fmt.Errorf("elasticsearch: marshal query: %w", err)
 	}
@@ -363,6 +401,45 @@ func (i *Index) Search(ctx context.Context, q model.SearchQuery) (model.SearchPa
 		page.Hits = append(page.Hits, model.SearchHit{Vulnerability: h.Source.toDomain(), Score: score})
 	}
 	return page, nil
+}
+
+// relevanceFloor is the lowest score this query may return: a fraction of its
+// own best score. Zero means "no cutoff" — there is nothing to be relative to
+// when nothing was typed, so the unqueried feed is never filtered.
+//
+// The best score is not known until the index has been asked, so this asks:
+// one hit, no source, which is the cheapest question Elasticsearch answers.
+// It is a second round trip per search, and the alternative — a fixed cutoff
+// that does not know what this query scores — was measurably worse.
+func (i *Index) relevanceFloor(ctx context.Context, q model.SearchQuery) (float64, error) {
+	if i.floor <= 0 || strings.TrimSpace(q.Text) == "" {
+		return 0, nil
+	}
+
+	probe := searchBody(model.SearchQuery{Text: q.Text, Sort: model.SortRelevance, Kinds: q.Kinds, Size: 1})
+	raw, err := json.Marshal(probe)
+	if err != nil {
+		return 0, fmt.Errorf("elasticsearch: marshal relevance probe: %w", err)
+	}
+	resp, err := i.do(ctx, http.MethodPost, "/"+i.name+"/_search", bytes.NewReader(raw))
+	if err != nil {
+		return 0, fmt.Errorf("elasticsearch: relevance probe: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return 0, fmt.Errorf("elasticsearch: relevance probe status %d: %s",
+			resp.StatusCode, strings.TrimSpace(string(msg)))
+	}
+
+	var out searchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return 0, fmt.Errorf("elasticsearch: decode relevance probe: %w", err)
+	}
+	if len(out.Hits.Hits) == 0 || out.Hits.Hits[0].Score == nil {
+		return 0, nil
+	}
+	return *out.Hits.Hits[0].Score * i.floor, nil
 }
 
 func (i *Index) do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {

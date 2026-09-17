@@ -208,7 +208,7 @@ func (m Model) feedCounter(start, end int) string {
 func (m Model) foldedRuns() int {
 	n := 0
 	for _, r := range m.rows {
-		if r.IsBatch() && !m.folds[r.Batch.Signature] {
+		if r.IsBatch() && !m.folds[r.Batch.Key] {
 			n++
 		}
 	}
@@ -272,7 +272,7 @@ func (m Model) batchRow(b model.Batch, selected bool) string {
 	// Not a triangle: the cursor is already "▸", and two of them on one row
 	// read as one marker with a stutter rather than as a fold.
 	marker := "+"
-	if m.folds[b.Signature] {
+	if m.folds[b.Key] {
 		marker = "−"
 	}
 	count := fmt.Sprintf("%s %d findings", marker, b.Len())
@@ -409,7 +409,7 @@ func (m Model) footer() string {
 			// The row under the cursor is a run, not a finding, so the keys
 			// that act on a finding do not apply to it.
 			verb := "open"
-			if m.folds[row.Batch.Signature] {
+			if m.folds[row.Batch.Key] {
 				verb = "close"
 			}
 			hints = "  ↑/↓ move · enter " + verb + " this run · n more · s sort · m malware · / search · tab switch · r refresh · q quit"

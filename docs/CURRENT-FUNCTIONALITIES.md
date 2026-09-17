@@ -408,6 +408,18 @@ live feed, newest first. Results page 25–200 at a time; totals are exact up to
 **How to use.** deck's feed (`/` to search, `s` to switch order), GraphQL `search`, or
 gRPC `IntelligenceService/Search`.
 
+**Relevance floor.** Every scoring clause is an OR, so without a cutoff a query returns
+its weak tail as well: "react" matched 4,274 records, of which about 1,800 were about
+react and the rest ran down to one scoring 1.12 out of 92 on a fuzzy near-miss. A result
+must now reach `CORTEX_RELEVANCE_FLOOR` (default `0.15`) of the best score **that same
+query** found. The share is relative because scores are not comparable between queries —
+"react" tops out at 92 and "buffer overflow" at 468, and one absolute number would erase
+the first or pass everything in the second. Measured live: react 4,274 → 1,862,
+kubernetes 1,449 → 257, next → 623, while "buffer overflow" keeps all 10,000, because
+there genuinely are that many. Set it to `0` to return everything that matches at all.
+The record that set the best score always clears the floor, so a query can never come
+back empty when something matched.
+
 **Limit.** Offset paging stops at the 10,000th result — narrow the query past that.
 
 ### 2.3 Finding details
@@ -636,8 +648,13 @@ authentication (v4), and `console` does not consume it yet.
 
 ### 4.1 Live Feed (1)
 
-The latest findings, newest first, refreshed every `DECK_REFRESH_INTERVAL` (30s). Each row
-is **id · severity · headline**, where the headline is the title or, for records with none
+The latest findings, newest first, refreshed every `DECK_REFRESH_INTERVAL` (30s). The
+panel is kept full: a page is a count of findings, but what fills it is rows, and the two
+come apart both when a folded run collapses two hundred findings into one and whenever the
+terminal is taller than a page (25 findings do not fill 34 rows). deck now reads on until
+the rows reach the bottom of the panel, up to five extra pages — enough that a run has to
+be read past, bounded so a list that cannot fill the panel gives up instead of paging the
+whole corpus. Each row is **id · severity · headline**, where the headline is the title or, for records with none
 (everything from NVD), the description. A malicious package shows **MALWARE** in place of a
 severity. Malware is left out of the feed until `m` brings it in; searching for its exact
 id (`MAL-…`, `GHSA-…`) finds it either way.
@@ -660,9 +677,12 @@ The header carries the count, **the worst rating inside the run**, and the break
 rating, so a fold can never bury the one finding in two hundred that mattered — the row
 above is rated HIGH because one of the 198 is. `enter` opens the run in place and closes it
 again. Five or fewer in a row are left alone: they read perfectly well as ordinary rows,
-and a fold over them is more chrome than it saves. A run stays open across a refresh, because
-the fold is remembered by the wording it groups on rather than by a position in a list that
-the refresh replaces.
+and a fold over them is more chrome than it saves.
+
+Each run folds independently, even where two share the same opening — the newest thousand
+findings hold six separate Linux kernel runs, and opening one must not open all six. A fold
+is remembered by its wording plus the id it starts at, so it stays open across a refresh
+unless new findings actually join the front of that run.
 
 | Key                         | Does                                                              |
 | :-------------------------- | :---------------------------------------------------------------- |

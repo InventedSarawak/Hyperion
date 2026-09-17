@@ -57,14 +57,17 @@ var severityOrder = map[string]int{
 // Batch is a run of consecutive findings that open with the same words: what
 // one publisher filed in one go.
 type Batch struct {
-	// Signature is the shared opening, and the key the fold is remembered
-	// under. Two runs with the same signature open and close together — to a
-	// reader they are the same pile of findings, wherever they sit in the
-	// list — and keying on the text rather than on a position means a fold
-	// survives the next refresh instead of springing open when a new finding
-	// joins the front of the run.
+	// Signature is the shared opening the run groups on, lower-cased.
 	Signature string
-	Hits      []SearchHit
+	// Key is what a fold is remembered under: the signature and the run's
+	// first id together. One publisher files several runs a day, separated by
+	// everyone else's findings — the newest thousand findings hold six
+	// separate Linux kernel runs — and keying on the wording alone would open
+	// all six at once, which is the flood the fold exists to prevent. The id
+	// is part of the key rather than the position, so a fold survives a
+	// refresh unless new findings actually join the front of that run.
+	Key  string
+	Hits []SearchHit
 }
 
 // Len is how many findings the batch holds.
@@ -144,7 +147,7 @@ func (f Feed) Rows(expanded map[string]bool) []FeedRow {
 		}
 		folded := run
 		out = append(out, FeedRow{Batch: &folded})
-		if !expanded[run.Signature] {
+		if !expanded[run.Key] {
 			continue
 		}
 		for _, h := range run.Hits {
@@ -183,11 +186,16 @@ func batches(hits []SearchHit) []Batch {
 			shared, j = next, j+1
 		}
 		if j-i < MinBatchRun {
-			// Not a fold, so it needs no signature: leaving it empty keeps
-			// short runs from ever colliding in the expansion map.
+			// Not a fold, so it needs no key: leaving it empty keeps short
+			// runs from ever colliding in the expansion map.
 			out = append(out, Batch{Hits: hits[i:j]})
 		} else {
-			out = append(out, Batch{Signature: strings.Join(shared, " "), Hits: hits[i:j]})
+			signature := strings.Join(shared, " ")
+			out = append(out, Batch{
+				Signature: signature,
+				Key:       signature + "\x00" + hits[i].Vulnerability.CVEID,
+				Hits:      hits[i:j],
+			})
 		}
 		i = j
 	}

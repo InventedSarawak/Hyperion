@@ -27,10 +27,14 @@ func scored(id, title, severity string) model.SearchHit {
 	}}
 }
 
-func run(n int) []model.SearchHit {
+func run(n int) []model.SearchHit { return runFrom(90000, n) }
+
+// runFrom builds a run starting at a given id. Feed.Append dedupes on the CVE
+// id, so no two findings in a real feed share one.
+func runFrom(start, n int) []model.SearchHit {
 	hits := make([]model.SearchHit, 0, n)
 	for i := range n {
-		hits = append(hits, kernel(90000+i, fmt.Sprintf("driver %d leaks a reference", i)))
+		hits = append(hits, kernel(start+i, fmt.Sprintf("driver %d leaks a reference", i)))
 	}
 	return hits
 }
@@ -77,9 +81,9 @@ var _ = Describe("Feed batching", func() {
 
 	It("opens the run in place when expanded", func() {
 		feed := model.Feed{Hits: run(10)}
-		sig := feed.Rows(open)[0].Batch.Signature
+		key := feed.Rows(open)[0].Batch.Key
 
-		rows := feed.Rows(map[string]bool{sig: true})
+		rows := feed.Rows(map[string]bool{key: true})
 		Expect(rows).To(HaveLen(11))
 		Expect(rows[0].IsBatch()).To(BeTrue())
 		for _, r := range rows[1:] {
@@ -122,13 +126,34 @@ var _ = Describe("Feed batching", func() {
 		Expect(rows).To(HaveLen(10), "wording that diverges at the second word is not a batch")
 	})
 
+	It("opens one run without opening another of the same wording", func() {
+		// The kernel CNA files several runs a day, separated by everyone
+		// else's findings — the newest thousand findings hold six of them.
+		// Opening one must not open all six, which is the flood the fold is
+		// there to prevent.
+		hits := append(runFrom(90000, 10), scored("CVE-2026-X", "an unrelated advisory", "HIGH"))
+		hits = append(hits, runFrom(80000, 10)...)
+		feed := model.Feed{Hits: hits}
+
+		rows := feed.Rows(open)
+		Expect(rows).To(HaveLen(3))
+		first, second := rows[0].Batch, rows[2].Batch
+		Expect(first.Signature).To(Equal(second.Signature))
+		Expect(first.Key).ToNot(Equal(second.Key))
+
+		rows = feed.Rows(map[string]bool{first.Key: true})
+		Expect(rows).To(HaveLen(13), "only the first run opened")
+		Expect(rows[11].IsBatch()).To(BeFalse())
+		Expect(rows[12].IsBatch()).To(BeTrue())
+	})
+
 	It("finds a row by CVE only when it is actually on screen", func() {
 		feed := model.Feed{Hits: run(10)}
 		rows := feed.Rows(open)
 		Expect(feed.RowIndexOf(rows, "CVE-2026-90003")).To(Equal(-1), "inside a closed fold")
 
-		sig := rows[0].Batch.Signature
-		rows = feed.Rows(map[string]bool{sig: true})
+		key := rows[0].Batch.Key
+		rows = feed.Rows(map[string]bool{key: true})
 		Expect(feed.RowIndexOf(rows, "CVE-2026-90003")).To(Equal(4))
 	})
 })

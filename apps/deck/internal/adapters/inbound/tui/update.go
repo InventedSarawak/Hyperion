@@ -74,10 +74,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.feed.UpdatedAt = time.Now()
 			m.lastRefresh = m.feed.UpdatedAt
 			m.sort = m.feed.Sort // the use case may have settled it
-			// A new list: any page still in flight belongs to the old one.
+			// A new list: any page still in flight belongs to the old one,
+			// and it gets its own budget for filling the panel.
 			m.generation++
 			m.loadingMore = false
 			m.moreErr = nil
+			m.fills = 0
 			// Newer findings arriving at the top would otherwise slide a
 			// different row under a cursor that stayed put.
 			if msg.keep != "" {
