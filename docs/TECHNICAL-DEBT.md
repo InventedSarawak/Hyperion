@@ -198,16 +198,27 @@ A version matters twice over: what a manifest allows ("^1.13.2") can only ever b
   not read, so those versions are still ranges. `go.mod` and pinned `==` requirements were
   already exact.
 
-### 🟡 NuGet and RubyGems names must match the advisory's spelling
+### 🟢 ~~NuGet and RubyGems names must match the advisory's spelling~~ — REPAID (v3, 2026-09-17)
 
-Library nodes are keyed by the package name as written. PyPI names are normalised on the
-scanner's side (PEP 503, as advisories store them) and Packagist names are lower case, but
-NuGet ids are case-insensitive and advisories store them with capitals (`Newtonsoft.Json`).
+Library keys are normalized per registry (`valueobject.NormalizeName`): NuGet
+and Packagist folded to lower case, PyPI to PEP 503. The original spelling is
+kept for display; only the join key changes.
 
-- **Cost:** a `.csproj` that writes `newtonsoft.json` does not reach the advisories for
-  `Newtonsoft.Json`.
-- **Fix:** normalise the key per registry in cortex (lower case for NuGet) and migrate the
-  existing library nodes.
+Two graph migrations moved what was already stored: 1,322 mis-keyed nodes
+re-keyed, then 33 that could not move — because both spellings existed as
+separate nodes — merged, advisories and all. One example, `Magick.NET-Q8-AnyCPU`
+and `magick.net-q8-anycpu`, held 164 and 1 advisories apart and now holds 165
+together. A repository requiring that package previously reached one of them.
+
+- **RubyGems deliberately left alone:** gem ids are case-sensitive by
+  specification, so folding them would merge two packages that the registry
+  says are different — inventing a fact rather than applying one. The entry's
+  original framing was wrong about RubyGems.
+- **Found while doing it:** re-keying can collide two ways, not one. Several
+  mis-keyed nodes can normalize to the _same_ key (`CefSharp.OffScreen` and
+  `CefSharp.Offscreen`), which a naive "does the target exist?" guard does not
+  catch — the first migration failed on exactly that and disabled the graph
+  until it was fixed.
 
 ### 🟡 Descriptions and scores are last-writer-wins
 

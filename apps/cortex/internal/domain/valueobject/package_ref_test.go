@@ -58,3 +58,47 @@ var _ = Describe("PackageRef", func() {
 			To(Equal("go:github.com/gin-gonic/gin"))
 	})
 })
+
+var _ = Describe("package name normalization", func() {
+	DescribeTable("folds the spellings a registry considers equal",
+		func(ecosystem, written, other string) {
+			one := valueobject.NewPackageRef(ecosystem, written, "1.0.0")
+			two := valueobject.NewPackageRef(ecosystem, other, "2.0.0")
+
+			// The join key is what decides whether a manifest reaches the
+			// advisories filed against the same package.
+			Expect(one.Key()).To(Equal(two.Key()))
+			// And the original spelling survives for display.
+			Expect(one.Name).To(Equal(written))
+		},
+		Entry("NuGet ids are case-insensitive",
+			"nuget", "Newtonsoft.Json", "newtonsoft.json"),
+		Entry("Packagist names are case-insensitive",
+			"packagist", "Monolog/Monolog", "monolog/monolog"),
+		Entry("PyPI folds case (PEP 503)",
+			"pypi", "Django", "django"),
+		Entry("PyPI folds separators (PEP 503)",
+			"pypi", "zope.interface", "zope-interface"),
+		Entry("PyPI folds underscores too",
+			"pypi", "typing_extensions", "typing-extensions"),
+	)
+
+	DescribeTable("leaves alone the registries where spelling is meaning",
+		func(ecosystem, written, other string) {
+			one := valueobject.NewPackageRef(ecosystem, written, "")
+			two := valueobject.NewPackageRef(ecosystem, other, "")
+
+			Expect(one.Key()).NotTo(Equal(two.Key()))
+		},
+		// Gem names are case-sensitive by specification: folding them would
+		// be inventing a fact rather than applying one.
+		Entry("RubyGems", "rubygems", "Rails", "rails"),
+		Entry("npm scopes are case-sensitive", "npm", "React", "react"),
+		Entry("Go module paths are case-sensitive", "go", "github.com/A/b", "github.com/a/b"),
+	)
+
+	It("keeps the ecosystem in the key, so one name in two registries stays two libraries", func() {
+		Expect(valueobject.NewPackageRef("nuget", "serilog", "").Key()).
+			NotTo(Equal(valueobject.NewPackageRef("npm", "serilog", "").Key()))
+	})
+})

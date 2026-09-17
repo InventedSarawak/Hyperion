@@ -85,6 +85,53 @@ var migrations = []migration{
 	 FOR (a:Author) REQUIRE a.login IS UNIQUE`},
 	{"0004_vulnerability_cve_id", `CREATE CONSTRAINT vulnerability_cve_id IF NOT EXISTS
 	 FOR (v:Vulnerability) REQUIRE v.cve_id IS UNIQUE`},
+
+	// Library keys were the name as written, so a .csproj requiring
+	// `newtonsoft.json` and an advisory against `Newtonsoft.Json` became two
+	// nodes and never met. Keys are normalized per registry now (see
+	// valueobject.NormalizeName); these are the nodes written before that.
+	//
+	// Only the ones that can move without colliding, and there are two ways
+	// to collide: the normalized key may already exist as its own node, and
+	// several mis-keyed nodes may normalize to the *same* key —
+	// `CefSharp.OffScreen` and `CefSharp.Offscreen` are one package written
+	// two ways. Grouping by the target and moving one of each covers both.
+	// What is left stops being written to, because new observations attach to
+	// the normalized node.
+	//
+	// This is the first migration that changes data rather than creating
+	// something, which the version register is what makes possible.
+	{"0005_normalize_library_keys", `
+	 MATCH (l:Library)
+	 WHERE (l.key STARTS WITH 'nuget:' OR l.key STARTS WITH 'packagist:' OR l.key STARTS WITH 'pypi:')
+	   AND l.key <> toLower(l.key)
+	 WITH toLower(l.key) AS target, collect(l) AS candidates
+	 WHERE NOT EXISTS { MATCH (other:Library {key: target}) }
+	 WITH target, head(candidates) AS l
+	 SET l.key = target`},
+
+	// What 0005 had to leave: nodes whose normalized key already belonged to
+	// another node. Both are the same package, so the advisories filed
+	// against the old spelling belong to the new one — left apart, a
+	// repository requiring the package reaches only half of what affects it,
+	// and exposure reads as smaller than it is.
+	//
+	// Only AFFECTED_BY edges exist on these (dependency edges are written
+	// from manifests, which already normalize), so this moves those and
+	// deletes what is then an empty duplicate.
+	{"0006_merge_split_library_keys", `
+	 MATCH (old:Library)
+	 WHERE (old.key STARTS WITH 'nuget:' OR old.key STARTS WITH 'packagist:' OR old.key STARTS WITH 'pypi:')
+	   AND old.key <> toLower(old.key)
+	 MATCH (canonical:Library {key: toLower(old.key)})
+	 CALL (old, canonical) {
+	   OPTIONAL MATCH (old)-[r:AFFECTED_BY]->(v:Vulnerability)
+	   WITH old, canonical, r, v WHERE v IS NOT NULL
+	   MERGE (canonical)-[:AFFECTED_BY]->(v)
+	   DELETE r
+	 }
+	 WITH DISTINCT old
+	 DETACH DELETE old`},
 }
 
 // schemaVersionConstraint keeps the migration register honest: two cortex

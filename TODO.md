@@ -237,9 +237,10 @@ what flows is right. Everything else stays where it is; the reasoning is below.
 Not v3's subject, but each is small and each is a wrong answer today rather than a missing
 feature:
 
-- [ ] **Normalise NuGet (and RubyGems) package names** (🟡). A `.csproj` writing
-      `newtonsoft.json` never reaches advisories filed under `Newtonsoft.Json`, so real
-      exposure is silently missed.
+- [x] **Normalise NuGet package names (2026-09-17)** (🟡). Keys folded per registry —
+      NuGet and Packagist lower case, PyPI PEP 503 — with two graph migrations moving what
+      was stored: 1,322 nodes re-keyed, 33 split ones merged. RubyGems left alone: gem ids
+      are case-sensitive by specification.
 - [ ] **Read `yarn.lock` and `packages.lock.json`** (🟢). The last two lockfile formats
       unread, so those versions stay ranges and their findings stay "possibly affected"
       instead of being settled outright.
