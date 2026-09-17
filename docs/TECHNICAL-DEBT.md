@@ -272,21 +272,31 @@ recently, and the record remembers which feed each value came from
 
 ### 🟡 ~~Malware is ingested in full but only hidden~~ — PARTLY REPAID (v3, 2026-09-17)
 
-Alerting now asks the graph whether any tracked repository depends on the
-malicious package, and says nothing when the answer is no. Ordinary
+Two things were wrong, and both are fixed.
+
+**Alerting.** It now asks the graph whether any tracked repository depends on
+the malicious package, and says nothing when the answer is no. Ordinary
 vulnerabilities are never filtered this way: an advisory is worth hearing about
-whether or not the library is on the watchlist today, because the watchlist
-changes. Malware is only ever about packages actually installed.
+whether or not the library is on the watchlist today. A graph that cannot answer
+alerts anyway — noise is an annoyance, silence about an installed package is not.
 
-The store holds 237,413 malware records against 310,562 vulnerabilities, and
-205,350 of the malware records are linked to a library in the graph — so the
-question is answerable for most of them.
+**The fabricated score (fixed 2026-09-17).** Severity used to be read only off a
+CVSS score, and OSV's `MAL-` records carry none — so the adapter invented an
+entry: `severity: critical, base_score: 0, vector: ""`. A severity label wearing
+CVSS clothes, and the two halves contradicted each other. Harmless while nothing
+sorted on the number, and a trap the moment anything did: the first rule written
+as "score at least 7" would have excluded **every** malicious package, which is
+exactly what such a rule is for.
 
-- **Fails open:** a graph that cannot answer means the alert goes out. Noise is
-  an annoyance; silence about a package someone has installed is not.
-- **What remains:** they still cost storage and index space. Not indexing them
-  would make an exact-id search stop finding them, which is a product decision
-  rather than a cleanup — recorded here rather than taken.
+`model.Vulnerability` now carries `Severity` of its own, set for malware in
+`Normalized()` — the domain's rule, not a feed's. The adapter invents nothing,
+`TopSeverity` prefers the worst of the stated rating and any score, and the
+search document falls back to the rating's CVSS floor (critical -> 9.0) when
+there is no score, so "critical" sorts as critical rather than as zero.
+
+- **What remains:** the records still cost storage and index space. Not indexing
+  them would make an exact-id search stop finding them, which is a product
+  decision rather than a cleanup.
 
 ### 🟢 ~~A backfill can raise alerts for old findings~~ — REPAID (v3, 2026-09-17)
 

@@ -521,6 +521,11 @@ actually depends on it. The graph answers that — `MAL-…` records are linked 
 packages exactly as advisories are — and a finding nothing depends on is stored, indexed
 and searchable, but nobody is told about it.
 
+**How it is rated.** A malicious package is critical, and the domain says so rather than a
+feed: no CVSS vector is ever written for one. The rating lives on the finding itself, so
+it needs no invented score — and a finding rated without a score sorts by its rating's
+CVSS floor (critical = 9.0) rather than as zero.
+
 **Why only malware.** OSV's malware dataset is ~240,000 records, nearly all typosquats of
 popular names that nobody has installed; a subscription with a broad rule matching all of
 them is indistinguishable from one matching none. An ordinary advisory is different: it is

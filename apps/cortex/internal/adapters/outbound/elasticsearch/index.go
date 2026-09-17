@@ -398,12 +398,23 @@ type document struct {
 func toDocument(v model.Vulnerability) document {
 	// Denormalize the worst score so results can be sorted/filtered cheaply.
 	var maxScore float64
-	severity := string(model.SeverityUnknown)
 	for _, s := range v.Scores {
 		if s.BaseScore >= maxScore {
 			maxScore = s.BaseScore
-			severity = string(s.Severity)
 		}
+	}
+
+	// Severity comes from the finding, not from whichever score happened to
+	// be highest: a malicious package is critical and has no CVSS to say so
+	// through, and TopSeverity is what every other reader already asks.
+	severity := string(v.TopSeverity())
+
+	// A finding rated without a score still needs a number, because sorting
+	// and "at least this bad" filters are written against one. The rating's
+	// own floor is the honest answer — it says "at least this bad", which is
+	// exactly what the rating means — rather than 0, which reads as harmless.
+	if maxScore == 0 {
+		maxScore = severityFloor(v.TopSeverity())
 	}
 	kind := v.Kind
 	if kind == "" {
@@ -579,4 +590,22 @@ func (i *Index) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("elasticsearch: delete %s status %d: %s", id, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return nil
+}
+
+// severityFloor is the lowest CVSS base score that carries each rating, per the
+// CVSS v3.1 qualitative scale. It is used only for findings rated without a
+// score, so that "critical" sorts and filters as critical instead of as zero.
+func severityFloor(s model.Severity) float64 {
+	switch s {
+	case model.SeverityCritical:
+		return 9.0
+	case model.SeverityHigh:
+		return 7.0
+	case model.SeverityMedium:
+		return 4.0
+	case model.SeverityLow:
+		return 0.1
+	default:
+		return 0
+	}
 }

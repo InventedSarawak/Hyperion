@@ -136,15 +136,18 @@ var _ = Describe("OSV affected packages", func() {
 		Expect(signal.Title).To(Equal("Malicious code in axios (npm)"))
 	})
 
-	It("rates malware critical and strips OSV's per-source scaffolding from it", func() {
+	It("strips OSV's per-source scaffolding, and invents no score for malware", func() {
 		v := decode(`{"id":"MAL-2026-2307","aliases":["GHSA-fw8c-xr5c-95f9"],"summary":"Malicious code in axios (npm)",
 		  "details":"\n---\n_-= Per source details. Do not edit below this line.=-_\n\n## Source: ghsa-malware (bcd851213ecf0f8dc58fe88d79b3d19a59388272b2426097de7edc4c53df5d9e)\nAny computer that has this package installed should be considered fully compromised.\n",
 		  "modified":"2026-04-01T00:00:00Z"}`)
 
 		signal, ok := osv.ToSourceSignal(v, time.Time{})
 		Expect(ok).To(BeTrue())
-		Expect(signal.Scores).To(HaveLen(1))
-		Expect(signal.Scores[0].Severity).To(Equal(model.SeverityCritical))
+		// No CVSS is ever written for a malicious package, so none is
+		// reported. The rating is the finding's own, applied by the domain —
+		// a fabricated entry here carried base_score 0, which read as
+		// harmless to anything looking at the number.
+		Expect(signal.Scores).To(BeEmpty())
 		Expect(signal.Description).To(Equal("## Source: ghsa-malware\nAny computer that has this package installed should be considered fully compromised."))
 	})
 
@@ -173,7 +176,7 @@ var _ = Describe("OSV affected packages", func() {
 		Expect(signal.Aliases).To(ConsistOf("PYSEC-2021-19", "GHSA-xxxx-xxxx-xxxx"))
 	})
 
-	It("keeps malware only OSV knows, under its MAL id and rated critical", func() {
+	It("keeps malware only OSV knows, under its MAL id", func() {
 		v := decode(`{"id":"MAL-2026-9999","modified":"2026-01-01T00:00:00Z",
 		  "affected":[{"package":{"ecosystem":"npm","name":"typosquat"}}]}`)
 
@@ -181,8 +184,9 @@ var _ = Describe("OSV affected packages", func() {
 		Expect(ok).To(BeTrue())
 		Expect(signal.CVEID).To(Equal("MAL-2026-9999"))
 		Expect(signal.Aliases).To(BeEmpty())
+		// The kind is what travels; cortex rates it critical from that.
 		Expect(signal.Kind).To(Equal(model.KindMalware))
-		Expect(signal.Scores[0].Severity).To(Equal(model.SeverityCritical))
+		Expect(signal.Scores).To(BeEmpty())
 	})
 
 	It("keeps an advisory with no CVE, GHSA or MAL under the id it has", func() {
