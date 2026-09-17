@@ -241,9 +241,9 @@ feature:
       NuGet and Packagist lower case, PyPI PEP 503 — with two graph migrations moving what
       was stored: 1,322 nodes re-keyed, 33 split ones merged. RubyGems left alone: gem ids
       are case-sensitive by specification.
-- [ ] **Read `yarn.lock` and `packages.lock.json`** (🟢). The last two lockfile formats
-      unread, so those versions stay ranges and their findings stay "possibly affected"
-      instead of being settled outright.
+- [x] **Read `yarn.lock` and `packages.lock.json` (2026-09-17)** (🟢). Every lockfile
+      format the scanner meets now settles versions outright. Verified on `yarnpkg/berry`:
+      1,794 dependencies read from its `yarn.lock`.
 - [ ] **Keep one description and score set per source** (🟡 _last-writer-wins_). Which
       description you read currently depends on which feed reported last.
 

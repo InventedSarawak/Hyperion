@@ -185,18 +185,22 @@ the record moves to the CVE (see CURRENT-FUNCTIONALITIES 1.3).
 - **Fix:** derive the alert id from the subscription and the finding's first-stored id,
   or dedupe on every id the finding carries.
 
-### 🟢 Two lockfile formats are still unread
+### 🟢 ~~Two lockfile formats are still unread~~ — REPAID (v3, 2026-09-17)
 
-A version matters twice over: what a manifest allows ("^1.13.2") can only ever be judged
-"possibly affected", while what a lockfile installs (1.13.2) settles it outright.
+`yarn.lock` and NuGet's `packages.lock.json` are read alongside the others, so
+every lockfile format the scanner meets now settles versions outright instead of
+leaving them as ranges. Verified on `yarnpkg/berry`: 1,794 dependencies read
+from its `yarn.lock`, where before the repository contributed only what its
+`package.json` files declared.
 
-- **Resolved (2026-09-16):** `package-lock.json`, `pnpm-lock.yaml`, `Cargo.lock`,
-  `poetry.lock`, `composer.lock` and `Gemfile.lock` are read alongside their manifests, and
-  a locked version wins over a declared range. They also carry the transitive dependencies,
-  where most exposure actually sits.
-- **What remains:** `yarn.lock` (its own text format) and NuGet's `packages.lock.json` are
-  not read, so those versions are still ranges. `go.mod` and pinned `==` requirements were
-  already exact.
+- **yarn.lock is its own format,** not YAML despite appearing to be — a v1 file
+  has bare `name@range:` headers and `version "1.2.3"` lines, which a YAML
+  parser rejects. One line-oriented reader handles both v1 and Berry.
+- **Scoped packages** contain an `@` in the name itself, so a descriptor splits
+  on its _last_ `@`, not its first.
+- **packages.lock.json** reports the restored version rather than the requested
+  range, keeps the lockfile's own word on which packages are direct, and leaves
+  out sibling projects, which are not packages from a registry.
 
 ### 🟢 ~~NuGet and RubyGems names must match the advisory's spelling~~ — REPAID (v3, 2026-09-17)
 

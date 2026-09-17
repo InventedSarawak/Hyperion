@@ -284,3 +284,187 @@ func (ComposerLock) Parse(filePath string, content []byte) (model.RepositorySnap
 	add(f.PackagesDev, filePath+" (dev)")
 	return snapshot, nil
 }
+
+// --- npm: yarn.lock ---
+
+// YarnLock parses yarn.lock, both the classic (v1) format and the YAML-ish
+// Berry (v2+) one.
+//
+// Its own format, not YAML, despite the resemblance: a v1 file has bare
+// `name@range:` headers and indented `version "1.2.3"` lines, and a YAML parser
+// rejects it. Both versions share the shape this reads — an entry header naming
+// one or more descriptors, then a version line — so one line-oriented reader
+// handles both rather than two parsers guessing which they have.
+type YarnLock struct{}
+
+// Name identifies the format.
+func (YarnLock) Name() string { return "yarn.lock" }
+
+// Matches reports whether the file is a yarn.lock.
+func (YarnLock) Matches(filePath string) bool { return path.Base(filePath) == "yarn.lock" }
+
+func (YarnLock) lockfile() {}
+
+// Parse maps every installed package to the version it resolved to.
+//
+// Every entry is reported, including transitive ones — that is the point of
+// reading a lockfile — and none is marked direct, because yarn.lock does not
+// say which are. package.json beside it does, and the two are merged.
+func (YarnLock) Parse(filePath string, content []byte) (model.RepositorySnapshot, error) {
+	var (
+		snapshot model.RepositorySnapshot
+		names    []string
+		seen     = map[string]string{}
+	)
+
+	for _, raw := range strings.Split(string(content), "\n") {
+		line := strings.TrimRight(raw, "\r")
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		// An entry header is unindented and ends in a colon; everything under
+		// it is indented.
+		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+			names = yarnEntryNames(trimmed)
+			continue
+		}
+
+		version, ok := yarnVersion(trimmed)
+		if !ok || len(names) == 0 {
+			continue
+		}
+		for _, name := range names {
+			if _, done := seen[name]; done {
+				continue
+			}
+			seen[name] = version
+		}
+		names = nil
+	}
+
+	for _, name := range sortedKeys(seen) {
+		snapshot.Dependencies = append(snapshot.Dependencies,
+			locked("npm", name, seen[name], false, filePath))
+	}
+	return snapshot, nil
+}
+
+// yarnEntryNames reads the package names out of an entry header.
+//
+// A header lists every descriptor that resolved to the same version, e.g.
+//
+//	"lodash@^4.17.0", "lodash@^4.17.21":
+//
+// so the names are the parts before the last @ of each descriptor — last,
+// because a scoped package is itself "@scope/name".
+func yarnEntryNames(header string) []string {
+	header = strings.TrimSuffix(strings.TrimSpace(header), ":")
+	if header == "" {
+		return nil
+	}
+
+	var names []string
+	for _, descriptor := range strings.Split(header, ",") {
+		descriptor = strings.Trim(strings.TrimSpace(descriptor), `"'`)
+		if descriptor == "" {
+			continue
+		}
+		at := strings.LastIndex(descriptor, "@")
+		if at <= 0 {
+			continue // no range, or a bare "@" — nothing nameable
+		}
+		if name := strings.TrimSpace(descriptor[:at]); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// yarnVersion reads the resolved version from an entry's version line.
+func yarnVersion(line string) (string, bool) {
+	// v1 writes `version "1.2.3"`, Berry writes `version: 1.2.3`.
+	rest, ok := strings.CutPrefix(line, "version")
+	if !ok {
+		return "", false
+	}
+	rest = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(rest), ":"))
+	rest = strings.Trim(rest, `"'`)
+	if rest == "" {
+		return "", false
+	}
+	return rest, true
+}
+
+// --- NuGet: packages.lock.json ---
+
+// PackagesLock parses NuGet's packages.lock.json.
+type PackagesLock struct{}
+
+// Name identifies the format.
+func (PackagesLock) Name() string { return "packages.lock.json" }
+
+// Matches reports whether the file is a packages.lock.json.
+func (PackagesLock) Matches(filePath string) bool {
+	return path.Base(filePath) == "packages.lock.json"
+}
+
+func (PackagesLock) lockfile() {}
+
+// packagesLockEntry is one resolved package.
+//
+// "resolved" is the version actually restored. "requested" is the range the
+// project asked for, which is what the .csproj already says — the lockfile is
+// read precisely to get past that.
+type packagesLockEntry struct {
+	Type      string `json:"type"`
+	Resolved  string `json:"resolved"`
+	Requested string `json:"requested"`
+}
+
+// Parse maps every restored package, across every target framework.
+//
+// A project is often locked for several frameworks at once and the same
+// package can resolve differently in each. Every resolution is reported: a
+// version that is vulnerable on one framework is vulnerable, whichever other
+// framework also builds.
+func (PackagesLock) Parse(filePath string, content []byte) (model.RepositorySnapshot, error) {
+	var f struct {
+		Dependencies map[string]map[string]packagesLockEntry `json:"dependencies"`
+	}
+	if err := json.Unmarshal(content, &f); err != nil {
+		return model.RepositorySnapshot{}, fmt.Errorf("packages.lock.json %s: %w", filePath, err)
+	}
+
+	var (
+		snapshot model.RepositorySnapshot
+		seen     = map[string]bool{}
+	)
+	for _, framework := range sortedKeys(f.Dependencies) {
+		packages := f.Dependencies[framework]
+		for _, name := range sortedKeys(packages) {
+			entry := packages[name]
+			if entry.Resolved == "" {
+				continue
+			}
+			// "Project" entries are sibling projects in the same solution,
+			// not packages from a registry.
+			if strings.EqualFold(entry.Type, "Project") {
+				continue
+			}
+			key := name + "@" + entry.Resolved
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+
+			// "Direct" is the lockfile's own word for what the project asked
+			// for; "Transitive" came in through something else.
+			direct := strings.EqualFold(entry.Type, "Direct")
+			snapshot.Dependencies = append(snapshot.Dependencies,
+				locked("nuget", name, entry.Resolved, direct, filePath))
+		}
+	}
+	return snapshot, nil
+}
