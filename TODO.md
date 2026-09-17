@@ -227,11 +227,10 @@ what flows is right. Everything else stays where it is; the reasoning is below.
       copies server-side and moves the alias atomically. Migrated 547,973 documents live
       with search unaffected. Found and fixed an undeclared `scores.base_score` mapping
       that made decimal scores a coin toss on a fresh install.
-- [ ] **Triage malware rather than hiding it** (🟡 _Malware is ingested in full but only
-      hidden_). ~220,000 `MAL-` records sit in the store costing index space, and a broad
-      subscription rule can match them. The graph can already answer "does a tracked
-      repository depend on this package?", which is the ranking that makes them useful
-      instead of noise.
+- [x] **Triage malware rather than hiding it (2026-09-17)** (🟡). Alerting asks the graph
+      whether anything tracked depends on the malicious package and stays quiet when
+      nothing does; ordinary vulnerabilities are never filtered that way, and a graph that
+      cannot answer alerts anyway. Storage cost remains, recorded in TECHNICAL-DEBT.
 
 ### Correctness fixes worth doing alongside
 

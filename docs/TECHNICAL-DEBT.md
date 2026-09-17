@@ -220,18 +220,23 @@ the score set the newest non-empty observation wins, whichever feed it came from
 - **Fix:** keep one description and score set per source and choose by source priority
   at read time.
 
-### 🟡 Malware is ingested in full but only hidden, not triaged
+### 🟡 ~~Malware is ingested in full but only hidden~~ — PARTLY REPAID (v3, 2026-09-17)
 
-OSV's malicious-package dataset (`MAL-…`) is ingested whole, as findings of kind
-`malware`. deck leaves them out of the feed unless `m` is pressed; searching for an
-exact id finds one either way.
+Alerting now asks the graph whether any tracked repository depends on the
+malicious package, and says nothing when the answer is no. Ordinary
+vulnerabilities are never filtered this way: an advisory is worth hearing about
+whether or not the library is on the watchlist today, because the watchlist
+changes. Malware is only ever about packages actually installed.
 
-- **Why:** a compromised package is the most urgent thing a dependency can be, and a
-  `MAL-` id is often the only record it ever gets — skipping them made that invisible.
-- **Cost:** npm alone has ~220,000 `MAL-` records, nearly all typosquats nobody installs.
-  They cost storage and index space, and a subscription with a broad rule can match them.
-- **Fix in v3:** rank malware by whether a tracked repository depends on the package —
-  the graph can answer that — and alert only on those.
+The store holds 237,413 malware records against 310,562 vulnerabilities, and
+205,350 of the malware records are linked to a library in the graph — so the
+question is answerable for most of them.
+
+- **Fails open:** a graph that cannot answer means the alert goes out. Noise is
+  an annoyance; silence about a package someone has installed is not.
+- **What remains:** they still cost storage and index space. Not indexing them
+  would make an exact-id search stop finding them, which is a product decision
+  rather than a cleanup — recorded here rather than taken.
 
 ### 🟢 ~~A backfill can raise alerts for old findings~~ — REPAID (v3, 2026-09-17)
 

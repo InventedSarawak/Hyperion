@@ -492,6 +492,23 @@ task alerts
 **Limits.** gRPC only — not yet in GraphQL or deck. Alerts are stored, not delivered
 (no email, Slack or webhook yet). An empty rule is rejected.
 
+### 2.6a Malware triage
+
+**What it does.** A malicious package is only alerted on when a tracked repository
+actually depends on it. The graph answers that — `MAL-…` records are linked to their
+packages exactly as advisories are — and a finding nothing depends on is stored, indexed
+and searchable, but nobody is told about it.
+
+**Why only malware.** OSV's malware dataset is ~240,000 records, nearly all typosquats of
+popular names that nobody has installed; a subscription with a broad rule matching all of
+them is indistinguishable from one matching none. An ordinary advisory is different: it is
+worth hearing about whether or not that library is on the watchlist today, because the
+watchlist changes.
+
+**Where it stops.** A graph that cannot answer alerts anyway — noise is an annoyance,
+silence about a package someone has installed is not. The records still cost storage and
+index space.
+
 ### 2.7 Search reindex
 
 `task reindex` rebuilds the Elasticsearch index from Postgres and removes documents

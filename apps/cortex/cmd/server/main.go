@@ -86,7 +86,11 @@ func main() {
 	dedupe, closeDedupe := buildDedupeStore(ctx, logger, cfg)
 	defer closeDedupe()
 
-	match := commands.NewMatchSignal(matcher, subsRepo, alertRepo, dedupe, cfg.AlertDedupeWindow)
+	// Malware is triaged by whether anything tracked actually depends on it:
+	// 240,000 typosquats nobody has installed would otherwise be 240,000
+	// chances to alert on nothing.
+	match := commands.NewMatchSignal(matcher, subsRepo, alertRepo, dedupe, cfg.AlertDedupeWindow).
+		WithReach(graph)
 	manageSubs := commands.NewManageSubscriptions(subsRepo, matcher)
 	listAlerting := queries.NewListAlerting(subsRepo, alertRepo)
 
