@@ -234,12 +234,12 @@ the watchlist, so a failure shows up in deck with its reason.
 **How to use.** Add repositories in deck's Repositories tab (§4.4). There is no
 repository list in `.env` any more.
 
-**Limits.** `yarn.lock` and NuGet's `packages.lock.json` are not read yet, so those
-versions are the declared ranges. A version held in a Gradle variable or a parent pom is
-unknown. NuGet and RubyGems names must match the advisory's spelling. A Solidity library
-copied in as plain files, rather than a submodule or package, is not seen. A scan costs two
-GitHub requests plus one per file and per submodule; without a token GitHub allows 60 an
-hour.
+**Limits.** A version held in a Gradle variable or a parent pom is unknown. RubyGems names
+must match the advisory's spelling — gem ids are case-sensitive by specification, so
+folding them would merge packages the registry says are different (NuGet, Packagist and
+PyPI names are normalized). A Solidity library copied in as plain files, rather than a
+submodule or package, is not seen. A scan costs two GitHub requests plus one per file and
+per submodule; without a token GitHub allows 60 an hour.
 
 ### 1.5 One-off scans
 
