@@ -42,7 +42,10 @@ func main() {
 	schema, err := graphqladapter.NewSchema(search, blast,
 		graphqladapter.WithVulnerability(queries.NewGetVulnerability(intelligence)),
 		graphqladapter.WithWatchlist(queries.NewWatchlist(intelligence)),
-		graphqladapter.WithRepositoryExposure(queries.NewGetRepositoryExposure(intelligence)))
+		graphqladapter.WithRepositoryExposure(queries.NewGetRepositoryExposure(intelligence)),
+		// Alerting through the gateway: it was reachable only over gRPC, so
+		// grpcurl was the only way to use it.
+		graphqladapter.WithAlerting(queries.NewAlerting(intelligence)))
 	if err != nil {
 		logger.Error("graphql schema build failed", "error", err)
 		os.Exit(1)

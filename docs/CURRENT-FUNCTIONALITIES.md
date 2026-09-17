@@ -566,6 +566,35 @@ modifiedAt, sources, affectedPackages { package versionRange }`.
 
 ---
 
+### 3.1 Alerting through the gateway
+
+**What it does.** Subscriptions and alerts are served by nexus, like everything else a
+user touches:
+
+| Operation   | GraphQL                                                                                             |
+| :---------- | :-------------------------------------------------------------------------------------------------- |
+| List rules  | `query { subscriptions { id name rule { term minSeverity } } }`                                     |
+| Create one  | `mutation { createSubscription(name: "Log4j", rule: {term: "log4j", minSeverity: "HIGH"}) { id } }` |
+| Remove one  | `mutation { deleteSubscription(id: "sub_…") }`                                                      |
+| Read alerts | `query { alerts(limit: 20) { cveId reason vulnerability { title } } }`                              |
+
+```bash
+task subscribe -- Log4j '{"term":"log4j","minSeverity":"HIGH"}'
+task subscriptions
+task alerts
+task unsubscribe -- sub_1234
+```
+
+**Why it matters.** These were reachable only over gRPC on :50051, which made `grpcurl`
+the only way to use the platform's headline feature — and meant any authentication, API
+key or per-tenant scoping added at the edge would not have applied to them. gRPC is now
+internal transport only: service to service.
+
+A rule with no conditions is refused at the edge, because it would match every finding
+ever ingested — the alert fatigue the platform exists to prevent. The finding on an alert
+is resolved when the alert is read, so a later correction shows through rather than the
+alert freezing what was true when it fired.
+
 ## 4. Terminal UI (deck)
 
 `task run:deck`. Four tabs; `tab` / `shift+tab` cycle them, `1`–`4` jump, `q` quits.

@@ -102,11 +102,32 @@ tasks:
       - go run ./cmd/worker -scan-repos {{.CLI_ARGS}}
 
   blast:
-    desc: 'Blast radius for a CVE: task blast -- CVE-2021-44228 (needs cortex + grpcurl)'
+    desc: Blast radius for a CVE, e.g. task blast -- CVE-2021-44228
     cmds:
+      # The gateway has served this since v2; the grpcurl version was bypassing
+      # the edge for no reason.
       - |
-        grpcurl -plaintext -d "{\"cve_id\":\"{{.CLI_ARGS}}\",\"max_depth\":5}" \
-          localhost:50051 hyperion.intelligence.v1.IntelligenceService/GetBlastRadius
+        ./scripts/graphql.sh \
+          'query($cve: String!) { blastRadius(cveId: $cve, maxDepth: 5) { totalRepositories repositories { fullName viaPackage depth direct } } }' \
+          '{"cve": "{{.CLI_ARGS}}"}'
+
+  run:deck:
+    desc: Run the terminal UI (needs cortex on :50051)
+    dir: apps/deck
+    cmds:
+      - go run ./cmd/tui
+
+  run:nexus:
+    desc: Run the API gateway (GraphQL at :8080/graphql, console at /playground)
+    dir: apps/nexus
+    cmds:
+      - go run ./cmd/server
+
+  scan:
+    desc: 'Scan every tracked repository now (needs cortex). One-off: task scan -- -repos owner/name | -orgs vercel'
+    dir: apps/siphon
+    cmds:
+      - go run ./cmd/worker -scan-repos {{.CLI_ARGS}}
 
   graph:prune:
     desc: 'Retire library links nothing has confirmed lately. Look first: task graph:prune -- -dry-run'
@@ -133,18 +154,36 @@ tasks:
       - go run ./cmd/server -reindex
 
   subscribe:
-    desc: 'Create an alert rule: task subscribe -- ''{"name":"Log4j","rule":{"term":"log4j"}}'''''
+    desc: Create an alert rule, e.g. task subscribe -- Log4j '{"term":"log4j","minSeverity":"HIGH"}'
+    cmds:
+      # Through the gateway, like everything else a user does: the edge is where
+      # auth and rate limiting land, and a client that calls cortex skips them.
+      - |
+        set -- {{.CLI_ARGS}}
+        ./scripts/graphql.sh \
+          'mutation($n: String!, $r: AlertRuleInput!) { createSubscription(name: $n, rule: $r) { id name rule { term minSeverity packages ecosystems } } }' \
+          "$(printf '{"n": "%s", "r": %s}' "$1" "$2")"
+
+  subscriptions:
+    desc: List the alert rules in place
     cmds:
       - |
-        grpcurl -plaintext -d '{{.CLI_ARGS}}' \
-          localhost:50051 hyperion.alerting.v1.AlertingService/CreateSubscription
+        ./scripts/graphql.sh '{ subscriptions { id name tenant rule { term minSeverity packages ecosystems } } }'
+
+  unsubscribe:
+    desc: Remove an alert rule, e.g. task unsubscribe -- sub_1234
+    cmds:
+      - |
+        ./scripts/graphql.sh \
+          'mutation($id: String!) { deleteSubscription(id: $id) }' \
+          '{"id": "{{.CLI_ARGS}}"}'
 
   alerts:
-    desc: Show the alerts raised so far (needs cortex + grpcurl)
+    desc: Show the alerts raised so far
     cmds:
       - |
-        grpcurl -plaintext -d '{"limit":20}' \
-          localhost:50051 hyperion.alerting.v1.AlertingService/ListAlerts
+        ./scripts/graphql.sh \
+          '{ alerts(limit: 20) { cveId subscriptionName reason createdAt vulnerability { title } } }'
 
   backfill:
     desc: 'Load history into cortex: NVD + OSV exports since a date (default 10 years). Override: task backfill -- -backfill-from 2019-01-01 -backfill-sources osv'

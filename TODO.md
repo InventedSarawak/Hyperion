@@ -284,15 +284,16 @@ infrastructure** waits for the same v4 work that containerises the services.
 > scoping and usage metering land. A client that talks to cortex directly skips all of
 > them, and "it is only the CLI" stops being true the moment someone runs it over SSH.
 
-- [ ] **Expose alerting through GraphQL.** `hyperion.alerting.v1` — subscriptions
+- [x] **Expose alerting through GraphQL (2026-09-17).** `hyperion.alerting.v1` — subscriptions
       (create/list/delete) and alerts (list) — is served only over gRPC on :50051. It is
       an end-user feature with no route through the gateway, so the only way to use it is
       `grpcurl`. Queries `subscriptions`, `alerts`; mutations `createSubscription`,
       `deleteSubscription`.
 - [ ] **Give deck an alerts view**, once the gateway serves them — it has Feed, Details,
       Graph and Repositories, and no way to see or manage what it is alerting on.
-- [ ] **Move the grpcurl tasks onto the gateway.** `task blast`, `task subscribe` and
-      `task alerts` call cortex directly; `blast` already has a GraphQL equivalent.
+- [x] **Move the grpcurl tasks onto the gateway (2026-09-17).** `task blast`,
+      `subscribe`, `subscriptions`, `unsubscribe` and `alerts` all go through nexus via
+      `scripts/graphql.sh`. No task calls cortex directly any more.
 - [ ] **Retire `DECK_TRANSPORT=grpc`** as anything but a debugging escape hatch, and say
       so in the docs (registered in TECHNICAL-DEBT.md).
 - [ ] **API keys** issued and verified at nexus, as the first thing that makes the rule
