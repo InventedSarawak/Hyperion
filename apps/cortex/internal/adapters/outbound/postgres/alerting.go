@@ -129,12 +129,17 @@ func NewAlertRepo(pool *pgxpool.Pool) *AlertRepo { return &AlertRepo{pool: pool}
 const appendAlertSQL = `
 INSERT INTO alerts (id, subscription_id, tenant, cve_id, reason, created_at)
 VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (id) DO UPDATE SET
+ON CONFLICT (subscription_id, cve_id) DO UPDATE SET
     reason     = EXCLUDED.reason,
     created_at = EXCLUDED.created_at;`
 
-// Append records an alert. The id is deterministic (subscription + CVE), so a
-// re-observed advisory refreshes the existing alert instead of stacking up.
+// Append records an alert.
+//
+// Conflicts are resolved on (subscription, finding) rather than on the id. The
+// id is derived from the finding's *current* key, and that key can change — a
+// record first stored under a GHSA moves to its CVE when a feed links them —
+// so an id-based upsert would insert a second alert about a finding the
+// subscriber has already been told about.
 func (r *AlertRepo) Append(ctx context.Context, a model.Alert) error {
 	if err := a.Validate(); err != nil {
 		return err

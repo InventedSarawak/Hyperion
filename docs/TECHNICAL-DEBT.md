@@ -172,18 +172,19 @@ and `_LOOKBACK` override one feed.
   still override every source at once. They are commented out in `.env.sample`,
   because leaving them set silently flattens all ten feeds back to one cadence.
 
-### 🟢 A re-keyed finding can alert a subscription once more
+### 🟢 ~~A re-keyed finding can alert a subscription once more~~ — REPAID (v3, 2026-09-17)
 
-Findings are filed under a canonical id (CVE, else GHSA, else MAL) with every other id
-as an alias; when a report links a GHSA-keyed record to its new CVE, the two merge and
-the record moves to the CVE (see CURRENT-FUNCTIONALITIES 1.3).
+"One subscription hearing about one finding is one alert" was expressed only
+through the alert's id, `subscription:cve` — which holds until the finding
+changes its id, and a record first stored under a GHSA moves to its CVE the
+moment a feed links the two. The same subscription then alerted again under the
+new key.
 
-- **Resolved (2026-09-12):** the old split — one advisory as two records, `GHSA-…` and
-  `CVE-…` — is gone; existing alerts are moved to the new id in the same transaction.
-- **Cost that remains:** an alert's id is derived from the subscription and the finding
-  id, so after a re-key the same subscription can be alerted once more under the CVE.
-- **Fix:** derive the alert id from the subscription and the finding's first-stored id,
-  or dedupe on every id the finding carries.
+It is a unique constraint now, `(subscription_id, cve_id)`, so it holds however
+the id is spelled. Retiring a key moves its alerts to the surviving id and drops
+any that would collide — the alert raised first wins, because when someone was
+told is the fact worth keeping. The migration collapses existing duplicates the
+same way.
 
 ### 🟢 ~~Two lockfile formats are still unread~~ — REPAID (v3, 2026-09-17)
 
@@ -426,14 +427,19 @@ have a small GitHub listing adapter.
 - **Cost:** a GitHub API change has to be fixed twice.
 - **Fix:** retire siphon's `-orgs` flag once scripts use the watchlist instead.
 
-### 🟢 Untracking keeps what a repository taught the graph about libraries
+### 🟢 ~~Untracking keeps what a repository taught the graph about libraries~~ — REPAID (v3, 2026-09-17)
 
-Removing a repository deletes it and its own edges, but library-to-library edges
-learned from the module it published stay.
+The edges still outlive the repository that taught them, and deliberately:
+"ajv depends on fast-uri" stays true whether or not anyone tracks ajv, and
+deleting them on untrack would silently shorten every other repository's blast
+radius. The cost was never that they are wrong, only that nothing re-reads a
+manifest nobody scans, so they can go stale unnoticed.
 
-- **Why:** "ajv depends on fast-uri" stays true whether or not anyone tracks ajv, and
-  removing it would silently shorten other repositories' transitive blast radius.
-- **Cost:** those edges are no longer refreshed, so they can go stale.
+They now record **when they were last confirmed** and **which repository taught
+them** (`observed_at`, `learned_from`), and `task graph:prune` retires the ones
+nothing has confirmed for 90 days — `-dry-run` first. Repository-to-library
+edges are left alone: those are refreshed on every scan, so an old one means the
+repository is gone rather than that the fact has aged.
 
 ### 🟢 The gateway adds a hop for the terminal client
 

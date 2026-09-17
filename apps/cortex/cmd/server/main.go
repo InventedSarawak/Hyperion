@@ -53,6 +53,8 @@ func main() {
 		"remove findings whose source has retracted them (rejected CVE ids stored before the check existed), then exit")
 	dryRun := flag.Bool("dry-run", false,
 		"with -purge-withdrawn: report what would be removed, and remove nothing")
+	pruneGraph := flag.Duration("prune-graph", 0,
+		"remove library-to-library edges not confirmed for this long (e.g. 90 days: -prune-graph 2160h), then exit")
 	swapIndex := flag.Bool("swap-index", false,
 		"rebuild the search index under the current mapping alongside the live one, then move the alias onto it, then exit")
 	flag.Parse()
@@ -129,6 +131,11 @@ func main() {
 	blast := queries.NewCalculateBlastRadius(graph, cfg.BlastRadiusMaxDepth).WithResolver(repo)
 	exposure := queries.NewRepositoryExposure(graph, repo, cfg.BlastRadiusMaxDepth)
 	listWatchlist.WithExposure(exposure)
+
+	if *pruneGraph > 0 {
+		runPruneGraph(ctx, logger, graph, *pruneGraph, *dryRun)
+		return
+	}
 
 	if *purgeWithdrawn {
 		purge := commands.NewPurgeWithdrawn(repo, ingest)
@@ -452,6 +459,44 @@ func buildDedupeStore(ctx context.Context, logger *slog.Logger, cfg config.Confi
 	}
 	logger.Info("redis ready", "addr", cfg.RedisAddr)
 	return store, func() { _ = store.Close() }
+}
+
+// runPruneGraph retires library-to-library edges nothing has confirmed for a
+// while.
+//
+// These edges deliberately outlive the repository that taught them — "ajv
+// depends on fast-uri" stays true whether or not anyone tracks ajv — but
+// nothing re-reads a manifest nobody scans, so they need a way to age out.
+func runPruneGraph(ctx context.Context, logger *slog.Logger, graph ports.DependencyGraph, olderThan time.Duration, dryRun bool) {
+	pruner, ok := graph.(interface {
+		StaleLibraryEdges(context.Context, time.Time) (int, error)
+		PruneStaleLibraryEdges(context.Context, time.Time, int) (int, error)
+	})
+	if !ok {
+		logger.Error("pruning needs Neo4j, and it is unreachable")
+		os.Exit(1)
+	}
+
+	cutoff := time.Now().Add(-olderThan)
+	stale, err := pruner.StaleLibraryEdges(ctx, cutoff)
+	if err != nil {
+		logger.Error("could not count stale library edges", "error", err)
+		os.Exit(1)
+	}
+
+	if dryRun {
+		logger.Info("dry run complete; nothing was removed",
+			"would_remove", stale, "not_confirmed_since", cutoff.UTC().Format(time.RFC3339))
+		return
+	}
+
+	pruned, err := pruner.PruneStaleLibraryEdges(ctx, cutoff, 1000)
+	if err != nil {
+		logger.Error("prune failed", "pruned", pruned, "error", err)
+		os.Exit(1)
+	}
+	logger.Info("stale library edges retired",
+		"pruned", pruned, "not_confirmed_since", cutoff.UTC().Format(time.RFC3339))
 }
 
 // runPurgeWithdrawn removes retracted findings and exits non-zero on failure,

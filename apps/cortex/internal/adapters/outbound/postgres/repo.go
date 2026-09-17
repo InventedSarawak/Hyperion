@@ -137,7 +137,18 @@ func (r *Repo) Upsert(ctx context.Context, v model.Vulnerability, replaces ...st
 		).Scan(&firstSeen); err != nil {
 			return fmt.Errorf("postgres: upsert %s: read retired keys: %w", v.CVEID, asConflict(err))
 		}
-		// Alerts point at a finding by id; keep them pointing at it.
+		// Alerts point at a finding by id; keep them pointing at it. An alert
+		// already raised under the surviving id wins — the subscriber was
+		// told then, and that is the moment worth keeping — so a colliding
+		// one from the retired key is dropped rather than moved.
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM alerts a USING alerts b
+			  WHERE a.cve_id = ANY($2::text[])
+			    AND b.cve_id = $1
+			    AND a.subscription_id = b.subscription_id;`, v.CVEID, retired,
+		); err != nil {
+			return fmt.Errorf("postgres: upsert %s: drop duplicate alerts: %w", v.CVEID, asConflict(err))
+		}
 		if _, err := tx.Exec(ctx,
 			`UPDATE alerts SET cve_id = $1 WHERE cve_id = ANY($2::text[]);`, v.CVEID, retired,
 		); err != nil {

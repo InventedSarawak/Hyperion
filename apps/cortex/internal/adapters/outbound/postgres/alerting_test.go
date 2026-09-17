@@ -185,3 +185,84 @@ var _ = Describe("Postgres alerting (integration)", func() {
 		})
 	})
 })
+
+var _ = Describe("one alert per subscription and finding (integration)", func() {
+	var (
+		ctx   = context.Background()
+		subs  *postgres.SubscriptionRepo
+		repo  *postgres.Repo
+		alert *postgres.AlertRepo
+	)
+
+	BeforeEach(func() {
+		dsn := os.Getenv("CORTEX_TEST_DATABASE_URL")
+		if dsn == "" {
+			Skip("set CORTEX_TEST_DATABASE_URL to run Postgres integration tests")
+		}
+		schema := fmt.Sprintf("hyperion_alerts_%d", time.Now().UnixNano())
+
+		admin, err := postgres.Connect(ctx, dsn)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = admin.Exec(ctx, "CREATE SCHEMA "+schema)
+		Expect(err).ToNot(HaveOccurred())
+		admin.Close()
+
+		pool, err := postgres.Connect(ctx, withSearchPath(dsn, schema))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(postgres.Migrate(ctx, pool)).To(Succeed())
+
+		DeferCleanup(func() {
+			pool.Close()
+			cleanup, err := postgres.Connect(ctx, dsn)
+			if err == nil {
+				_, _ = cleanup.Exec(ctx, "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
+				cleanup.Close()
+			}
+		})
+		subs, repo, alert = postgres.NewSubscriptionRepo(pool), postgres.NewRepo(pool), postgres.NewAlertRepo(pool)
+	})
+
+	watch := model.Subscription{
+		ID: "sub-1", Tenant: "acme", Name: "log4j",
+		Rule: model.AlertRule{Term: "log4j"},
+	}
+
+	It("does not alert twice when a finding moves to a new id", func() {
+		Expect(subs.Save(ctx, watch)).To(Succeed())
+
+		ghsa, cve := "GHSA-jfh8-c2jp-5v3q", "CVE-2021-44228"
+
+		// Stored under its GHSA, and the subscriber is told.
+		stored := model.Vulnerability{CVEID: ghsa, Sources: []string{"github_advisory"}}.Normalized()
+		Expect(repo.Upsert(ctx, stored)).To(Succeed())
+		Expect(alert.Append(ctx, model.NewAlert(watch, stored, time.Now()))).To(Succeed())
+
+		// A feed links the ids: the finding moves to its CVE.
+		merged := model.Vulnerability{CVEID: cve, Aliases: []string{ghsa}, Sources: []string{"nvd"}}.Normalized()
+		Expect(repo.Upsert(ctx, merged, ghsa)).To(Succeed())
+
+		// The next observation matches the same rule, under the new id.
+		Expect(alert.Append(ctx, model.NewAlert(watch, merged, time.Now()))).To(Succeed())
+
+		// Still one alert: the subscriber has already been told about this
+		// finding, and re-keying it is not news.
+		raised, err := alert.List(ctx, "", "", 50)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(raised).To(HaveLen(1))
+		Expect(raised[0].CVEID).To(Equal(cve))
+	})
+
+	It("still alerts separately for a genuinely different finding", func() {
+		Expect(subs.Save(ctx, watch)).To(Succeed())
+
+		for _, id := range []string{"CVE-2021-44228", "CVE-2021-45046"} {
+			v := model.Vulnerability{CVEID: id, Sources: []string{"nvd"}}.Normalized()
+			Expect(repo.Upsert(ctx, v)).To(Succeed())
+			Expect(alert.Append(ctx, model.NewAlert(watch, v, time.Now()))).To(Succeed())
+		}
+
+		raised, err := alert.List(ctx, "", "", 50)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(raised).To(HaveLen(2))
+	})
+})

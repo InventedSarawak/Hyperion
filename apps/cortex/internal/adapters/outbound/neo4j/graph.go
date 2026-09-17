@@ -367,7 +367,34 @@ MERGE (pub)-[e:DEPENDS_ON]->(l)
 SET e.version = dep.version,
     e.direct = true,
     e.manifest_path = dep.manifest_path,
-    e.observed_at = $observed_at`
+    e.observed_at = $observed_at,
+    e.learned_from = $full_name`
+
+// pruneStaleLibraryEdgesCypher removes library-to-library edges nothing has
+// confirmed for a while.
+//
+// These edges outlive the repository that taught them on purpose: "ajv depends
+// on fast-uri" stays true whether or not anyone tracks ajv, and deleting them
+// when a repository is untracked would silently shorten every other
+// repository's blast radius. What they cannot do is stay right forever —
+// nothing re-reads a manifest nobody scans any more — so they carry when they
+// were last seen, and this is how the ones that have gone quiet are retired.
+//
+// Repository-to-library edges are deliberately untouched: those are refreshed
+// on every scan, so an old one means the repository is gone, not that the fact
+// has aged.
+const pruneStaleLibraryEdgesCypher = `
+MATCH (:Library)-[e:DEPENDS_ON]->(:Library)
+WHERE e.observed_at IS NULL OR e.observed_at < $cutoff
+WITH e LIMIT $limit
+DELETE e
+RETURN count(*) AS pruned`
+
+// countStaleLibraryEdgesCypher counts what a prune would remove.
+const countStaleLibraryEdgesCypher = `
+MATCH (:Library)-[e:DEPENDS_ON]->(:Library)
+WHERE e.observed_at IS NULL OR e.observed_at < $cutoff
+RETURN count(e) AS stale`
 
 const linkVulnerabilityCypher = `
 MERGE (v:Vulnerability {cve_id: $cve_id})
@@ -497,4 +524,69 @@ func (g *Graph) RemoveRepository(ctx context.Context, fullName string) error {
 		return fmt.Errorf("neo4j: remove repository %s: %w", fullName, err)
 	}
 	return nil
+}
+
+// StaleLibraryEdges counts library-to-library edges not confirmed since cutoff.
+func (g *Graph) StaleLibraryEdges(ctx context.Context, cutoff time.Time) (int, error) {
+	session := g.session(ctx, driver.AccessModeRead)
+	defer session.Close(ctx)
+
+	result, err := session.ExecuteRead(ctx, func(tx driver.ManagedTransaction) (any, error) {
+		records, err := tx.Run(ctx, countStaleLibraryEdgesCypher, map[string]any{
+			"cutoff": cutoff.UTC().Format(time.RFC3339),
+		})
+		if err != nil {
+			return 0, err
+		}
+		record, err := records.Single(ctx)
+		if err != nil {
+			return 0, err
+		}
+		return int(record.Values[0].(int64)), nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("neo4j: count stale library edges: %w", err)
+	}
+	return result.(int), nil
+}
+
+// PruneStaleLibraryEdges removes library-to-library edges not confirmed since
+// cutoff, in batches, and reports how many went.
+func (g *Graph) PruneStaleLibraryEdges(ctx context.Context, cutoff time.Time, batch int) (int, error) {
+	if batch <= 0 {
+		batch = 1000
+	}
+	session := g.session(ctx, driver.AccessModeWrite)
+	defer session.Close(ctx)
+
+	total := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+		pruned, err := session.ExecuteWrite(ctx, func(tx driver.ManagedTransaction) (any, error) {
+			records, err := tx.Run(ctx, pruneStaleLibraryEdgesCypher, map[string]any{
+				"cutoff": cutoff.UTC().Format(time.RFC3339),
+				"limit":  batch,
+			})
+			if err != nil {
+				return 0, err
+			}
+			record, err := records.Single(ctx)
+			if err != nil {
+				return 0, err
+			}
+			return int(record.Values[0].(int64)), nil
+		})
+		if err != nil {
+			return total, fmt.Errorf("neo4j: prune stale library edges: %w", err)
+		}
+
+		n := pruned.(int)
+		total += n
+		// A pass that removed nothing means there is nothing left to remove.
+		if n == 0 {
+			return total, nil
+		}
+	}
 }
