@@ -37,7 +37,7 @@ const unbounded = 1 << 30
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.update(msg)
 	if model, ok := next.(Model); ok {
-		return model.clampScroll(), cmd
+		return model.reflow().clampScroll(), cmd
 	}
 	return next, cmd
 }
@@ -93,7 +93,7 @@ func (m Model) treeLines() []string {
 // clampScroll keeps the cursor on screen and both offsets in range.
 func (m Model) clampScroll() Model {
 	rows := m.bodyRows()
-	total := len(m.feed.Hits)
+	total := len(m.rows)
 
 	m.cursor = clamp(m.cursor, 0, max(0, total-1))
 	if m.cursor < m.offset {

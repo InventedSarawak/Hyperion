@@ -134,6 +134,20 @@ type Model struct {
 	cursor int
 	radius model.BlastRadius
 
+	// rows is the feed as the list draws it, with each run of findings from
+	// one publisher folded to a single header. The cursor indexes this, not
+	// the feed: a closed fold is one row standing for two hundred findings.
+	rows []model.FeedRow
+	// folds holds the signatures the reader has opened. Keeping it here
+	// rather than in the feed means a refresh — which replaces the feed
+	// wholesale — leaves open runs open.
+	folds map[string]bool
+	// foldGen counts fold changes, and flowed is the feed state rows was
+	// last built from. Grouping walks every loaded finding, so it runs when
+	// something has actually changed rather than on every keystroke.
+	foldGen int
+	flowed  flowKey
+
 	// offset is the first feed row on screen; graphOffset the first tree
 	// line; detailOffset the first details line. All are kept in range by
 	// clampScroll after every message.
@@ -384,12 +398,53 @@ func scheduleStreamRefresh() tea.Cmd {
 	return tea.Tick(streamDebounce, func(t time.Time) tea.Msg { return streamRefreshMsg(t) })
 }
 
-// Selected returns the vulnerability under the cursor, if any.
+// flowKey fingerprints the state rows was built from.
+type flowKey struct {
+	hits    int
+	updated time.Time
+	folds   int
+}
+
+// reflow rebuilds the folded row list when the feed or the folds have moved.
+// It is called after every message, so the rows on screen can never describe
+// a feed that has since been replaced — which would put the cursor on a
+// different finding than the one under it.
+func (m Model) reflow() Model {
+	key := flowKey{hits: len(m.feed.Hits), updated: m.feed.UpdatedAt, folds: m.foldGen}
+	if m.rows != nil && key == m.flowed {
+		return m
+	}
+	m.rows, m.flowed = m.feed.Rows(m.folds), key
+	return m
+}
+
+// toggleFold opens or closes the run under the cursor.
+func (m Model) toggleFold(b *model.Batch) Model {
+	if m.folds == nil {
+		m.folds = map[string]bool{}
+	}
+	m.folds[b.Signature] = !m.folds[b.Signature]
+	m.foldGen++
+	return m
+}
+
+// Selected returns the vulnerability under the cursor, if any. A fold's
+// header is not a finding, so it selects nothing: there is no single record
+// for two hundred of them to open.
 func (m Model) Selected() (model.Vulnerability, bool) {
-	if m.cursor < 0 || m.cursor >= len(m.feed.Hits) {
+	row, ok := m.row()
+	if !ok || row.IsBatch() {
 		return model.Vulnerability{}, false
 	}
-	return m.feed.Hits[m.cursor].Vulnerability, true
+	return row.Vulnerability, true
+}
+
+// row returns the display row under the cursor, if any.
+func (m Model) row() (model.FeedRow, bool) {
+	if m.cursor < 0 || m.cursor >= len(m.rows) {
+		return model.FeedRow{}, false
+	}
+	return m.rows[m.cursor], true
 }
 
 // open shows a finding in the Details tab and starts loading both its full

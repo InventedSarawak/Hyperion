@@ -80,6 +80,38 @@ var _ = Describe("Postgres Repo (integration)", func() {
 		Expect(got.PublishedAt.Year()).To(Equal(2021))
 	})
 
+	It("keeps a stated severity that no score carries", func() {
+		// The Linux kernel CNA publishes thousands of CVEs and scores none of
+		// them; a rating that survives ingestion but not the round trip is
+		// lost at the next reindex, which is what used to happen here.
+		in := model.Vulnerability{
+			CVEID:       "CVE-2026-93148",
+			Description: "In the Linux kernel, the following vulnerability has been resolved",
+			Severity:    model.SeverityHigh,
+		}
+		Expect(repo.Upsert(ctx, in)).To(Succeed())
+
+		got, err := repo.GetByID(ctx, "CVE-2026-93148")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got.Severity).To(Equal(model.SeverityHigh))
+		Expect(got.TopSeverity()).To(Equal(model.SeverityHigh))
+	})
+
+	It("leaves severity unset when no source stated one", func() {
+		// Absent is not the same as "unknown": a finding with no stated
+		// rating is rated from its scores, and must not read back as though
+		// a source had said it did not know.
+		Expect(repo.Upsert(ctx, model.Vulnerability{
+			CVEID:  "CVE-2-SCORED",
+			Scores: []model.CVSS{{BaseScore: 9.8, Severity: model.SeverityCritical}},
+		})).To(Succeed())
+
+		got, err := repo.GetByID(ctx, "CVE-2-SCORED")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got.Severity).To(BeEmpty())
+		Expect(got.TopSeverity()).To(Equal(model.SeverityCritical))
+	})
+
 	It("returns ErrNotFound for an unknown CVE", func() {
 		_, err := repo.GetByID(ctx, "CVE-0000-0000")
 		Expect(err).To(MatchError(ports.ErrNotFound))

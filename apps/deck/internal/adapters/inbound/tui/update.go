@@ -81,7 +81,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Newer findings arriving at the top would otherwise slide a
 			// different row under a cursor that stayed put.
 			if msg.keep != "" {
-				if i := m.feed.IndexOf(msg.keep); i >= 0 {
+				// Against the folded rows, not the feed: the finding the
+				// cursor was on may now sit inside a closed run, and
+				// pointing at its position in the feed would land the
+				// cursor somewhere else entirely.
+				if i := m.feed.RowIndexOf(m.feed.Rows(m.folds), msg.keep); i >= 0 {
 					m.cursor = i
 				}
 			}
@@ -287,6 +291,11 @@ func (m Model) updateBrowsing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		switch m.tab {
 		case TabFeed:
+			// On a fold, enter opens the run rather than a finding: it is
+			// the only thing the row stands for.
+			if row, ok := m.row(); ok && row.IsBatch() {
+				return m.toggleFold(row.Batch), nil
+			}
 			// Reading the finding comes first; its blast radius loads
 			// alongside, one keypress away.
 			selected, ok := m.Selected()
@@ -387,7 +396,7 @@ func (m Model) loadMoreIfAtEnd() (tea.Model, tea.Cmd) {
 	if m.tab != TabFeed || m.loading || m.loadingMore || !m.feed.HasMore() {
 		return m, nil
 	}
-	if m.cursor < len(m.feed.Hits)-1 {
+	if m.cursor < len(m.rows)-1 {
 		return m, nil
 	}
 	m.loadingMore = true

@@ -524,7 +524,10 @@ and searchable, but nobody is told about it.
 **How it is rated.** A malicious package is critical, and the domain says so rather than a
 feed: no CVSS vector is ever written for one. The rating lives on the finding itself, so
 it needs no invented score — and a finding rated without a score sorts by its rating's
-CVSS floor (critical = 9.0) rather than as zero.
+CVSS floor (critical = 9.0) rather than as zero. That rating is stored in its own
+`severity` column, so it survives a restart and a `task reindex`; before it had one, a
+rating held on the finding rather than in a score was dropped on write and the record read
+back as UNKNOWN.
 
 **Why only malware.** OSV's malware dataset is ~240,000 records, nearly all typosquats of
 popular names that nobody has installed; a subscription with a broad rule matching all of
@@ -639,6 +642,28 @@ is **id · severity · headline**, where the headline is the title or, for recor
 severity. Malware is left out of the feed until `m` brings it in; searching for its exact
 id (`MAL-…`, `GHSA-…`) finds it either way.
 
+**Batches are folded.** Publishers file findings in runs, and the Linux kernel CNA files
+them in runs of hundreds — consecutively numbered, every one of them opening "In the Linux
+kernel, the following vulnerability has been resolved", and unscored, because that CNA
+assigns no CVSS at all. Sorted newest-first they arrive adjacent, so one batch fills the
+screen and everything else published that day is pushed below the fold.
+
+Six or more consecutive findings sharing an opening collapse to a single row:
+
+```
+  CVE-2026-9001       CRITICAL  Remote code execution in Acme Server via crafted header
+  CVE-2026-9002       HIGH      Path traversal in Widget CMS uploads
+  + 198 findings      HIGH      In the Linux kernel, the following vulnerability … · high 1 · unknown 197
+```
+
+The header carries the count, **the worst rating inside the run**, and the breakdown by
+rating, so a fold can never bury the one finding in two hundred that mattered — the row
+above is rated HIGH because one of the 198 is. `enter` opens the run in place and closes it
+again. Five or fewer in a row are left alone: they read perfectly well as ordinary rows,
+and a fold over them is more chrome than it saves. A run stays open across a refresh, because
+the fold is remembered by the wording it groups on rather than by a position in a list that
+the refresh replaces.
+
 | Key                         | Does                                                              |
 | :-------------------------- | :---------------------------------------------------------------- |
 | `/`                         | search (every key is text until `enter` / `esc`)                  |
@@ -647,6 +672,7 @@ id (`MAL-…`, `GHSA-…`) finds it either way.
 | `↑↓` `jk` `g G` `pgup pgdn` | move; reaching the end loads the next page                        |
 | `n`                         | load the next page now                                            |
 | `enter`                     | open the finding in **Details** (blast radius starts loading too) |
+| `enter` (on a fold)         | open or close that run of findings                                |
 | `b`                         | open the finding straight in the **Graph Explorer**               |
 | `r`                         | refresh                                                           |
 

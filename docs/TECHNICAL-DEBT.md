@@ -295,6 +295,17 @@ exactly what such a rule is for.
 search document falls back to the rating's CVSS floor (critical -> 9.0) when
 there is no score, so "critical" sorts as critical rather than as zero.
 
+**The rating was never stored (fixed 2026-09-18).** `Severity` was added to the
+entity above but not to the table, so `upsertSQL` did not write it and
+`selectVulnerability` did not read it. The rating survived ingestion, where
+`Normalized` runs, and was dropped on the way to disk — every read back, including
+the `task reindex` that rebuilds the search index from Postgres, saw only what the
+scores happened to say. Most malware also carries a feed's own "critical" among its
+scores, which is what kept this from being visible; a finding the domain rated
+before any feed rated it had nothing to fall back on. Migration
+`0009_stated_severity.sql` adds the column; null means "no stated rating", which is
+not the same as `unknown`. Existing rows fill in as feeds re-report them.
+
 - **What remains:** the records still cost storage and index space. Not indexing
   them would make an exact-id search stop finding them, which is a product
   decision rather than a cleanup.
@@ -381,6 +392,34 @@ cortex applied the observation when it came back.
   supersedes the one that failed.
 - **The RPC remains** for callers that want the edge count synchronously, and as
   the fallback when the broker is unreachable.
+
+### 🟢 ~~One publisher's batch fills the whole feed~~ — REPAID (2026-09-18)
+
+The Linux kernel CNA files findings in runs of hundreds: consecutively numbered,
+every one opening "In the Linux kernel, the following vulnerability has been
+resolved", and unscored, because that CNA assigns no CVSS at all. Sorted
+newest-first they arrive adjacent, so one batch filled the screen and everything
+else published that day was pushed below the fold. In the store they are 14,496
+records, 2,970 of them unscored — but in the last 30 days they are only 1,691
+findings out of ~17,230, about 10%. They did not look like 10% because they
+arrived in a block.
+
+deck now folds six or more consecutive findings sharing an opening into one row,
+which carries the count, **the worst rating inside the run** and the breakdown by
+rating; `enter` opens the run in place. The threshold is a run length, not a
+publisher list: nothing here knows what the kernel is, so any publisher filing in
+bulk folds the same way. Five or fewer are left alone.
+
+- **What was deliberately not done:** the findings are not hidden, filtered or
+  deleted. "Has been resolved" is that CNA's boilerplate for _a patch exists
+  upstream_ — findings scored 8.8 carry the same sentence — so it says nothing
+  about whether a reader is exposed, and dropping them would discard the largest
+  single publisher of real CVEs. The rejected-finding path (`vulnStatus: Rejected`
+  -> `Withdrawn` -> `task purge:withdrawn`) is the one that means retracted, and
+  it is unrelated.
+- **What remains:** the unscored ones are still unscored. That is NVD's analysis
+  backlog, not something this repo can fix — the fold reports them as `unknown`
+  rather than guessing.
 
 ### 🟡 Library-to-library edges reach only as far as the watchlist
 

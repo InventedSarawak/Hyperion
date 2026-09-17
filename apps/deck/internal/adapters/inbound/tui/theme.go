@@ -62,8 +62,10 @@ func verdictStyle(v string) lipgloss.Style {
 	}
 }
 
-// labelMalware stands in for the severity of a malicious package.
-const labelMalware = "MALWARE"
+// labelMalware stands in for the severity of a malicious package. The view
+// model decides the label — it is what a batch is rated by too — so the two
+// can never drift into disagreeing.
+const labelMalware = model.LabelMalware
 
 // statusStyle colours a repository's scan state.
 func statusStyle(status string) lipgloss.Style {
