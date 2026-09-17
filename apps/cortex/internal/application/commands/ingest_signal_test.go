@@ -155,8 +155,12 @@ var _ = Describe("IngestSignal use case", func() {
 		Expect(count).To(Equal(1))
 
 		got, _ := repo.GetByID(ctx, "CVE-1")
-		Expect(got.Description).To(Equal("updated"))
 		Expect(got.Sources).To(ConsistOf("nvd", "cisa_kev"))
+		// The description is chosen by which feed is worth reading, not by
+		// which reported last: KEV's entry is a catalog line, NVD's is an
+		// analyst paragraph, so the second observation does not displace it.
+		Expect(got.Description).To(Equal("first"))
+		Expect(got.DescriptionSource).To(Equal("nvd"))
 	})
 
 	It("also indexes the stored vulnerability for search", func() {

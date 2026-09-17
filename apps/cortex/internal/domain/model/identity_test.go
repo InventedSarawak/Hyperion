@@ -78,3 +78,73 @@ var _ = Describe("Vulnerability merge across ids", func() {
 		Expect(a.Merge(b).IDs()).To(ConsistOf("CVE-2021-44228", "GHSA-jfh8-c2jp-5v3q", "GO-2022-0001"))
 	})
 })
+
+var _ = Describe("Merge choosing between feeds", func() {
+	nvd := func(desc string) model.Vulnerability {
+		return model.Vulnerability{
+			CVEID: "CVE-2021-44228", Description: desc, Sources: []string{"nvd"},
+			Scores: []model.CVSS{{Version: "3.1", BaseScore: 10, Severity: model.SeverityCritical}},
+		}
+	}
+	github := func(desc string) model.Vulnerability {
+		return model.Vulnerability{
+			CVEID: "CVE-2021-44228", Description: desc, Sources: []string{"github_advisory"},
+			Scores: []model.CVSS{{Version: "3.1", BaseScore: 9.8, Severity: model.SeverityCritical}},
+		}
+	}
+
+	It("keeps the better description whichever order the feeds arrive in", func() {
+		// The same two observations merged both ways round. Which prose a
+		// reader sees should not depend on which feed polled last.
+		githubFirst := github("full write-up").Merge(nvd("one paragraph"))
+		nvdFirst := nvd("one paragraph").Merge(github("full write-up"))
+
+		Expect(githubFirst.Description).To(Equal("full write-up"))
+		Expect(nvdFirst.Description).To(Equal("full write-up"))
+	})
+
+	It("keeps the more authoritative scores whichever order they arrive in", func() {
+		githubFirst := github("x").Merge(nvd("y"))
+		nvdFirst := nvd("y").Merge(github("x"))
+
+		// NVD's vectors are assigned by NIST analysts and are what most
+		// tooling quotes.
+		Expect(githubFirst.Scores[0].BaseScore).To(Equal(10.0))
+		Expect(nvdFirst.Scores[0].BaseScore).To(Equal(10.0))
+	})
+
+	It("lets a feed correct itself", func() {
+		stored := github("first attempt").Merge(nvd("summary"))
+
+		corrected := stored.Merge(github("corrected write-up"))
+
+		// Refusing a source's own update would freeze the first thing it ever
+		// said about the finding.
+		Expect(corrected.Description).To(Equal("corrected write-up"))
+	})
+
+	It("records which feed each value came from", func() {
+		merged := nvd("summary").Merge(github("full write-up"))
+
+		Expect(merged.DescriptionSource).To(Equal("github_advisory"))
+		Expect(merged.ScoresSource).To(Equal("nvd"))
+	})
+
+	It("replaces an unattributed value with an attributed one", func() {
+		// Everything stored before the attribution existed looks like this.
+		legacy := model.Vulnerability{CVEID: "CVE-2021-44228", Description: "old text"}
+
+		merged := legacy.Merge(nvd("summary"))
+
+		Expect(merged.Description).To(Equal("summary"))
+		Expect(merged.DescriptionSource).To(Equal("nvd"))
+	})
+
+	It("does not lose a description to a feed that has none", func() {
+		stored := github("full write-up")
+
+		merged := stored.Merge(model.Vulnerability{CVEID: "CVE-2021-44228", Sources: []string{"nvd"}})
+
+		Expect(merged.Description).To(Equal("full write-up"))
+	})
+})

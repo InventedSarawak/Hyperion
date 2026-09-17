@@ -357,20 +357,27 @@ none. Stopping cortex is safe at any point: the batch in hand finishes within
 
 **Merge rules** (how two feeds' views of one finding combine):
 
-| Field             | Rule                                                           |
-| :---------------- | :------------------------------------------------------------- |
-| title             | a real title wins; a title that only repeats the id is ignored |
-| description       | the newest non-empty one wins                                  |
-| scores            | the newest non-empty set wins                                  |
-| references        | unioned, de-duplicated                                         |
-| sources           | unioned — which feeds reported it                              |
-| ids               | unioned; the canonical id is re-chosen from the union (1.3)    |
-| kind              | malware if any feed says so, and it stays malware              |
-| affected packages | unioned by package; the first version range seen is kept       |
-| dates             | the newest non-empty wins                                      |
+| Field             | Rule                                                                   |
+| :---------------- | :--------------------------------------------------------------------- |
+| title             | a real title wins; a title that only repeats the id is ignored         |
+| description       | the best feed's wins — GitHub, then NVD, then vendors — not the newest |
+| scores            | the most authoritative feed's win — NVD, then GitHub — not the newest  |
+| references        | unioned, de-duplicated                                                 |
+| sources           | unioned — which feeds reported it                                      |
+| ids               | unioned; the canonical id is re-chosen from the union (1.3)            |
+| kind              | malware if any feed says so, and it stays malware                      |
+| affected packages | unioned by package; the first version range seen is kept               |
+| dates             | the newest non-empty wins                                              |
 
 NVD has no title field, so an NVD-only record has an empty title and every view shows its
 description instead.
+
+Description and scores are single values, so two feeds reporting one finding differently
+means choosing between them. The choice is by **which feed is worth quoting**, not which
+polled last — otherwise the same record shows NVD's paragraph at noon and GitHub's
+write-up at one o'clock. The winning source is recorded on the row, a feed may always
+correct itself, and values stored before this existed are replaced by the first attributed
+observation.
 
 ### 2.2 Search
 

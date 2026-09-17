@@ -31,19 +31,22 @@ func NewRepo(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
 const selectVulnerability = `
 SELECT v.cve_id, v.kind, v.title, v.description, v.scores, v.reference_urls, v.sources,
        v.affected_packages, v.published_at, v.modified_at,
-       COALESCE((SELECT array_agg(a.alias) FROM finding_aliases a WHERE a.cve_id = v.cve_id), '{}')
+       COALESCE((SELECT array_agg(a.alias) FROM finding_aliases a WHERE a.cve_id = v.cve_id), '{}'),
+       COALESCE(v.description_source, ''), COALESCE(v.scores_source, '')
 FROM vulnerabilities v`
 
 const upsertSQL = `
 INSERT INTO vulnerabilities
     (cve_id, kind, title, description, scores, reference_urls, sources, affected_packages,
-     published_at, modified_at, first_seen_at, last_seen_at)
-VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, COALESCE($11::timestamptz, now()), now())
+     published_at, modified_at, first_seen_at, last_seen_at, description_source, scores_source)
+VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, COALESCE($11::timestamptz, now()), now(), $12, $13)
 ON CONFLICT (cve_id) DO UPDATE SET
-    kind              = EXCLUDED.kind,
-    title             = EXCLUDED.title,
-    description       = EXCLUDED.description,
-    scores            = EXCLUDED.scores,
+    kind               = EXCLUDED.kind,
+    title              = EXCLUDED.title,
+    description        = EXCLUDED.description,
+    description_source = EXCLUDED.description_source,
+    scores             = EXCLUDED.scores,
+    scores_source      = EXCLUDED.scores_source,
     reference_urls    = EXCLUDED.reference_urls,
     sources           = EXCLUDED.sources,
     affected_packages = EXCLUDED.affected_packages,
@@ -140,6 +143,7 @@ func (r *Repo) Upsert(ctx context.Context, v model.Vulnerability, replaces ...st
 		v.CVEID, string(kind), v.Title, v.Description,
 		string(scores), string(refs), string(sources), string(packages),
 		nullableTime(v.PublishedAt), nullableTime(v.ModifiedAt), firstSeen,
+		v.DescriptionSource, v.ScoresSource,
 	); err != nil {
 		return fmt.Errorf("postgres: upsert %s: %w", v.CVEID, asConflict(err))
 	}
@@ -242,7 +246,7 @@ func collectVulnerabilities(rows pgx.Rows) ([]model.Vulnerability, error) {
 			aliases                  []string
 		)
 		if err := rows.Scan(&v.CVEID, &kind, &v.Title, &v.Description, &scores, &refs, &srcs, &pkgs,
-			&published, &modified, &aliases); err != nil {
+			&published, &modified, &aliases, &v.DescriptionSource, &v.ScoresSource); err != nil {
 			return nil, fmt.Errorf("postgres: scan row: %w", err)
 		}
 		v.Kind = model.FindingKind(kind)

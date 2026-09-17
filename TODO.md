@@ -244,8 +244,9 @@ feature:
 - [x] **Read `yarn.lock` and `packages.lock.json` (2026-09-17)** (🟢). Every lockfile
       format the scanner meets now settles versions outright. Verified on `yarnpkg/berry`:
       1,794 dependencies read from its `yarn.lock`.
-- [ ] **Keep one description and score set per source** (🟡 _last-writer-wins_). Which
-      description you read currently depends on which feed reported last.
+- [x] **Descriptions and scores no longer last-writer-wins (2026-09-17)** (🟡). Chosen by
+      ranking the feeds — GitHub's prose, NVD's scores — with the winning source recorded
+      on the row, so the same record reads the same however the polls interleave.
 
 ### Deliberately left for v4 and later
 

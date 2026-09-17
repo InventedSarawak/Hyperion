@@ -224,16 +224,25 @@ together. A repository requiring that package previously reached one of them.
   catch — the first migration failed on exactly that and disabled the graph
   until it was fixed.
 
-### 🟡 Descriptions and scores are last-writer-wins
+### 🟢 ~~Descriptions and scores are last-writer-wins~~ — REPAID (v3, 2026-09-17)
 
-`Merge` unions sources, references and affected packages, but for the description and
-the score set the newest non-empty observation wins, whichever feed it came from.
+Both are chosen by ranking the feeds rather than by which reported most
+recently, and the record remembers which feed each value came from
+(`description_source`, `scores_source`).
 
-- **Cost:** which description you read depends on which feed reported last — NVD's
-  one-paragraph summary or GitHub's full Markdown write-up can replace each other on
-  every poll. Nothing is lost that matters for matching, but the display wobbles.
-- **Fix:** keep one description and score set per source and choose by source priority
-  at read time.
+- **Descriptions:** GitHub first — it writes full advisories with reproduction
+  and remediation — then NVD's analyst paragraph, then vendors, then the rest.
+- **Scores:** NVD first, because its vectors are assigned by NIST analysts and
+  are what most tooling quotes; then GitHub, then the vendor, who is useful and
+  not disinterested about its own product.
+- **A feed always replaces itself,** so a correction is never refused.
+- **Unattributed values rank last,** so everything stored before this settles
+  into order as feeds re-report. Attribution is recorded whether the value was
+  replaced _or kept_ — a kept value that forgot its source would be displaced
+  by the next observation from anywhere, which is the wobble this removes.
+- **Not** one description stored per source, as the entry originally proposed:
+  that is a schema of its own and a read-time choice, for a problem that
+  ranking solves at merge time.
 
 ### 🟡 ~~Malware is ingested in full but only hidden~~ — PARTLY REPAID (v3, 2026-09-17)
 
