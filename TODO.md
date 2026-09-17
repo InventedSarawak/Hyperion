@@ -276,6 +276,53 @@ infrastructure** waits for the same v4 work that containerises the services.
 
 ## TODO v4: The Platform (SaaS)
 
+### The edge: everything a user touches goes through nexus
+
+> **The rule (decided 2026-09-17):** gRPC is internal transport only — service to
+> service. Anything an end user or a client application reaches goes through the
+> gateway, because that is where authentication, API keys, rate limiting, per-tenant
+> scoping and usage metering land. A client that talks to cortex directly skips all of
+> them, and "it is only the CLI" stops being true the moment someone runs it over SSH.
+
+- [ ] **Expose alerting through GraphQL.** `hyperion.alerting.v1` — subscriptions
+      (create/list/delete) and alerts (list) — is served only over gRPC on :50051. It is
+      an end-user feature with no route through the gateway, so the only way to use it is
+      `grpcurl`. Queries `subscriptions`, `alerts`; mutations `createSubscription`,
+      `deleteSubscription`.
+- [ ] **Give deck an alerts view**, once the gateway serves them — it has Feed, Details,
+      Graph and Repositories, and no way to see or manage what it is alerting on.
+- [ ] **Move the grpcurl tasks onto the gateway.** `task blast`, `task subscribe` and
+      `task alerts` call cortex directly; `blast` already has a GraphQL equivalent.
+- [ ] **Retire `DECK_TRANSPORT=grpc`** as anything but a debugging escape hatch, and say
+      so in the docs (registered in TECHNICAL-DEBT.md).
+- [ ] **API keys** issued and verified at nexus, as the first thing that makes the rule
+      enforceable rather than a convention.
+
+### Notifications (`herald`)
+
+> **Decided 2026-09-17.** Design settled: Kafka carries the event, a Postgres outbox in
+> the notifier carries delivery with retries, a new service owns the delivery adapters,
+> and pushes are detected by storing the commit SHA rather than by webhook. RabbitMQ was
+> considered and left out — Kafka already carries the events, and a second broker needs a
+> better reason than the architecture diagram naming one.
+
+- [ ] **Rescan on change, not on a timer.** Store the default branch's head SHA on
+      `TrackedRepository`; the watchlist pass asks GitHub for just that SHA (one request)
+      and does the full manifest read only when it changed. Lets the check run every few
+      minutes while costing less quota than the current 6-hourly full rescan.
+- [ ] **Notification policy per repository:** minimum severity (default **high +
+      critical**, plus all malware), changeable to include low and medium.
+- [ ] **Two triggers in cortex**, both publishing to `hyperion.notifications.v1`:
+      a scan landing (evaluate the repository's exposure) and a new finding arriving that
+      reaches a tracked repository (the graph already answers this — it is the query
+      malware triage uses).
+- [ ] **`apps/herald`:** consume the topic, write a delivery row, deliver, retry with
+      backoff, park what fails. Duplicate suppression on `(repository, finding)` as a
+      Postgres constraint — durable, unlike the Redis window.
+- [ ] **First channel: an outgoing webhook** (JSON POST to a configured URL). Slack and
+      email are adapters behind the same port afterwards.
+- [ ] **Surface notifications in deck**, and in `console` when it exists.
+
 ### Data Lake Strategy
 
 - [ ] Add **MinIO** to `docker-compose.yml`
