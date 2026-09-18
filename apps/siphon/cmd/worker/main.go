@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -26,6 +27,7 @@ import (
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/ports"
 	siphonconfig "github.com/inventedsarawak/hyperion/apps/siphon/internal/platform/config"
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/platform/sources"
+	"github.com/inventedsarawak/hyperion/packages/common/health"
 )
 
 func main() {
@@ -112,6 +114,9 @@ func main() {
 	stopScan := startRepositoryScan(ctx, logger, cfg)
 	defer stopScan()
 
+	// siphon has no API, so this is the only way to ask it anything.
+	serveHealth(ctx, logger, cfg, siphonHealth(sched, pub, cfg))
+
 	logger.Info("siphon starting",
 		"active_sources", registry.ActiveKinds(),
 		"tick", cfg.MinInterval(registry.Active()).String(),
@@ -175,6 +180,66 @@ func buildDedupeStore(ctx context.Context, logger *slog.Logger, cfg siphonconfig
 	logger.Info("suppressing observations already published",
 		"addr", cfg.Dedupe.RedisAddr, "window", cfg.Dedupe.Window.String())
 	return store, func() { _ = store.Close() }
+}
+
+// siphonHealth is what siphon needs in order to be siphon.
+//
+// The poll heartbeat is the one that matters. A worker rarely crashes — it
+// wedges, on a socket with no timeout or a feed that accepts the connection
+// and never answers — and a wedged process serves a health endpoint as happily
+// as a working one. Asking when the loop last turned is the only question that
+// tells them apart.
+//
+// Kafka is required when it is configured, because a siphon that cannot
+// publish is reading feeds into nowhere. Redis is not: the code already treats
+// an unreachable Redis as a warning — the watermark stops surviving restarts
+// and unchanged observations get republished, both wasteful, neither wrong —
+// so the probe says the same thing rather than something stricter.
+func siphonHealth(sched *scheduler.Scheduler, pub ports.SignalPublisher, cfg siphonconfig.Config) *health.Checker {
+	checks := []health.Check{{
+		Name:     "poll",
+		Required: true,
+		Probe: func(context.Context) error {
+			beat := sched.LastBeat()
+			if beat.IsZero() {
+				return errors.New("no poll has completed yet")
+			}
+			if since := time.Since(beat); since > cfg.HealthStaleAfter {
+				return fmt.Errorf("last poll was %s ago, over the %s limit", since.Truncate(time.Second), cfg.HealthStaleAfter)
+			}
+			return nil
+		},
+	}}
+	if pinger, ok := pub.(interface{ Ping(context.Context) error }); ok {
+		checks = append(checks, health.Check{Name: "kafka", Required: true, Probe: pinger.Ping})
+	}
+	return health.New(2*time.Second, checks...)
+}
+
+// serveHealth runs the health endpoint until the context is cancelled. An
+// empty address turns it off, for a siphon run from a terminal.
+func serveHealth(ctx context.Context, logger *slog.Logger, cfg siphonconfig.Config, checker *health.Checker) {
+	if cfg.HealthAddr == "" {
+		return
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/healthz", health.Handler(checker))
+
+	server := &http.Server{Addr: cfg.HealthAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	}()
+	go func() {
+		logger.Info("health endpoint listening", "addr", cfg.HealthAddr, "path", "/healthz")
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			// Not fatal: siphon's job is reading feeds, and it can do that
+			// whether or not anything is able to ask how it is getting on.
+			logger.Error("health endpoint stopped", "error", err)
+		}
+	}()
 }
 
 // buildPublisher chooses where published events go, and is the only place in

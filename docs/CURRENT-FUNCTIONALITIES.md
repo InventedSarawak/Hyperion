@@ -821,3 +821,58 @@ request is in flight.
 
 Configuration lives in `.env` (documented key by key in `.env.sample`); a real environment
 variable always overrides it.
+
+### 5.1 Health
+
+Every service answers for itself. A bound port is not health — a cortex whose Postgres
+has gone accepts the connection and fails every request — so each check asks its
+dependencies a question instead.
+
+| Service | Ask it                                                          | Required                    | Reported only        |
+| :------ | :-------------------------------------------------------------- | :-------------------------- | :------------------- |
+| cortex  | `grpcurl -plaintext -d '{}' :50051 grpc.health.v1.Health/Check` | Postgres                    | Elasticsearch, Neo4j |
+| nexus   | `curl localhost:8080/healthz`                                   | cortex (via its health RPC) | —                    |
+| siphon  | `curl localhost:8082/healthz`                                   | poll heartbeat, Kafka       | —                    |
+
+HTTP answers 200 or 503 with the report as JSON either way — the status code is for a
+probe, the body for whoever has to work out what happened:
+
+```json
+{
+  "healthy": false,
+  "checks": [
+    {
+      "name": "cortex",
+      "required": true,
+      "ok": false,
+      "error": "grpc: cortex is NOT_SERVING"
+    }
+  ]
+}
+```
+
+**Required versus reported.** cortex keeps ingesting while Elasticsearch or Neo4j is
+down, on purpose: losing a finding is worse than it being briefly unsearchable. A probe
+that failed on those would have an orchestrator restart a service doing its most
+important job correctly. They are logged on a change instead —
+`health: serving, degraded failing=[elasticsearch]`.
+
+**siphon's heartbeat.** Its required check is when the poll loop last turned, not a
+dependency. A worker rarely crashes; it wedges, and a wedged process serves a health
+endpoint as happily as a working one. `SIPHON_HEALTH_STALE_AFTER` (30m) is how long it
+may go quiet — generous, because a full cycle over ten rate-limited feeds takes a while.
+
+`task status` reports what each service says about itself, and `task up` waits for
+cortex to say it is serving rather than for its port to open.
+
+### 5.2 Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `main` or a `v*` branch and on every
+pull request: **static** (prettier, gofmt, eslint, tsc, `go vet`), **contracts**
+(`buf lint`, plus a check that the generated Go is already committed), and **tests**
+(`task build:go`, the integration suites against real backing services from the same
+compose file, then the end-to-end tests against a started stack).
+
+It runs the same `task` commands as `.husky/pre-commit`, so a green hook and a green
+pipeline mean the same thing — the hook stays the fast loop, the pipeline is where the
+checks cannot be skipped with `--no-verify`.

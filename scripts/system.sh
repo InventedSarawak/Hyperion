@@ -14,6 +14,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SIPHON_HEALTH_ADDR="${SIPHON_HEALTH_ADDR:-:8082}"
 RUN_DIR="$ROOT/.run"
 COMPOSE="docker compose -f $ROOT/deploy/docker-compose.yml"
 
@@ -39,6 +40,18 @@ wait_for() {
     sleep 1; waited=$((waited + 1))
   done
   log "ready: $what (${waited}s)"
+}
+
+# grpc_serving asks cortex's grpc.health.v1 endpoint whether it is serving.
+# Falls back to a port probe where grpcurl is not installed — weaker, but a
+# missing developer tool should not stop the stack from starting.
+grpc_serving() {
+  if command -v grpcurl >/dev/null 2>&1; then
+    grpcurl -plaintext -d '{}' localhost:50051 grpc.health.v1.Health/Check 2>/dev/null \
+      | grep -q '"SERVING"'
+  else
+    bash -c 'exec 3<>/dev/tcp/127.0.0.1/50051'
+  fi
 }
 
 # port_holder prints the pid(s) listening on a TCP port, if any.
@@ -161,7 +174,10 @@ up() {
     echo $! >"$RUN_DIR/$name.pid"
   done
 
-  wait_for "cortex gRPC :50051" 60 bash -c 'exec 3<>/dev/tcp/127.0.0.1/50051'
+  # Ask cortex whether it is serving, not merely whether the port is open: a
+  # cortex whose Postgres has gone accepts the connection and fails every
+  # request, and starting nexus against one of those looks like nexus is broken.
+  wait_for "cortex gRPC :50051" 60 grpc_serving
   wait_for "nexus HTTP :8080" 60 curl -fsS http://localhost:8080/healthz
 
   # Started last: siphon publishes as fast as the feeds allow, and there is no
@@ -248,7 +264,14 @@ status() {
     local holder; holder="$(port_holder "$port")"
 
     if pid_of "$name" >/dev/null; then
-      printf '  %-16s %-10s %s\n' "$name" "UP" "pid $(pid_of "$name") on :$port"
+      local detail="pid $(pid_of "$name") on :$port"
+      # What the service says about itself, where it can be asked.
+      case "$name" in
+        cortex) grpc_serving || detail="$detail — NOT SERVING (check its dependencies)" ;;
+        nexus)  curl -fsS -o /dev/null http://localhost:8080/healthz 2>/dev/null \
+                  || detail="$detail — unhealthy (cannot reach cortex)" ;;
+      esac
+      printf '  %-16s %-10s %s\n' "$name" "UP" "$detail"
     elif [[ -n "$holder" ]]; then
       printf '  %-16s %-10s %s\n' "$name" "FOREIGN" "port :$port held by pid $holder (not ours)"
     else
@@ -282,7 +305,11 @@ status() {
   fi
 
   if pid_of ingest >/dev/null; then
-    printf '  %-16s %-10s %s\n' "siphon" "UP" "pid $(pid_of ingest), polling every ${SIPHON_POLL_INTERVAL:-10m}"
+    local ingest_detail="pid $(pid_of ingest), polling every ${SIPHON_POLL_INTERVAL:-10m}"
+    if ! curl -fsS -o /dev/null "http://localhost:${SIPHON_HEALTH_ADDR#:}/healthz" 2>/dev/null; then
+      ingest_detail="$ingest_detail — unhealthy or still on its first poll"
+    fi
+    printf '  %-16s %-10s %s\n' "siphon" "UP" "$ingest_detail"
   elif ingest_enabled; then
     printf '  %-16s %-10s %s\n' "siphon" "DOWN" "-"
   else

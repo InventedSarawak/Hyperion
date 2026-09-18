@@ -17,6 +17,7 @@ import (
 	grpcadapter "github.com/inventedsarawak/hyperion/apps/nexus/internal/adapters/outbound/grpc"
 	"github.com/inventedsarawak/hyperion/apps/nexus/internal/application/queries"
 	"github.com/inventedsarawak/hyperion/apps/nexus/internal/platform/config"
+	"github.com/inventedsarawak/hyperion/packages/common/health"
 )
 
 func main() {
@@ -57,10 +58,12 @@ func main() {
 	// cortex, so it passes the same door as every other client request.
 	mux.Handle("/stream", sseadapter.NewHandler(intelligence, logger))
 	mux.Handle("/playground", graphqladapter.NewPlaygroundHandler())
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
+	// Was an unconditional 200, which said only that the process had got far
+	// enough to bind a port. A gateway whose cortex is unreachable can serve
+	// nothing, and should say so rather than accept traffic it will fail.
+	mux.Handle("/healthz", health.Handler(health.New(2*time.Second,
+		health.Check{Name: "cortex", Required: true, Probe: intelligence.Ping},
+	)))
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

@@ -55,6 +55,11 @@ type Config struct {
 	// ReconcileInterval is how often cortex looks for records whose search
 	// document is behind the stored row, and settles them. Zero turns it off.
 	ReconcileInterval time.Duration
+	// HealthInterval is how often the dependencies behind grpc.health.v1 are
+	// asked whether they are reachable. Polled rather than checked per
+	// request: probes arrive every few seconds from everything watching, and
+	// pinging Postgres on each would make the health check its own load.
+	HealthInterval time.Duration
 	// ShutdownGrace is how long a batch already being ingested may finish
 	// after a stop is asked for, so a record is not left half-written.
 	ShutdownGrace time.Duration
@@ -142,6 +147,7 @@ func Load() Config {
 		IngestWorkers:       l.Int("INGEST_WORKERS", 8),
 		IngestProgressEvery: l.Int("INGEST_PROGRESS_EVERY", 1000),
 		ReconcileInterval:   l.Duration("RECONCILE_INTERVAL", 5*time.Minute),
+		HealthInterval:      l.Duration("HEALTH_INTERVAL", 10*time.Second),
 		ShutdownGrace:       l.Duration("SHUTDOWN_GRACE", 30*time.Second),
 		StreamBuffer:        l.Int("STREAM_BUFFER", 256),
 		LogLevel:            l.String("LOG_LEVEL", "info"),

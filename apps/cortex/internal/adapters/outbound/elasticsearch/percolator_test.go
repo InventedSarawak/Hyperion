@@ -3,7 +3,6 @@ package elasticsearch_test
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"time"
 
@@ -41,14 +40,7 @@ var _ = Describe("Elasticsearch Percolator (integration)", func() {
 		percolator = elasticsearch.NewPercolator(nil, baseURL, index)
 		Expect(percolator.Ready(ctx)).To(Succeed())
 
-		DeferCleanup(func() {
-			req, err := http.NewRequestWithContext(ctx, http.MethodDelete, baseURL+"/"+index, nil)
-			Expect(err).ToNot(HaveOccurred())
-			resp, err := http.DefaultClient.Do(req)
-			if err == nil {
-				resp.Body.Close()
-			}
-		})
+		DeferCleanup(func() { dropIndices(baseURL, index) })
 	})
 
 	lodash := valueobject.NewPackageRef("npm", "lodash", "")

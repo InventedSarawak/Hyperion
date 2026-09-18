@@ -22,6 +22,14 @@ const Service = "siphon"
 // Config holds siphon's runtime settings.
 type Config struct {
 	PollInterval time.Duration
+	// HealthAddr is where /healthz is served. Empty turns it off, which is
+	// what a siphon run from a terminal wants.
+	HealthAddr string
+	// HealthStaleAfter is how long the poll loop may go without turning
+	// before the service calls itself unhealthy. Generous on purpose: a full
+	// cycle over ten rate-limited feeds can take a while, and a probe that
+	// flaps on a slow-but-working cycle is worse than none.
+	HealthStaleAfter time.Duration
 	// LogLevel is debug, info, warn or error. At debug every signal
 	// published is logged as it goes out.
 	LogLevel string
@@ -199,6 +207,11 @@ const (
 	DefaultOSVBulkBaseURL    = "https://osv-vulnerabilities.storage.googleapis.com"
 	DefaultFullDisclosureRSS = "https://seclists.org/rss/fulldisclosure.rss"
 	DefaultCortexGRPCAddr    = "localhost:50051"
+	// DefaultHealthAddr keeps clear of the ports the stack already uses:
+	// 8080 nexus, 8081 the Kafka console, 9200 Elasticsearch, 50051 cortex.
+	DefaultHealthAddr = ":8082"
+	// DefaultHealthStaleAfter is three of the longest sensible poll cycles.
+	DefaultHealthStaleAfter = 30 * time.Minute
 )
 
 // Load reads configuration from the environment, applying defaults.
@@ -206,10 +219,12 @@ func Load() Config {
 	l := config.For(Service)
 
 	return Config{
-		loader:       l,
-		PollInterval: l.Duration("POLL_INTERVAL", 10*time.Minute),
-		LogLevel:     l.String("LOG_LEVEL", "info"),
-		Lookback:     l.Duration("LOOKBACK", 2*time.Hour),
+		loader:           l,
+		PollInterval:     l.Duration("POLL_INTERVAL", 10*time.Minute),
+		HealthAddr:       l.String("HEALTH_ADDR", DefaultHealthAddr),
+		HealthStaleAfter: l.Duration("HEALTH_STALE_AFTER", DefaultHealthStaleAfter),
+		LogLevel:         l.String("LOG_LEVEL", "info"),
+		Lookback:         l.Duration("LOOKBACK", 2*time.Hour),
 
 		NVD: NVDConfig{
 			Enabled:  l.Bool("NVD_ENABLED", true),

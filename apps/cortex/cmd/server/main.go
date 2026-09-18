@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
@@ -43,6 +44,7 @@ import (
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/application/queries"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/ports"
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/platform/config"
+	"github.com/inventedsarawak/hyperion/packages/common/health"
 	"github.com/inventedsarawak/hyperion/packages/common/kafka"
 )
 
@@ -208,7 +210,8 @@ func main() {
 
 	if cfg.ServeGRPC {
 		serveGRPC(runCtx, logger, cfg, search, ingestDeps, blast, manageSubs, listAlerting, repo,
-			grpcadapter.NewWatchlistServer(manageWatchlist, listWatchlist), exposure, live)
+			grpcadapter.NewWatchlistServer(manageWatchlist, listWatchlist), exposure, live,
+			cortexHealth(pool, index, graph))
 	} else {
 		<-runCtx.Done()
 		logger.Info("cortex stopped")
@@ -388,6 +391,24 @@ func runStdinConsumer(ctx context.Context, logger *slog.Logger, ingest *commands
 	logger.Info("cortex stopped", "ingested_this_run", n, "total_in_store", total)
 }
 
+// cortexHealth is what cortex needs in order to be cortex.
+//
+// Postgres is required because it is the store of record: without it nothing
+// can be ingested or served, and a cortex that says otherwise is lying.
+//
+// Elasticsearch and Neo4j are not. Ingest tolerates both being down on purpose
+// — losing a finding is worse than it being briefly unsearchable or unlinked —
+// and a probe that failed on them would have an orchestrator restart a service
+// that is doing its most important job correctly, turning a degraded system
+// into a stopped one. They are reported so the degradation is visible.
+func cortexHealth(pool *pgxpool.Pool, index ports.SearchIndex, graph ports.DependencyGraph) *health.Checker {
+	return health.New(2*time.Second,
+		health.Check{Name: "postgres", Required: true, Probe: pool.Ping},
+		health.Check{Name: "elasticsearch", Probe: index.Ready},
+		health.Check{Name: "neo4j", Probe: graph.Ready},
+	)
+}
+
 // serveGRPC runs the intelligence API until the context is cancelled.
 func serveGRPC(
 	ctx context.Context,
@@ -402,6 +423,7 @@ func serveGRPC(
 	watchlist *grpcadapter.WatchlistServer,
 	exposure *queries.RepositoryExposure,
 	live *broadcast.Broadcaster,
+	checker *health.Checker,
 ) {
 	listener, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
@@ -418,6 +440,9 @@ func serveGRPC(
 	alertingv1.RegisterAlertingServiceServer(server,
 		grpcadapter.NewAlertingServer(manageSubs, listAlerting, vulns))
 	reflection.Register(server) // enables grpcurl / grpc_cli exploration
+	// grpc.health.v1, so an orchestrator can tell "the port is open" from
+	// "the service can answer".
+	health.ServeGRPC(ctx, server, checker, cfg.HealthInterval, logger)
 
 	go func() {
 		<-ctx.Done()

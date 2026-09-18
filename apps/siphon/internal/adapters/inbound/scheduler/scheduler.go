@@ -6,6 +6,7 @@ package scheduler
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 )
 
@@ -26,6 +27,14 @@ type Scheduler struct {
 	poller   Poller
 	interval time.Duration
 	log      *slog.Logger
+
+	// beat is when the loop was last known to be turning. A worker's
+	// characteristic failure is not crashing — it is wedging, on a socket
+	// that never times out or a lock nobody releases — and a process that has
+	// wedged answers a port probe perfectly well. This is what a health check
+	// can ask instead.
+	mu   sync.RWMutex
+	beat time.Time
 }
 
 // New builds a scheduler that runs poller every interval.
@@ -34,6 +43,22 @@ func New(poller Poller, interval time.Duration) *Scheduler {
 		interval = time.Minute
 	}
 	return &Scheduler{poller: poller, interval: interval, log: slog.Default()}
+}
+
+// LastBeat is when the poll loop last started or finished a cycle, or the
+// zero time before the first one. Both ends are recorded so that a cycle
+// legitimately longer than the interval — ten sources, each rate-limited —
+// does not read as a wedge, while one that starts and never returns still does.
+func (s *Scheduler) LastBeat() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.beat
+}
+
+func (s *Scheduler) mark() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.beat = time.Now()
 }
 
 // Start blocks, polling until ctx is cancelled (then it returns ctx.Err()).
@@ -56,6 +81,9 @@ func (s *Scheduler) Start(ctx context.Context) error {
 // tick tries again, and whatever the poller uses to track its position is
 // untouched by a run that did not succeed.
 func (s *Scheduler) pollOnce(ctx context.Context) {
+	s.mark()
+	defer s.mark()
+
 	n, err := s.poller.Run(ctx)
 	if err != nil {
 		s.log.Error("poll failed", "error", err)

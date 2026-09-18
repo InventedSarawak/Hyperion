@@ -3,7 +3,6 @@ package elasticsearch_test
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"time"
 
@@ -33,16 +32,9 @@ var _ = Describe("search index alias (integration)", func() {
 		// from the bug they are looking for.
 		name = fmt.Sprintf("hyperion-alias-test-%d", time.Now().UnixNano())
 
-		DeferCleanup(func() {
-			for _, suffix := range []string{"", "-000001", "-000002"} {
-				req, err := http.NewRequest(http.MethodDelete, url+"/"+name+suffix, nil)
-				Expect(err).NotTo(HaveOccurred())
-				resp, err := http.DefaultClient.Do(req)
-				if err == nil {
-					_ = resp.Body.Close()
-				}
-			}
-		})
+		// Whatever generation the swap left behind, not a guessed list of
+		// suffixes: a spec that swaps twice outruns any such list.
+		DeferCleanup(func() { dropIndices(url, name) })
 	})
 
 	It("creates a numbered index with the alias pointing at it", func() {

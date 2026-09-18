@@ -37,13 +37,7 @@ var _ = Describe("Elasticsearch Index (integration)", func() {
 		index = elasticsearch.New(nil, url, name)
 		Expect(index.Ready(ctx)).To(Succeed())
 
-		DeferCleanup(func() {
-			req, _ := http.NewRequest(http.MethodDelete, url+"/"+name, nil)
-			resp, err := http.DefaultClient.Do(req)
-			if err == nil {
-				resp.Body.Close()
-			}
-		})
+		DeferCleanup(func() { dropIndices(url, name) })
 	})
 
 	// refresh forces ES to make recent writes visible to search immediately.

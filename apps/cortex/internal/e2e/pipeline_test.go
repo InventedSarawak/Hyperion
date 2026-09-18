@@ -13,9 +13,11 @@ package e2e_test
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -124,10 +126,7 @@ var _ = Describe("The pipeline, end to end", func() {
 				_, _ = cleanup.Exec(ctx, "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
 				cleanup.Close()
 			}
-			req, _ := http.NewRequest(http.MethodDelete, esURL+"/"+esIndex, nil)
-			if resp, err := http.DefaultClient.Do(req); err == nil {
-				resp.Body.Close()
-			}
+			dropIndices(esURL, esIndex)
 		})
 	})
 
@@ -250,3 +249,34 @@ var _ = Describe("The pipeline, end to end", func() {
 		Expect(radius.Repositories[0].Verdict).To(Equal(valueobject.ExposureAffected))
 	})
 })
+
+// dropIndices removes every concrete index behind a name.
+//
+// elasticsearch.New creates "<name>-000001" and points the alias "<name>"
+// at it, so what this suite holds is an alias — and Elasticsearch refuses
+// DELETE on one ("matches an alias, specify the corresponding concrete
+// indices instead"). The names have to be resolved first, and a wildcard
+// delete is refused too by default. The same fix lives in the adapter's
+// own suite; the package boundary is why it is written twice.
+func dropIndices(baseURL, name string) {
+	resp, err := http.Get(baseURL + "/_cat/indices/" + name + "*?h=index")
+	if err != nil {
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	resp.Body.Close()
+	if err != nil || resp.StatusCode >= 300 {
+		return
+	}
+	concrete := strings.Join(strings.Fields(string(body)), ",")
+	if concrete == "" {
+		return
+	}
+	req, err := http.NewRequest(http.MethodDelete, baseURL+"/"+concrete, nil)
+	if err != nil {
+		return
+	}
+	if resp, err := http.DefaultClient.Do(req); err == nil {
+		resp.Body.Close()
+	}
+}

@@ -35,12 +35,7 @@ var _ = Describe("Elasticsearch ranking and paging (integration)", func() {
 		index = elasticsearch.New(nil, url, name)
 		Expect(index.Ready(ctx)).To(Succeed())
 
-		DeferCleanup(func() {
-			req, _ := http.NewRequest(http.MethodDelete, url+"/"+name, nil)
-			if resp, err := http.DefaultClient.Do(req); err == nil {
-				resp.Body.Close()
-			}
-		})
+		DeferCleanup(func() { dropIndices(url, name) })
 	})
 
 	refresh := func() {
@@ -205,10 +200,7 @@ var _ = Describe("Elasticsearch ranking and paging (integration)", func() {
 		// rebuilt: the fields are added, and new writes are searchable by them.
 		legacy := fmt.Sprintf("hyperion-legacy-%d", time.Now().UnixNano())
 		DeferCleanup(func() {
-			req, _ := http.NewRequest(http.MethodDelete, url+"/"+legacy, nil)
-			if resp, err := http.DefaultClient.Do(req); err == nil {
-				resp.Body.Close()
-			}
+			dropIndices(url, legacy)
 		})
 
 		oldMapping := `{"mappings":{"properties":{"cve_id":{"type":"keyword","fields":{"text":{"type":"text"}}},` +
@@ -255,12 +247,7 @@ var _ = Describe("Elasticsearch ids and deletion (integration)", func() {
 		name = fmt.Sprintf("hyperion-ids-%d", time.Now().UnixNano())
 		index = elasticsearch.New(nil, url, name)
 		Expect(index.Ready(ctx)).To(Succeed())
-		DeferCleanup(func() {
-			req, _ := http.NewRequest(http.MethodDelete, url+"/"+name, nil)
-			if resp, err := http.DefaultClient.Do(req); err == nil {
-				resp.Body.Close()
-			}
-		})
+		DeferCleanup(func() { dropIndices(url, name) })
 	})
 
 	It("lists every id, past the first page of 1,000", func() {

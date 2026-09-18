@@ -32,12 +32,7 @@ var _ = Describe("Elasticsearch finding ids and kinds (integration)", func() {
 		name = fmt.Sprintf("hyperion-test-%d", time.Now().UnixNano())
 		index = elasticsearch.New(nil, url, name)
 		Expect(index.Ready(ctx)).To(Succeed())
-		DeferCleanup(func() {
-			req, _ := http.NewRequest(http.MethodDelete, url+"/"+name, nil)
-			if resp, err := http.DefaultClient.Do(req); err == nil {
-				resp.Body.Close()
-			}
-		})
+		DeferCleanup(func() { dropIndices(url, name) })
 
 		Expect(index.Index(ctx, model.Vulnerability{
 			CVEID: "CVE-2021-44228", Aliases: []string{"GHSA-jfh8-c2jp-5v3q"}, Kind: model.KindVulnerability,

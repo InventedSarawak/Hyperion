@@ -28,6 +28,9 @@ type KafkaConfig struct {
 	Partitions int32
 }
 
+// Ping reports whether the broker is reachable, for a health probe.
+func (k *Kafka) Ping(ctx context.Context) error { return k.producer.Ping(ctx) }
+
 // NewKafka connects to the cluster and ensures the topic exists.
 //
 // Creating the topic here rather than letting the broker auto-create it is

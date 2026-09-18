@@ -51,15 +51,49 @@ Neo4j to :7687 on the host.
   in compose, matching the existing namespaced config), so the stack can move
   aside without editing a committed file.
 
-### 🟡 No CI pipeline
+### 🟢 ~~No CI pipeline~~ — REPAID (2026-09-18)
 
-`.github/workflows/` is empty. Nothing runs tests, lint, or builds on push.
+`.github/workflows/ci.yml` runs on every push to `main` or a `v*` branch and on
+every pull request, in three jobs:
 
-- **Why:** the husky pre-commit hook covers the same checks locally.
-- **Cost:** the gate is bypassable (`--no-verify`) and only protects this machine.
-  No build matrix, no image publishing, no protection on shared branches.
-- **Fix in v4:** GitHub Actions running `task build:go`, `task test:go`, lint and
-  typecheck; publish images on tag.
+- **static** — prettier, gofmt, eslint, tsc and `go vet`. No infrastructure, so
+  it answers in under a minute, which is where most mistakes are caught.
+- **contracts** — `buf lint`, then `buf generate` and a check that the result is
+  already committed. Generated code that has drifted from the `.proto` files is
+  a compile error lying in wait for whoever next runs codegen, and invisible
+  until then.
+- **tests** — `task build:go`, then the unit and integration suites against a
+  real Postgres, Elasticsearch, Neo4j, Redis and Kafka from the same
+  `deploy/docker-compose.yml` the stack runs on locally, then the black-box
+  end-to-end tests against a started stack.
+
+Deliberate choices:
+
+- **The same commands as the hook.** `.husky/pre-commit` stays the fast loop;
+  this runs the same `task build:go` and `task test:go` where they cannot be
+  skipped with `--no-verify`. A green hook and a green pipeline mean the same
+  thing, which is only true while both run the same thing.
+- **Real backing services, not fakes.** The bugs these suites have actually
+  caught were an Elasticsearch mapping conflict, a Cypher constraint violation
+  and a Postgres migration that read the wrong schema — none of which a fake
+  would have had an opinion about.
+- **First-party actions plus `go install`.** A CI pipeline for a security tool
+  that pulls a dozen third-party actions into its own supply chain is not an
+  argument worth having to make. Every tool version is pinned, and the protoc
+  plugins are pinned to the versions in `packages/contracts/go.mod` so the
+  generated code is byte-identical to a workstation's.
+- **`HYPERION_INGEST=0`.** siphon would poll NVD, GitHub and eight other feeds
+  from a shared runner IP with no API keys. The end-to-end tests do not need it.
+- **The store is seeded through the pipeline.** A fresh runner has an empty
+  store, and the first end-to-end spec asserts against findings that exist. The
+  seed publishes synthetic `CVE-9000-*` findings to the real signal topic and
+  waits for them to come back out of the gateway, so seeding is itself a check
+  of broker → consumer → Postgres → index rather than a way around it.
+
+- **What remains:** no image publishing on tag — there are no images yet
+  (see "No Dockerfiles"). No build matrix: one Linux target is what is
+  deployed. Nothing enforces the pipeline as a required check on the branch;
+  that is a repository setting rather than a file.
 
 ### 🟡 No restart policies or resource limits in compose
 
@@ -591,14 +625,46 @@ API keys are read from an unencrypted, gitignored file.
 
 ## 5. Operability
 
-### 🟡 No health endpoint on cortex
+### 🟢 ~~No health endpoint on cortex~~ — REPAID (2026-09-18)
 
-`nexus` serves `/healthz`; `cortex` and `siphon` serve nothing. `scripts/system.sh`
-probes cortex by opening a TCP connection to :50051, which proves the port is bound
-but not that the service is healthy.
+`scripts/system.sh` used to probe cortex by opening a TCP connection to :50051,
+which proves a listener exists and nothing else — a cortex whose Postgres had
+gone answered that probe all day while failing every request. An orchestrator
+makes the same mistake more expensively, since it restarts on a failed liveness
+probe and routes traffic on a passing readiness one.
 
-- **Fix in v4:** gRPC health checking protocol on cortex; readiness that verifies
-  Postgres and Elasticsearch.
+All three services now answer for themselves, through one shared
+`packages/common/health`:
+
+| Service | Endpoint                   | Required                    | Reported only        |
+| :------ | :------------------------- | :-------------------------- | :------------------- |
+| cortex  | `grpc.health.v1` on :50051 | Postgres                    | Elasticsearch, Neo4j |
+| nexus   | `GET /healthz` on :8080    | cortex (via its health RPC) | —                    |
+| siphon  | `GET /healthz` on :8082    | poll heartbeat, Kafka       | —                    |
+
+The split between required and reported is the point. cortex is designed to keep
+ingesting while Elasticsearch is down — losing a finding is worse than it being
+briefly unsearchable — so a probe that failed on that would have an orchestrator
+restart a service doing its most important job correctly, turning a degraded
+system into a stopped one. Those dependencies are logged when they change state
+instead: `health: serving, degraded failing=[elasticsearch]`, and
+`health: serving, all dependencies recovered` after.
+
+siphon's required check is a **poll heartbeat**, not a dependency. A worker
+rarely crashes — it wedges, on a socket with no timeout or a feed that accepts
+the connection and never answers — and a wedged process serves a health endpoint
+as happily as a working one. Asking when the loop last turned is the only
+question that tells them apart. Both ends of a cycle are recorded, so a cycle
+legitimately longer than the poll interval does not read as a wedge.
+
+Verified by stopping the containers: Postgres down took cortex to `NOT_SERVING`
+and nexus to `503 {"error":"grpc: cortex is NOT_SERVING"}`; Elasticsearch down
+left cortex `SERVING` and logged the degradation. `task status` now reports what
+each service says about itself rather than whether its port is bound.
+
+- **What remains:** the health RPC is unauthenticated, like everything else on
+  :50051 (see "No authentication or authorization anywhere"). `packages/telemetry`
+  is still empty — health is not metrics.
 
 ### 🟡 No observability
 

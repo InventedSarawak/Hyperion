@@ -17,6 +17,8 @@ import (
 	intelv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/intelligence/v1"
 	watchlistv1 "github.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/watchlist/v1"
 
+	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
+
 	"github.com/inventedsarawak/hyperion/apps/nexus/internal/domain/model"
 )
 
@@ -27,6 +29,7 @@ type Client struct {
 	stub      intelv1.IntelligenceServiceClient
 	watchlist watchlistv1.WatchlistServiceClient
 	alerting  alertingv1.AlertingServiceClient
+	health    healthv1.HealthClient
 	timout    time.Duration
 }
 
@@ -42,12 +45,34 @@ func Dial(addr string) (*Client, error) {
 		stub:      intelv1.NewIntelligenceServiceClient(conn),
 		watchlist: watchlistv1.NewWatchlistServiceClient(conn),
 		alerting:  alertingv1.NewAlertingServiceClient(conn),
+		health:    healthv1.NewHealthClient(conn),
 		timout:    10 * time.Second,
 	}, nil
 }
 
 // Close releases the connection.
 func (c *Client) Close() error { return c.conn.Close() }
+
+// Ping asks cortex whether it is serving.
+//
+// The standard health RPC rather than a cheap real call: cortex answers it
+// only when its own store of record is reachable, so this distinguishes "the
+// gateway cannot reach cortex" from "cortex is up but cannot do anything" —
+// and a gateway that reports itself healthy in either case is no use to an
+// orchestrator deciding where to send traffic.
+func (c *Client) Ping(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, c.timout)
+	defer cancel()
+
+	resp, err := c.health.Check(ctx, &healthv1.HealthCheckRequest{})
+	if err != nil {
+		return fmt.Errorf("grpc: cortex health: %w", err)
+	}
+	if status := resp.GetStatus(); status != healthv1.HealthCheckResponse_SERVING {
+		return fmt.Errorf("grpc: cortex is %s", status)
+	}
+	return nil
+}
 
 // Search calls cortex and maps the response back into nexus view models.
 func (c *Client) Search(ctx context.Context, query string, sort model.SearchSort, kinds []model.FindingKind, pageSize int, pageToken string) (model.SearchResult, error) {

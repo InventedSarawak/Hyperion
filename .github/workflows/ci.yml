@@ -1,0 +1,217 @@
+# What the pre-commit hook checks, checked somewhere other than one laptop.
+#
+# The hook (.husky/pre-commit) is the fast loop and stays the fast loop; this
+# is the same set of checks run where they cannot be skipped with --no-verify,
+# on a machine nobody has configured by hand. The two are deliberately the same
+# commands — `task build:go`, `task test:go` — so that a green hook and a green
+# pipeline mean the same thing.
+#
+# Only first-party actions plus `go install`. A CI pipeline for a security tool
+# that pulls a dozen third-party actions into its own supply chain is not an
+# argument anyone wants to have to make.
+name: CI
+
+on:
+  push:
+    branches: [main, "v*"]
+  pull_request:
+
+# A second push to the same branch makes the first run's answer irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Local plugin versions, matched to packages/contracts/go.mod so the code
+  # generated here is byte-identical to the code generated on a workstation.
+  PROTOC_GEN_GO_VERSION: v1.36.12
+  PROTOC_GEN_GO_GRPC_VERSION: v1.5.1
+  BUF_VERSION: v1.72.0
+  TASK_VERSION: v3.53.1
+  GRPCURL_VERSION: v1.9.3
+  # husky installs git hooks on `pnpm install`. There is nothing to hook here,
+  # and this pipeline exists precisely because hooks can be skipped.
+  HUSKY: 0
+
+jobs:
+  # Everything that needs no infrastructure and no compiled binary. Fails in
+  # under a minute, which is where most mistakes are caught.
+  static:
+    name: format, lint, types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # corepack after setup-node, so the shim it writes belongs to the Node
+      # this job will actually use. It reads the pnpm version out of
+      # package.json's packageManager field.
+      - name: Install pnpm
+        run: corepack enable
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache-dependency-path: "**/go.sum"
+
+      - name: prettier
+        run: pnpm run format:check
+
+      - name: gofmt
+        run: |
+          # Generated code is not ours to format.
+          files=$(find apps packages tests -name '*.go' -not -path '*/gen/*')
+          unformatted=$(gofmt -l $files)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt: these files need formatting (run: gofmt -w <file>)"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: eslint
+        run: pnpm run lint
+
+      - name: typescript
+        run: pnpm run check-types
+
+      - name: go vet
+        run: |
+          set -e
+          for mod in apps/* packages/common tests/e2e; do
+            [ -f "$mod/go.mod" ] || continue
+            echo "vetting $mod"
+            (cd "$mod" && go vet ./...)
+          done
+
+  # Protobuf is the contract between every service. Generated code that has
+  # drifted from the .proto files is a compile error waiting for whoever next
+  # runs codegen, and it is invisible until then.
+  contracts:
+    name: contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache-dependency-path: "**/go.sum"
+
+      - name: Install buf and the protoc plugins
+        run: |
+          go install github.com/bufbuild/buf/cmd/buf@${BUF_VERSION}
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@${PROTOC_GEN_GO_GRPC_VERSION}
+
+      - name: buf lint
+        working-directory: packages/contracts
+        run: buf lint
+
+      - name: generated code is current
+        working-directory: packages/contracts
+        run: |
+          buf generate
+          if ! git diff --quiet -- gen; then
+            echo "::error::generated code is stale — run 'task codegen' and commit the result"
+            git diff --stat -- gen
+            exit 1
+          fi
+
+  # Unit and integration tests against the real Postgres, Elasticsearch, Neo4j,
+  # Redis and Kafka, followed by the black-box tests against a running stack.
+  #
+  # Real backing services rather than fakes because that is what the suites are
+  # for: the bugs worth catching here have been an Elasticsearch mapping
+  # conflict, a Cypher constraint violation and a Postgres migration that read
+  # the wrong schema — none of which a fake would have had an opinion about.
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache-dependency-path: "**/go.sum"
+
+      - name: Install task
+        run: go install github.com/go-task/task/v3/cmd/task@${TASK_VERSION}
+
+      - name: Install grpcurl
+        # So that waiting for cortex asks grpc.health.v1 whether it is serving
+        # rather than whether the port is open. scripts/system.sh falls back to
+        # a port probe without it, which would make this pipeline test the
+        # weaker path of the two.
+        run: go install github.com/fullstorydev/grpcurl/cmd/grpcurl@${GRPCURL_VERSION}
+
+      - name: Start infrastructure
+        # The same compose file the stack runs on locally. --wait holds until
+        # every healthcheck passes, so a suite never races a cold Elasticsearch.
+        # The Kafka console is a browser UI and no test wants it.
+        run: |
+          docker compose -f deploy/docker-compose.yml up -d --wait \
+            postgres elasticsearch neo4j redis kafka
+
+      - name: Build every service
+        run: task build:go
+
+      - name: Unit and integration tests
+        run: task test:go:integration
+
+      - name: Start the stack
+        # Brings up cortex and nexus. It re-runs docker compose first, which is
+        # idempotent — the containers above are already healthy, and it adds
+        # only the Kafka console.
+        #
+        # HYPERION_INGEST=0 leaves siphon out: it would poll NVD, GitHub and
+        # eight other feeds from a shared runner IP, with no API keys, and the
+        # end-to-end tests do not need it to.
+        run: HYPERION_INGEST=0 ./scripts/system.sh up
+
+      - name: Seed the pipeline
+        # The end-to-end specs assert against findings that exist; a fresh
+        # runner has an empty store and the first one fails outright on it.
+        #
+        # Seeded by publishing synthetic findings to the real signal topic,
+        # which is what tests/load documents as "drive the real pipeline". So
+        # the seeding is itself a check of the path — broker to consumer to
+        # Postgres and the search index — rather than a way around it. The ids
+        # are CVE-9000-*, which nothing real will ever collide with.
+        run: |
+          task loadtest -- -topic hyperion.signals.v1 -no-consume -count 500 -rate 0
+
+          # Published is not ingested. Wait for them to come back out of the
+          # gateway, which is the first moment the whole path has run.
+          for _ in $(seq 1 60); do
+            total=$(./scripts/graphql.sh '{ search(sort: NEWEST, pageSize: 1) { totalResults } }' 2>/dev/null \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["search"]["totalResults"])' 2>/dev/null || echo 0)
+            if [ "${total:-0}" -gt 0 ]; then
+              echo "seeded: $total findings searchable"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::published findings never became searchable — ingest is stuck"
+          exit 1
+
+      - name: End-to-end tests
+        run: task test:e2e
+
+      - name: Service logs
+        if: failure()
+        run: |
+          ./scripts/system.sh status || true
+          for log in .run/*.log; do
+            [ -f "$log" ] || continue
+            echo "::group::$log"
+            tail -n 200 "$log"
+            echo "::endgroup::"
+          done
+          docker compose -f deploy/docker-compose.yml logs --tail 100

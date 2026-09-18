@@ -31,12 +31,7 @@ var _ = Describe("Relevance floor (integration)", func() {
 		name = fmt.Sprintf("hyperion-floor-%d", time.Now().UnixNano())
 		index = elasticsearch.New(nil, url, name)
 		Expect(index.Ready(ctx)).To(Succeed())
-		DeferCleanup(func() {
-			req, _ := http.NewRequest(http.MethodDelete, url+"/"+name, nil)
-			if resp, err := http.DefaultClient.Do(req); err == nil {
-				resp.Body.Close()
-			}
-		})
+		DeferCleanup(func() { dropIndices(url, name) })
 
 		// One record squarely about the thing, and a long tail that merely
 		// brushes past the word — which is the shape of the real corpus:
