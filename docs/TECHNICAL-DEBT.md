@@ -421,18 +421,39 @@ bulk folds the same way. Five or fewer are left alone.
   backlog, not something this repo can fix — the fold reports them as `unknown`
   rather than guessing.
 
-### 🟡 Library-to-library edges reach only as far as the watchlist
+### 🟢 ~~Library-to-library edges reach only as far as the watchlist~~ — REPAID (2026-09-18)
 
-`(:Library)-[:DEPENDS_ON]->(:Library)` edges are derived from scanned repositories
-that publish a module: the module's direct requirements become its own edges.
+`(:Library)-[:DEPENDS_ON]->(:Library)` edges used to come only from a scanned
+repository that publishes a module: the module's direct requirements became its
+own edges. Transitivity therefore stopped at the edge of the watchlist — 274
+such edges against 5,181 repository-to-library ones — and a blast radius read
+as a list of everything installed rather than a path to it.
 
-- **Why:** it is the only transitive data a manifest actually contains, and it
-  makes `DEPENDS_ON*1..n` genuinely recursive rather than decorative.
-- **Cost:** transitivity stops at the edge of the watchlist. A repository
-  depending on a library nobody scanned looks one hop deep, so a real blast
-  radius can be **understated** — the failure mode that matters most here.
-- **Fix in v3+:** ingest a real module graph (deps.dev, an SBOM feed, or
-  `go mod graph` / lockfiles) instead of inferring it from what we happened to scan.
+The fix needed no external API. A lockfile is a graph, not a list: it records
+which package pulled in which, and Hyperion was already reading seven of them
+and throwing that structure away, flattening every transitive package into an
+edge hanging directly off the repository. `Dependency.DependsOn` now carries
+it, `package-lock.json`, `yarn.lock` (v1 and Berry), `pnpm-lock.yaml`,
+`Cargo.lock`, `poetry.lock`, `composer.lock` and `packages.lock.json` all
+populate it, and cortex writes the library-to-library edges. Rescanning the
+watchlist took those edges from 274 to **2,602**, and paths of depth 2 or more
+from 102 to **3,760**.
+
+Reporting them needed one more change. The repository still has an edge to
+every installed package, so the shortest path is always the flat one; the
+traversal now prefers a path rooted in a dependency the repository actually
+declares, and the shortest among those. `vercel/commerce → npm:next →
+npm:postcss → npm:nanoid` is a real answer it now gives.
+
+- **What is deliberately not included:** peer dependencies (the consumer
+  installs those, not the package, so an edge from here would point the wrong
+  way) and any requirement nothing resolved — an optional peer, a
+  platform-specific build — which would invent a dependency that is not there.
+- **What remains:** depth comes from lockfiles in tracked repositories. A
+  repository with no lockfile contributes none, and a library nobody tracks a
+  lockfile for is still a leaf, so reach can be understated — never overstated.
+  Ingesting a real module graph (deps.dev, an SBOM feed) would close that last
+  gap and is still worth doing.
 
 ### 🟢 ~~Only _reviewed_ GitHub advisories carry package linkage~~ — MITIGATED
 

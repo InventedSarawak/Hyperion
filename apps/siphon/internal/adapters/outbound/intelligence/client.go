@@ -142,6 +142,7 @@ func toProtoRequest(s model.RepositorySnapshot) *intelv1.IngestDependenciesReque
 			Direct:       d.Direct,
 			ManifestPath: d.ManifestPath,
 			Locked:       d.Locked,
+			DependsOn:    toProtoPackageRefs(d.DependsOn),
 		})
 	}
 
@@ -162,6 +163,22 @@ func toProtoRequest(s model.RepositorySnapshot) *intelv1.IngestDependenciesReque
 		req.ObservedAt = timestamppb.New(s.ObservedAt)
 	}
 	return req
+}
+
+// toProtoPackageRefs carries a package's own requirements. Only names
+// survive: a lockfile states a requirement as a range, while the version
+// installed is on the entry for that package.
+func toProtoPackageRefs(refs []valueobject.PackageRef) []*commonv1.PackageRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]*commonv1.PackageRef, 0, len(refs))
+	for _, ref := range refs {
+		if ref.Validate() == nil {
+			out = append(out, toProtoPackageRef(ref))
+		}
+	}
+	return out
 }
 
 func toProtoPackageRef(r valueobject.PackageRef) *commonv1.PackageRef {

@@ -103,7 +103,22 @@ func toDomainDependencies(deps []*commonv1.Dependency) []model.Dependency {
 			Direct:       d.GetDirect(),
 			ManifestPath: d.GetManifestPath(),
 			Locked:       d.GetLocked(),
+			DependsOn:    toDomainPackageRefs(d.GetDependsOn()),
 		})
+	}
+	return out
+}
+
+// toDomainPackageRefs reads what a package itself requires.
+func toDomainPackageRefs(refs []*commonv1.PackageRef) []valueobject.PackageRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]valueobject.PackageRef, 0, len(refs))
+	for _, ref := range refs {
+		if got := toDomainPackageRef(ref); got.Validate() == nil {
+			out = append(out, got)
+		}
 	}
 	return out
 }

@@ -158,6 +158,7 @@ func toDomainSnapshot(req *intelv1.IngestDependenciesRequest) model.RepositorySn
 			Direct:       d.GetDirect(),
 			ManifestPath: d.GetManifestPath(),
 			Locked:       d.GetLocked(),
+			DependsOn:    toDomainPackageRefs(d.GetDependsOn()),
 		})
 	}
 
@@ -179,6 +180,20 @@ func toDomainSnapshot(req *intelv1.IngestDependenciesRequest) model.RepositorySn
 		snapshot.ObservedAt = time.Time{}
 	}
 	return snapshot
+}
+
+// toDomainPackageRefs reads what a package itself requires.
+func toDomainPackageRefs(refs []*commonv1.PackageRef) []valueobject.PackageRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]valueobject.PackageRef, 0, len(refs))
+	for _, ref := range refs {
+		if got := toDomainPackageRef(ref); got.Validate() == nil {
+			out = append(out, got)
+		}
+	}
+	return out
 }
 
 func toDomainPackageRef(p *commonv1.PackageRef) valueobject.PackageRef {

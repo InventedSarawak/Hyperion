@@ -438,13 +438,41 @@ PYSEC, GO, … — and returns it under its canonical id with the rest as aliase
 ```
 (:Author)-[:MAINTAINS]->(:Repository)-[:DEPENDS_ON {version, direct}]->(:Library)
 (:Repository)-[:PUBLISHES]->(:Library)-[:DEPENDS_ON]->(:Library)
+(:Library)-[:DEPENDS_ON {learned_from}]->(:Library)
 (:Library)-[:AFFECTED_BY {affected_version}]->(:Vulnerability)
 ```
+
+**Where the depth comes from.** A lockfile is a graph, not a list: it records which
+package pulled in which. Seven formats are read for it — `package-lock.json`,
+`yarn.lock` (v1 and Berry), `pnpm-lock.yaml`, `Cargo.lock`, `poetry.lock`,
+`composer.lock`, `packages.lock.json` — and each package's own requirements become
+library-to-library edges. Peer dependencies are left out (the consumer installs those,
+not the package), and so is any requirement nothing actually resolved, which would
+invent a dependency that is not there. A manifest states no such thing, so it
+contributes none. Rescanning the watchlist took library-to-library edges from 274 to
+2,602, and paths of depth 2 or more from 102 to 3,760.
 
 **Blast radius** answers _"which of my repositories does this finding reach, and how?"_:
 it walks outwards from the libraries the finding affects, up to `max depth` hops
 (default 3), and returns each exposed repository with the path to it and whether the
 dependency is direct.
+
+Which path it reports matters. A lockfile names every package installed, so a
+repository has an edge straight to each of them — including the ones it never asked
+for — and reporting the shortest path would answer "how does this reach you?" with
+"it just does", for every transitive package, in a graph that knows perfectly well
+which dependency pulled it in. So a path rooted in a dependency the repository actually
+declares wins over a shorter one that starts with a package it merely ended up with,
+and the shortest wins among those. A directly declared dependency is still reported at
+depth 1, because there the first hop is the answer:
+
+```
+InventedSarawak/Hyperion  (3 hops)
+└── npm:next
+    └── npm:postcss
+        └── npm:nanoid
+            └── CVE-2026-73086
+```
 
 A finding with no package linkage returns "unknown", never "zero repositories" — the
 distinction between _not affected_ and _never checked_ is the point.
@@ -452,9 +480,10 @@ distinction between _not affected_ and _never checked_ is the point.
 **How to use.** deck's Graph Explorer, GraphQL `blastRadius`, `task blast -- CVE-…`. Any of a
 finding's ids works (`GHSA-…`, `MAL-…`); the walk starts from its canonical id.
 
-**Limits.** Transitive edges exist only for libraries published by a repository you
-track; a dependency of a library nobody tracks looks one hop deep, so reach can be
-understated.
+**Limits.** Depth comes from the lockfiles in repositories you track. A repository with
+no lockfile contributes no library-to-library edges, so its transitive packages still
+look one hop deep, and a library nobody tracks a lockfile for is a leaf. Reach can
+therefore still be understated — never overstated.
 
 **Version matching.** Depending on a library is not the same as being exposed to its flaw,
 so every path from a repository to a finding is judged by comparing what the manifest

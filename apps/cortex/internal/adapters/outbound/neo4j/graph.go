@@ -6,7 +6,12 @@
 //
 //	(:Author {login})-[:MAINTAINS]->(:Repository {full_name})
 //	(:Repository)-[:DEPENDS_ON {version, direct, manifest_path}]->(:Library {key})
+//	(:Library)-[:DEPENDS_ON {learned_from, observed_at}]->(:Library {key})
 //	(:Library)-[:AFFECTED_BY {affected_version}]->(:Vulnerability {cve_id})
+//
+// The library-to-library edges are what make it a graph rather than two lists.
+// They come from lockfiles, which record which package pulled in which, so a
+// blast radius can answer "how does this reach me?" with a path.
 //
 // Libraries are keyed on ecosystem+name without a version, so every dependant
 // of a package converges on one node and a single traversal finds them all.
@@ -230,6 +235,27 @@ SET e.version = dep.version,
     e.observed_at = $observed_at
 RETURN count(e) AS written`
 
+// mergeLibraryEdgesCypher writes what a lockfile said one package requires of
+// another.
+//
+// Both ends already exist: the edges are built only between libraries in the
+// same snapshot, which the statement above has just merged. MATCH rather than
+// MERGE says so, and means a name the lockfile mentions but did not resolve
+// creates no empty node.
+//
+// learned_from records which repository taught the edge, and observed_at when.
+// These edges outlive that repository on purpose — "ajv depends on fast-uri"
+// stays true whether or not anyone tracks ajv — so they age out on their own
+// (see pruneStaleLibraryEdgesCypher) rather than being deleted with it.
+const mergeLibraryEdgesCypher = `
+UNWIND $edges AS edge
+MATCH (from:Library {key: edge.from})
+MATCH (to:Library {key: edge.to})
+MERGE (from)-[e:DEPENDS_ON]->(to)
+SET e.observed_at = $observed_at,
+    e.learned_from = $full_name
+RETURN count(e) AS written`
+
 // UpsertRepositorySnapshot writes one manifest read as graph edges, in a
 // single transaction so the repository, its owner and its dependencies never
 // land half-applied.
@@ -315,6 +341,23 @@ func (g *Graph) UpsertRepositorySnapshot(ctx context.Context, snapshot model.Rep
 			return 0, err
 		}
 		written := int(asInt(record, "written"))
+
+		// What each package requires of the others, when a lockfile said.
+		// Without these every transitive package hangs directly off the
+		// repository and a blast radius is a list, not a path.
+		if edges := snapshot.LibraryEdges(); len(edges) > 0 {
+			rows := make([]any, 0, len(edges))
+			for _, e := range edges {
+				rows = append(rows, map[string]any{"from": e.From.Key(), "to": e.To.Key()})
+			}
+			if _, err := tx.Run(ctx, mergeLibraryEdgesCypher, map[string]any{
+				"edges":       rows,
+				"full_name":   repo.FullName(),
+				"observed_at": observedAt,
+			}); err != nil {
+				return 0, err
+			}
+		}
 
 		if published, ok := snapshot.PublishedLibrary(); ok {
 			direct := snapshot.DirectDependencies()

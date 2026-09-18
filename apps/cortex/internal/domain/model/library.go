@@ -47,6 +47,14 @@ type Dependency struct {
 	// than the range a manifest allows. It is what lets a finding be judged
 	// outright instead of "possibly affected".
 	Locked bool
+	// DependsOn is what this package itself requires, as the lockfile that
+	// reported it said. Empty for a manifest, which states no such thing.
+	//
+	// It is what makes the graph deep. Without it every one of a
+	// repository's transitive packages hangs directly off the repository,
+	// and a blast radius can only answer "this reaches you" — not through
+	// what.
+	DependsOn []valueobject.PackageRef
 }
 
 // Validate enforces the entity's invariants.

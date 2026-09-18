@@ -110,6 +110,22 @@ func toProtoAuthorRef(a model.Author) *commonv1.Author {
 	return &commonv1.Author{Login: a.Login, Name: a.Name, Url: a.URL}
 }
 
+// toProtoPackages carries a package's own requirements. Only names survive:
+// a lockfile states a requirement as a range, while the version installed is
+// on the entry for that package.
+func toProtoPackages(refs []valueobject.PackageRef) []*commonv1.PackageRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]*commonv1.PackageRef, 0, len(refs))
+	for _, ref := range refs {
+		if ref.Validate() == nil {
+			out = append(out, toProtoPackage(ref))
+		}
+	}
+	return out
+}
+
 func toProtoPackage(ref valueobject.PackageRef) *commonv1.PackageRef {
 	if ref.IsZero() {
 		return nil
@@ -137,6 +153,7 @@ func toProtoDependencies(deps []model.Dependency) []*commonv1.Dependency {
 			Direct:       d.Direct,
 			ManifestPath: d.ManifestPath,
 			Locked:       d.Locked,
+			DependsOn:    toProtoPackages(d.DependsOn),
 		})
 	}
 	return out

@@ -32,4 +32,16 @@ message Dependency {
   // rather than the range a manifest allows. It is what lets a finding be
   // judged outright instead of "possibly affected".
   bool locked = 4;
+  // depends_on is what this package itself requires, when the file said.
+  //
+  // A lockfile is a graph, not a list: it records which package pulled in
+  // which. A manifest carries no such thing, so this is empty for one, and
+  // empty means "not stated" rather than "nothing". Only the names are
+  // carried: a lockfile states a requirement as the range the package asked
+  // for, while the version actually installed is on the entry for that
+  // package.
+  //
+  // Without it every transitive package hangs directly off the repository,
+  // and "how does this CVE reach me?" can only be answered with a list.
+  repeated PackageRef depends_on = 5;
 }

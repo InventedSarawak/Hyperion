@@ -10,6 +10,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/model"
+	"github.com/inventedsarawak/hyperion/apps/siphon/internal/domain/valueobject"
 )
 
 // A lockfile records the versions actually installed; a manifest records only
@@ -30,6 +31,20 @@ func locked(ecosystem, name, version string, direct bool, file string) model.Dep
 	d := dependency(ecosystem, name, version, direct, file)
 	d.Locked = true
 	return d
+}
+
+// requires records what a locked package itself depends on, by name. The
+// versions are the ranges the package asked for, not what was installed, so
+// only the names are kept: the installed version is on the other entry, which
+// is where the snapshot reads it from.
+func requires(ecosystem string, names ...string) []valueobject.PackageRef {
+	refs := make([]valueobject.PackageRef, 0, len(names))
+	for _, name := range names {
+		if name = strings.TrimSpace(name); name != "" {
+			refs = append(refs, valueobject.NewPackageRef(ecosystem, name, ""))
+		}
+	}
+	return refs
 }
 
 // --- npm: package-lock.json ---
@@ -72,8 +87,9 @@ func (PackageLock) Parse(filePath string, content []byte) (model.RepositorySnaps
 		if !ok || entry.Version == "" || entry.Link {
 			continue // the root project, a workspace link, or no version
 		}
-		snapshot.Dependencies = append(snapshot.Dependencies,
-			locked("npm", name, entry.Version, direct[name] && !entry.Dev, filePath))
+		dep := locked("npm", name, entry.Version, direct[name] && !entry.Dev, filePath)
+		dep.DependsOn = requires("npm", sortedKeys(entry.Deps)...)
+		snapshot.Dependencies = append(snapshot.Dependencies, dep)
 	}
 	return snapshot, nil
 }
@@ -116,7 +132,11 @@ func (PnpmLock) Parse(filePath string, content []byte) (model.RepositorySnapshot
 			DevDependencies      map[string]pnpmEntry `yaml:"devDependencies"`
 			OptionalDependencies map[string]pnpmEntry `yaml:"optionalDependencies"`
 		} `yaml:"importers"`
-		Packages map[string]struct{} `yaml:"packages"`
+		// A package's own requirements moved to "snapshots" in lockfile v9;
+		// before that they sat on the "packages" entry. Both are read, and a
+		// file only ever has one of them.
+		Packages  map[string]pnpmPackage `yaml:"packages"`
+		Snapshots map[string]pnpmPackage `yaml:"snapshots"`
 	}
 	if err := yaml.Unmarshal(content, &f); err != nil {
 		return model.RepositorySnapshot{}, fmt.Errorf("manifest: parse %s: %w", filePath, err)
@@ -141,11 +161,33 @@ func (PnpmLock) Parse(filePath string, content []byte) (model.RepositorySnapshot
 	}
 	// Everything the workspace resolved, transitive packages included.
 	for _, key := range sortedKeys(f.Packages) {
-		if name, version, ok := pnpmPackageKey(key); ok {
-			snapshot.Dependencies = append(snapshot.Dependencies, locked("npm", name, version, false, filePath))
+		name, version, ok := pnpmPackageKey(key)
+		if !ok {
+			continue
 		}
+		dep := locked("npm", name, version, false, filePath)
+		dep.DependsOn = pnpmRequires(f.Packages[key], f.Snapshots[key])
+		snapshot.Dependencies = append(snapshot.Dependencies, dep)
 	}
 	return snapshot, nil
+}
+
+// pnpmPackage is one resolved package's own requirements.
+type pnpmPackage struct {
+	Dependencies         map[string]string `yaml:"dependencies"`
+	OptionalDependencies map[string]string `yaml:"optionalDependencies"`
+}
+
+// pnpmRequires is what a package needs, from wherever this lockfile version
+// keeps it. Peer dependencies are left out: the consumer installs those, not
+// this package, so an edge from here would point the wrong way.
+func pnpmRequires(entries ...pnpmPackage) []valueobject.PackageRef {
+	var names []string
+	for _, e := range entries {
+		names = append(names, sortedKeys(e.Dependencies)...)
+		names = append(names, sortedKeys(e.OptionalDependencies)...)
+	}
+	return requires("npm", names...)
 }
 
 // pnpmVersion drops the peer suffix pnpm appends — "9.39.2(jiti@2.6.1)" — and
@@ -192,9 +234,10 @@ func (CargoLock) lockfile() {}
 func (CargoLock) Parse(filePath string, content []byte) (model.RepositorySnapshot, error) {
 	var f struct {
 		Package []struct {
-			Name    string `toml:"name"`
-			Version string `toml:"version"`
-			Source  string `toml:"source"`
+			Name    string   `toml:"name"`
+			Version string   `toml:"version"`
+			Source  string   `toml:"source"`
+			Deps    []string `toml:"dependencies"`
 		} `toml:"package"`
 	}
 	if _, err := toml.Decode(string(content), &f); err != nil {
@@ -205,7 +248,15 @@ func (CargoLock) Parse(filePath string, content []byte) (model.RepositorySnapsho
 		if p.Name == "" || p.Version == "" || p.Source == "" {
 			continue
 		}
-		snapshot.Dependencies = append(snapshot.Dependencies, locked("cargo", p.Name, p.Version, false, filePath))
+		dep := locked("cargo", p.Name, p.Version, false, filePath)
+		// Cargo writes a requirement as "name", "name version", or
+		// "name version (source)" — only the name identifies the crate.
+		names := make([]string, 0, len(p.Deps))
+		for _, raw := range p.Deps {
+			names = append(names, strings.Fields(raw)[0])
+		}
+		dep.DependsOn = requires("cargo", names...)
+		snapshot.Dependencies = append(snapshot.Dependencies, dep)
 	}
 	return snapshot, nil
 }
@@ -227,8 +278,9 @@ func (PoetryLock) lockfile() {}
 func (PoetryLock) Parse(filePath string, content []byte) (model.RepositorySnapshot, error) {
 	var f struct {
 		Package []struct {
-			Name    string `toml:"name"`
-			Version string `toml:"version"`
+			Name    string         `toml:"name"`
+			Version string         `toml:"version"`
+			Deps    map[string]any `toml:"dependencies"`
 		} `toml:"package"`
 	}
 	if _, err := toml.Decode(string(content), &f); err != nil {
@@ -239,7 +291,16 @@ func (PoetryLock) Parse(filePath string, content []byte) (model.RepositorySnapsh
 		if p.Name == "" || p.Version == "" {
 			continue
 		}
-		snapshot.Dependencies = append(snapshot.Dependencies, locked("pypi", pypiName(p.Name), p.Version, false, filePath))
+		dep := locked("pypi", pypiName(p.Name), p.Version, false, filePath)
+		// The value is a version string, a table of constraints, or a list of
+		// either — all of them describing the same named package, which is
+		// the only part an edge needs.
+		names := make([]string, 0, len(p.Deps))
+		for _, name := range sortedKeys(p.Deps) {
+			names = append(names, pypiName(name))
+		}
+		dep.DependsOn = requires("pypi", names...)
+		snapshot.Dependencies = append(snapshot.Dependencies, dep)
 	}
 	return snapshot, nil
 }
@@ -258,8 +319,9 @@ func (ComposerLock) Matches(filePath string) bool { return path.Base(filePath) =
 func (ComposerLock) lockfile() {}
 
 type composerLockPackage struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	Name    string            `json:"name"`
+	Version string            `json:"version"`
+	Require map[string]string `json:"require"`
 }
 
 // Parse maps the packages installed for production and for development.
@@ -274,10 +336,15 @@ func (ComposerLock) Parse(filePath string, content []byte) (model.RepositorySnap
 	var snapshot model.RepositorySnapshot
 	add := func(packages []composerLockPackage, file string) {
 		for _, p := range packages {
-			if strings.Contains(p.Name, "/") && p.Version != "" {
-				snapshot.Dependencies = append(snapshot.Dependencies,
-					locked("packagist", strings.ToLower(p.Name), p.Version, false, file))
+			if !strings.Contains(p.Name, "/") || p.Version == "" {
+				continue
 			}
+			dep := locked("packagist", strings.ToLower(p.Name), p.Version, false, file)
+			// "require" also holds platform constraints — php, ext-json,
+			// lib-* — which name no package. Those resolve to nothing in the
+			// snapshot and are dropped when the edges are built.
+			dep.DependsOn = requires("packagist", sortedKeys(p.Require)...)
+			snapshot.Dependencies = append(snapshot.Dependencies, dep)
 		}
 	}
 	add(f.Packages, filePath)
@@ -313,8 +380,11 @@ func (YarnLock) lockfile() {}
 func (YarnLock) Parse(filePath string, content []byte) (model.RepositorySnapshot, error) {
 	var (
 		snapshot model.RepositorySnapshot
+		resolved = map[string]string{}   // name -> the version it resolved to
+		children = map[string][]string{} // name -> what that package requires
 		names    []string
-		seen     = map[string]string{}
+		inDeps   bool
+		depth    int
 	)
 
 	for _, raw := range strings.Split(string(content), "\n") {
@@ -327,28 +397,62 @@ func (YarnLock) Parse(filePath string, content []byte) (model.RepositorySnapshot
 		// An entry header is unindented and ends in a colon; everything under
 		// it is indented.
 		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
-			names = yarnEntryNames(trimmed)
+			names, inDeps = yarnEntryNames(trimmed), false
 			continue
 		}
+		if len(names) == 0 {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " \t"))
 
-		version, ok := yarnVersion(trimmed)
-		if !ok || len(names) == 0 {
-			continue
-		}
-		for _, name := range names {
-			if _, done := seen[name]; done {
+		// Inside a dependencies block, every line indented under it names one
+		// requirement. The block ends at the first line that is not.
+		if inDeps {
+			if indent > depth {
+				if child, ok := yarnChildName(trimmed); ok {
+					for _, name := range names {
+						children[name] = append(children[name], child)
+					}
+				}
 				continue
 			}
-			seen[name] = version
+			inDeps = false
 		}
-		names = nil
+		// Only "dependencies": a peer or a dev requirement is installed by
+		// whoever consumes this package, not by this package, so an edge from
+		// here would say something the lockfile does not.
+		if trimmed == "dependencies:" {
+			inDeps, depth = true, indent
+			continue
+		}
+		if version, ok := yarnVersion(trimmed); ok {
+			for _, name := range names {
+				if _, done := resolved[name]; !done {
+					resolved[name] = version
+				}
+			}
+		}
 	}
 
-	for _, name := range sortedKeys(seen) {
-		snapshot.Dependencies = append(snapshot.Dependencies,
-			locked("npm", name, seen[name], false, filePath))
+	for _, name := range sortedKeys(resolved) {
+		dep := locked("npm", name, resolved[name], false, filePath)
+		dep.DependsOn = requires("npm", children[name]...)
+		snapshot.Dependencies = append(snapshot.Dependencies, dep)
 	}
 	return snapshot, nil
+}
+
+// yarnChildName reads the package name from one line of a dependencies block.
+// v1 writes `name "range"`, Berry writes `name: range`, and either may quote a
+// scoped name — hence unquoting on both sides of the colon.
+func yarnChildName(line string) (string, bool) {
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return "", false
+	}
+	name := strings.Trim(fields[0], `"'`)
+	name = strings.Trim(strings.TrimSuffix(name, ":"), `"'`)
+	return name, name != ""
 }
 
 // yarnEntryNames reads the package names out of an entry header.
@@ -366,6 +470,7 @@ func yarnEntryNames(header string) []string {
 	}
 
 	var names []string
+	seen := map[string]struct{}{}
 	for _, descriptor := range strings.Split(header, ",") {
 		descriptor = strings.Trim(strings.TrimSpace(descriptor), `"'`)
 		if descriptor == "" {
@@ -375,9 +480,17 @@ func yarnEntryNames(header string) []string {
 		if at <= 0 {
 			continue // no range, or a bare "@" — nothing nameable
 		}
-		if name := strings.TrimSpace(descriptor[:at]); name != "" {
-			names = append(names, name)
+		name := strings.TrimSpace(descriptor[:at])
+		if name == "" {
+			continue
 		}
+		// A header lists every range that resolved here, and two ranges of
+		// one package are one package: "lodash@^4.17.0, lodash@^4.17.21".
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
 	}
 	return names
 }
@@ -418,9 +531,10 @@ func (PackagesLock) lockfile() {}
 // project asked for, which is what the .csproj already says — the lockfile is
 // read precisely to get past that.
 type packagesLockEntry struct {
-	Type      string `json:"type"`
-	Resolved  string `json:"resolved"`
-	Requested string `json:"requested"`
+	Type      string            `json:"type"`
+	Resolved  string            `json:"resolved"`
+	Requested string            `json:"requested"`
+	Deps      map[string]string `json:"dependencies"`
 }
 
 // Parse maps every restored package, across every target framework.
@@ -462,8 +576,9 @@ func (PackagesLock) Parse(filePath string, content []byte) (model.RepositorySnap
 			// "Direct" is the lockfile's own word for what the project asked
 			// for; "Transitive" came in through something else.
 			direct := strings.EqualFold(entry.Type, "Direct")
-			snapshot.Dependencies = append(snapshot.Dependencies,
-				locked("nuget", name, entry.Resolved, direct, filePath))
+			dep := locked("nuget", name, entry.Resolved, direct, filePath)
+			dep.DependsOn = requires("nuget", sortedKeys(entry.Deps)...)
+			snapshot.Dependencies = append(snapshot.Dependencies, dep)
 		}
 	}
 	return snapshot, nil

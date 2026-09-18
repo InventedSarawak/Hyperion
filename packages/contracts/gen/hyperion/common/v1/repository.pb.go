@@ -164,7 +164,19 @@ type Dependency struct {
 	// Locked marks a version read from a lockfile: the one actually installed,
 	// rather than the range a manifest allows. It is what lets a finding be
 	// judged outright instead of "possibly affected".
-	Locked        bool `protobuf:"varint,4,opt,name=locked,proto3" json:"locked,omitempty"`
+	Locked bool `protobuf:"varint,4,opt,name=locked,proto3" json:"locked,omitempty"`
+	// depends_on is what this package itself requires, when the file said.
+	//
+	// A lockfile is a graph, not a list: it records which package pulled in
+	// which. A manifest carries no such thing, so this is empty for one, and
+	// empty means "not stated" rather than "nothing". Only the names are
+	// carried: a lockfile states a requirement as the range the package asked
+	// for, while the version actually installed is on the entry for that
+	// package.
+	//
+	// Without it every transitive package hangs directly off the repository,
+	// and "how does this CVE reach me?" can only be answered with a list.
+	DependsOn     []*PackageRef `protobuf:"bytes,5,rep,name=depends_on,json=dependsOn,proto3" json:"depends_on,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -227,6 +239,13 @@ func (x *Dependency) GetLocked() bool {
 	return false
 }
 
+func (x *Dependency) GetDependsOn() []*PackageRef {
+	if x != nil {
+		return x.DependsOn
+	}
+	return nil
+}
+
 var File_hyperion_common_v1_repository_proto protoreflect.FileDescriptor
 
 const file_hyperion_common_v1_repository_proto_rawDesc = "" +
@@ -241,13 +260,15 @@ const file_hyperion_common_v1_repository_proto_rawDesc = "" +
 	"\x05owner\x18\x01 \x01(\tR\x05owner\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x10\n" +
 	"\x03url\x18\x03 \x01(\tR\x03url\x12%\n" +
-	"\x0edefault_branch\x18\x04 \x01(\tR\rdefaultBranch\"\x9b\x01\n" +
+	"\x0edefault_branch\x18\x04 \x01(\tR\rdefaultBranch\"\xda\x01\n" +
 	"\n" +
 	"Dependency\x128\n" +
 	"\apackage\x18\x01 \x01(\v2\x1e.hyperion.common.v1.PackageRefR\apackage\x12\x16\n" +
 	"\x06direct\x18\x02 \x01(\bR\x06direct\x12#\n" +
 	"\rmanifest_path\x18\x03 \x01(\tR\fmanifestPath\x12\x16\n" +
-	"\x06locked\x18\x04 \x01(\bR\x06lockedB\xeb\x01\n" +
+	"\x06locked\x18\x04 \x01(\bR\x06locked\x12=\n" +
+	"\n" +
+	"depends_on\x18\x05 \x03(\v2\x1e.hyperion.common.v1.PackageRefR\tdependsOnB\xeb\x01\n" +
 	"\x16com.hyperion.common.v1B\x0fRepositoryProtoP\x01ZVgithub.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/common/v1;commonv1\xa2\x02\x03HCX\xaa\x02\x12Hyperion.Common.V1\xca\x02\x12Hyperion\\Common\\V1\xe2\x02\x1eHyperion\\Common\\V1\\GPBMetadata\xea\x02\x14Hyperion::Common::V1b\x06proto3"
 
 var (
@@ -271,11 +292,12 @@ var file_hyperion_common_v1_repository_proto_goTypes = []any{
 }
 var file_hyperion_common_v1_repository_proto_depIdxs = []int32{
 	3, // 0: hyperion.common.v1.Dependency.package:type_name -> hyperion.common.v1.PackageRef
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	3, // 1: hyperion.common.v1.Dependency.depends_on:type_name -> hyperion.common.v1.PackageRef
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_hyperion_common_v1_repository_proto_init() }

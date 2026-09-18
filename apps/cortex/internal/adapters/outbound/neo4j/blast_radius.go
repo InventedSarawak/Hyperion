@@ -26,14 +26,27 @@ ORDER BY ecosystem, name`
 // impactedRepositoriesCypher walks DEPENDS_ON backwards from every affected
 // library to the repositories that reach it. %d is the traversal depth.
 //
-// Where a repository reaches the same library by several paths, the shortest
-// wins: ordering before collect() and taking the head is the Cypher idiom for
-// "best per group".
+// Where a repository reaches the same library by several paths, one is chosen:
+// ordering before collect() and taking the head is the Cypher idiom for "best
+// per group". Which one is "best" is the whole question the graph exists to
+// answer.
+//
+// A lockfile names every package installed, so a repository has an edge
+// straight to each of them — including the ones it never asked for. Taking the
+// shortest path would therefore answer "how does this reach you?" with "it
+// just does", for every transitive package, in a graph that knows perfectly
+// well which dependency pulled it in.
+//
+// So a path whose first hop the repository actually declares wins over a
+// shorter one that starts with a package it merely ended up with, and the
+// shortest wins among those. A directly declared dependency is still reported
+// at depth 1, because for that one the first hop is the answer.
 const impactedRepositoriesCypher = `
 MATCH (lib:Library)-[a:AFFECTED_BY]->(:Vulnerability {cve_id: $cve_id})
 MATCH path = (repo:Repository)-[:DEPENDS_ON*1..%d]->(lib)
-WITH repo, lib, a, path, length(path) AS depth
-ORDER BY depth ASC
+WITH repo, lib, a, path, length(path) AS depth,
+     coalesce(relationships(path)[0].direct, false) AS declared
+ORDER BY declared DESC, depth ASC
 WITH repo, lib, a, head(collect({path: path, depth: depth})) AS best
 OPTIONAL MATCH (author:Author)-[:MAINTAINS]->(repo)
 RETURN repo.owner          AS owner,

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"sort"
 	"time"
 
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/valueobject"
@@ -27,6 +28,55 @@ type RepositorySnapshot struct {
 // itself; individual dependencies are checked by ValidDependencies, since one
 // unparseable line in a manifest should not discard the whole file.
 func (s RepositorySnapshot) Validate() error { return s.Repository.Validate() }
+
+// LibraryEdge is one library requiring another, as a lockfile recorded it.
+type LibraryEdge struct {
+	From Library
+	To   Library
+}
+
+// LibraryEdges is every library-to-library requirement this snapshot observed,
+// deduplicated and in a stable order.
+//
+// Only edges whose far end is also in the snapshot are reported. A lockfile
+// states a package's requirements by name, including ones it did not resolve
+// itself — an optional peer, a platform-specific build — and an edge to a
+// library nothing installed would invent a dependency that is not there.
+//
+// This is what makes the graph transitive for every library, not only for the
+// one a tracked repository happens to publish.
+func (s RepositorySnapshot) LibraryEdges() []LibraryEdge {
+	deps := s.ValidDependencies()
+	known := make(map[string]Library, len(deps))
+	for _, d := range deps {
+		known[d.Library().Key()] = d.Library()
+	}
+
+	seen := make(map[string]struct{}, len(known))
+	out := make([]LibraryEdge, 0, len(known))
+	for _, d := range deps {
+		from := d.Library()
+		for _, ref := range d.DependsOn {
+			to, ok := known[NewLibrary(ref).Key()]
+			if !ok || to.Key() == from.Key() {
+				continue
+			}
+			pair := from.Key() + ">" + to.Key()
+			if _, dup := seen[pair]; dup {
+				continue
+			}
+			seen[pair] = struct{}{}
+			out = append(out, LibraryEdge{From: from, To: to})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].From.Key() != out[j].From.Key() {
+			return out[i].From.Key() < out[j].From.Key()
+		}
+		return out[i].To.Key() < out[j].To.Key()
+	})
+	return out
+}
 
 // PublishedLibrary returns the library this repository ships, and whether it
 // declares one at all. A repository that publishes nothing (an application,
@@ -79,7 +129,30 @@ func mergeDependency(kept, next Dependency) Dependency {
 	}
 	winner.Direct = kept.Direct || next.Direct
 	winner.Locked = kept.Locked || next.Locked
+	// Requirements are the union: two manifests can each report part of what
+	// a package needs, and the graph wants every edge either one saw.
+	winner.DependsOn = unionRefs(kept.DependsOn, next.DependsOn)
 	return winner
+}
+
+// unionRefs merges two requirement lists, keeping the first spelling of each.
+func unionRefs(a, b []valueobject.PackageRef) []valueobject.PackageRef {
+	if len(a) == 0 {
+		return b
+	}
+	if len(b) == 0 {
+		return a
+	}
+	seen := make(map[string]struct{}, len(a)+len(b))
+	out := make([]valueobject.PackageRef, 0, len(a)+len(b))
+	for _, ref := range append(append([]valueobject.PackageRef{}, a...), b...) {
+		if _, dup := seen[ref.Key()]; dup {
+			continue
+		}
+		seen[ref.Key()] = struct{}{}
+		out = append(out, ref)
+	}
+	return out
 }
 
 func (s RepositorySnapshot) ValidDependencies() []Dependency {
