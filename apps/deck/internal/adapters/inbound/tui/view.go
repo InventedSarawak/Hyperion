@@ -45,6 +45,8 @@ func (m Model) View() string {
 		b.WriteString(m.graphView())
 	case TabRepos:
 		b.WriteString(m.reposView())
+	case TabAlerts:
+		b.WriteString(m.alertsView())
 	default:
 		b.WriteString(m.feedView())
 	}
@@ -379,6 +381,16 @@ func (m Model) promptBox() string {
 		return box.Render(styleFaint.Render(label) + styleDim.Render(truncate(hint, m.innerWidth()-len(label))))
 	}
 
+	if m.tab == TabAlerts && m.opts.Alerts != nil {
+		label, text, active := m.alertPrompt()
+		text = truncateLeft(text, m.innerWidth()-len(label)-1)
+		if active {
+			box = box.BorderForeground(colAccent)
+			return box.Render(stylePrompt.Render(label) + text + styleSelect.Render("▏"))
+		}
+		return box.Render(styleFaint.Render(label) + styleDim.Render(text))
+	}
+
 	// "search: " and the caret take 9 cells; a query longer than the rest
 	// would wrap the box onto a fourth line the budget never counted.
 	query := truncateLeft(m.query, m.innerWidth()-9)
@@ -403,6 +415,8 @@ func (m Model) footer() string {
 		hints = "  ↑/↓ scroll · pgup/pgdn page · esc back · tab switch · r refresh · q quit"
 	case m.tab == TabRepos:
 		hints = m.repoHints()
+	case m.tab == TabAlerts:
+		hints = m.alertHints()
 	default:
 		hints = "  ↑/↓ move · enter details · b blast radius · n more · s sort · m malware · / search · tab switch · r refresh · q quit"
 		if row, ok := m.row(); ok && row.IsBatch() {

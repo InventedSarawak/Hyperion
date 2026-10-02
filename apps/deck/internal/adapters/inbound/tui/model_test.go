@@ -353,9 +353,13 @@ var _ = Describe("TUI model", func() {
 		got, _ = apply(got, tea.KeyMsg{Type: tea.KeyTab})
 		Expect(stripANSI(got.View())).To(ContainSubstring("▌ 4 Repositories"))
 		got, _ = apply(got, tea.KeyMsg{Type: tea.KeyTab})
+		Expect(stripANSI(got.View())).To(ContainSubstring("▌ 5 Alerts"))
+		got, _ = apply(got, tea.KeyMsg{Type: tea.KeyTab})
 		Expect(got.View()).To(ContainSubstring("CVE-2021-44228"), "tab wraps round to the feed")
 
 		got, _ = apply(got, tea.KeyMsg{Type: tea.KeyShiftTab})
+		Expect(stripANSI(got.View())).To(ContainSubstring("▌ 5 Alerts"))
+		got, _ = apply(got, key("4"))
 		Expect(stripANSI(got.View())).To(ContainSubstring("▌ 4 Repositories"))
 	})
 

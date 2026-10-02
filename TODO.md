@@ -289,8 +289,10 @@ infrastructure** waits for the same v4 work that containerises the services.
       an end-user feature with no route through the gateway, so the only way to use it is
       `grpcurl`. Queries `subscriptions`, `alerts`; mutations `createSubscription`,
       `deleteSubscription`.
-- [ ] **Give deck an alerts view**, once the gateway serves them — it has Feed, Details,
-      Graph and Repositories, and no way to see or manage what it is alerting on.
+- [x] **Give deck an alerts view (2026-10-02).** Tab 5: the rules in place, what each
+      caught, writing a rule in three steps (name, text, severity) and removing one.
+- [x] **Rename subscriptions to alert rules (2026-10-02)** before billing brings
+      subscriptions of its own. Migration 0010, contract, GraphQL, tasks.
 - [x] **Move the grpcurl tasks onto the gateway (2026-09-17).** `task blast`,
       `subscribe`, `subscriptions`, `unsubscribe` and `alerts` all go through nexus via
       `scripts/graphql.sh`. No task calls cortex directly any more.

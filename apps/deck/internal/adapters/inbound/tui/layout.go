@@ -120,6 +120,8 @@ func (m Model) clampScroll() Model {
 	m.repos.cursor, m.repos.offset = follow(m.repos.cursor, m.repos.offset, len(m.repos.list), m.repoRows())
 	m.repos.pickCursor, m.repos.pickOffset = follow(m.repos.pickCursor, m.repos.pickOffset, len(m.repos.discovered), m.repoRows())
 	m.repos.findCursor, m.repos.findOffset = follow(m.repos.findCursor, m.repos.findOffset, len(m.repos.exposure.Findings), m.findingRows())
+	m.alerts.cursor, m.alerts.offset = follow(m.alerts.cursor, m.alerts.offset, len(m.alerts.rules), m.alertRows())
+	m.alerts.raisedCursor, m.alerts.raisedOffset = follow(m.alerts.raisedCursor, m.alerts.raisedOffset, len(m.alerts.raised), m.alertRows())
 	return m
 }
 
@@ -140,6 +142,16 @@ func follow(cursor, offset, n, rows int) (int, int) {
 func (m Model) repoRows() int {
 	rows := m.bodyRows() - 1
 	if m.repoNotice() != "" {
+		rows--
+	}
+	return max(1, rows)
+}
+
+// alertRows is how many rules or alerts fit: the body less the column header
+// and, when there is one, the notice line above it.
+func (m Model) alertRows() int {
+	rows := m.bodyRows() - 1
+	if m.alertNotice() != "" {
 		rows--
 	}
 	return max(1, rows)

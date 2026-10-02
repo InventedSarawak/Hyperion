@@ -48,6 +48,7 @@ func main() {
 			Details:         queries.NewGetVulnerability(client),
 			Repositories:    commands.NewManageWatchlist(client),
 			Findings:        queries.NewGetRepositoryExposure(client),
+			Alerts:          commands.NewManageAlertRules(client),
 			Stream:          findingStream(client),
 		},
 	)
@@ -77,6 +78,7 @@ func findingStream(client intelligenceAPI) ports.FindingStream {
 type intelligenceAPI interface {
 	ports.IntelligenceAPI
 	ports.WatchlistAPI
+	ports.AlertingAPI
 	Close() error
 }
 

@@ -16,18 +16,20 @@ import (
 // Tab identifies which view is on screen.
 type Tab int
 
-// The four views, in the order they appear in the tab bar. A finding is read
+// The five views, in the order they appear in the tab bar. A finding is read
 // left to right: find it in the feed, read it in Details, see who it reaches in
-// the Graph Explorer. Repositories decides what the graph can reach at all.
+// the Graph Explorer. Repositories decides what the graph can reach at all, and
+// Alerts what you are told about without having to look.
 const (
 	TabFeed Tab = iota
 	TabDetails
 	TabGraph
 	TabRepos
+	TabAlerts
 )
 
 // allTabs is the tab bar, in order.
-var allTabs = []Tab{TabFeed, TabDetails, TabGraph, TabRepos}
+var allTabs = []Tab{TabFeed, TabDetails, TabGraph, TabRepos, TabAlerts}
 
 // Title is the tab's label in the header.
 func (t Tab) Title() string {
@@ -38,6 +40,8 @@ func (t Tab) Title() string {
 		return "Graph Explorer"
 	case TabRepos:
 		return "Repositories"
+	case TabAlerts:
+		return "Alerts"
 	default:
 		return "Live Feed"
 	}
@@ -52,6 +56,8 @@ func (t Tab) Short() string {
 		return "Graph"
 	case TabRepos:
 		return "Repos"
+	case TabAlerts:
+		return "Alerts"
 	default:
 		return "Feed"
 	}
@@ -103,9 +109,20 @@ type Options struct {
 	Details      VulnerabilityLoader
 	Repositories RepositoryManager
 	Findings     RepositoryFindingsLoader
+	// Alerts manages alert rules and reads what they raised. Optional: without
+	// it the Alerts tab says it is not connected.
+	Alerts AlertManager
 	// Stream, when set, pushes findings as they are ingested instead of
 	// waiting for the next refresh.
 	Stream FindingStreamer
+}
+
+// AlertManager reads and edits alert rules (consumer-side interface).
+type AlertManager interface {
+	Rules(ctx context.Context) ([]model.AlertRule, error)
+	Create(ctx context.Context, name string, criteria model.Criteria) (model.AlertRule, error)
+	Delete(ctx context.Context, id string) error
+	Alerts(ctx context.Context, ruleID string) ([]model.Alert, error)
 }
 
 // RepositoryFindingsLoader lists the vulnerabilities one repository has
@@ -171,7 +188,8 @@ type Model struct {
 	radiusLoading bool
 	radiusErr     error
 
-	repos repoState
+	repos  repoState
+	alerts alertState
 
 	// query is the search box's text, which changes as the user types;
 	// active is the query last submitted, which is what refreshes use. Using
@@ -227,7 +245,7 @@ func New(search Searcher, explorer BlastRadiusExplorer, opts Options) Model {
 // busy reports whether anything is in flight, which is what keeps the
 // spinner turning.
 func (m Model) busy() bool {
-	return m.loading || m.loadingMore || m.detailLoading || m.radiusLoading || m.repos.busy()
+	return m.loading || m.loadingMore || m.detailLoading || m.radiusLoading || m.repos.busy() || m.alerts.busy()
 }
 
 // --- messages ---

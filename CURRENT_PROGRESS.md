@@ -5,7 +5,38 @@ before each commit; move superseded entries into the changelog at the bottom.
 
 ---
 
-## Latest Update — 2026-09-17
+## Latest Update — 2026-10-02
+
+### Overall status
+
+**v4 in progress, on branch `v4`.** Before the platform work proper (containers, auth,
+`herald`), the gaps that running v3 for real exposed are closed: the blast radius is a real
+transitive graph, deck's feed and search behave, every service reports its own health, CI
+exists, and alerting is usable from deck under a name that will not collide with billing.
+
+### What landed
+
+| Area     | What landed                                                                                                                                                                                                                     |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Graph    | Lockfiles keep the dependency tree they record (7 formats). Library→library edges **274 → 2,602**; paths of depth ≥ 2 **102 → 3,760**. Blast radius prefers the chain through a declared dependency over the flat edge          |
+| Search   | Relevance floor: a result must reach 15% of its query's best score. "react" 4,274 → 1,862, "kubernetes" 1,449 → 257                                                                                                             |
+| deck     | The panel keeps itself full (a folded run no longer leaves it empty); folds are per run; **tab 5 Alerts** — rules, what each caught, writing and removing rules                                                                 |
+| Alerting | "Subscription" renamed **alert rule** throughout (migration 0010, contract, GraphQL `alertRules`/`createAlertRule`/`deleteAlertRule`, `task rule:add`/`rules`/`rule:rm`) before billing brings subscriptions of its own         |
+| Health   | `packages/common/health`: cortex on `grpc.health.v1` (Postgres required; Elasticsearch, Neo4j reported), nexus and siphon on `/healthz` (siphon's required check is its poll heartbeat). `task status` asks services, not ports |
+| CI       | `.github/workflows/ci.yml`: static checks, contract drift, integration suites against real backing services, end-to-end tests against a started stack seeded through the pipeline                                               |
+| Tests    | Elasticsearch specs no longer leak an index per run (they deleted by alias, which Elasticsearch refuses); 239 leftovers removed                                                                                                 |
+
+### Verified end to end
+
+- A rule created through the gateway, 569 real records replayed through Kafka: **39 alerts**
+  raised into the renamed `alerts.rule_id` and read back through GraphQL and deck.
+- Postgres stopped: cortex `NOT_SERVING`, nexus `503` naming cortex. Elasticsearch stopped:
+  cortex stays `SERVING` and logs the degradation.
+- `vercel/commerce → npm:next → npm:postcss → npm:nanoid` reported as a 3-hop path.
+
+---
+
+## v3 complete — 2026-09-17
 
 ### Overall status
 
@@ -432,6 +463,12 @@ not started.**
 
 ## Changelog
 
+- **2026-10-02** — Alerting renamed from subscriptions to alert rules (migration 0010,
+  contract, GraphQL, tasks); deck tab 5 **Alerts**. 39 live alerts verified through the
+  renamed schema.
+- **2026-09-18** — v4 groundwork: CI pipeline, health checks on every service, the
+  Elasticsearch test-index leak; lockfile dependency trees and the declared-chain blast
+  radius; relevance floor; deck panel fill and per-run folds; stated severity persisted.
 - **2026-09-17** — v3: Kafka 4.1 (KRaft) in compose, `packages/common/kafka` (franz-go
   producer/consumer/codec/admin/tail), siphon Kafka publisher, cortex Kafka consumer
   group `intel-indexer`, `Flush` on the `SignalPublisher` port, topic tooling, and

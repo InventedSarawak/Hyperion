@@ -33,6 +33,17 @@ type WatchlistAPI interface {
 	UntrackRepository(ctx context.Context, fullName string) error
 }
 
+// AlertingAPI is an OUTBOUND port: the alert rules a user keeps, and the
+// alerts they have raised.
+type AlertingAPI interface {
+	AlertRules(ctx context.Context) ([]model.AlertRule, error)
+	CreateAlertRule(ctx context.Context, name string, criteria model.Criteria) (model.AlertRule, error)
+	DeleteAlertRule(ctx context.Context, id string) error
+	// Alerts returns what has already matched, newest first. An empty ruleID
+	// lists every rule's alerts.
+	Alerts(ctx context.Context, ruleID string, limit int) ([]model.Alert, error)
+}
+
 // FindingStream is an OUTBOUND port: a live feed of findings as they are
 // ingested.
 //

@@ -162,14 +162,14 @@ re-running is safe: ingest merges, so a repeated finding costs time, not correct
 
 **Limits.** The NVD half takes roughly an hour (NVD serves a 2,000-record page in ~40s);
 the OSV half downloads ~300 MB. Records are published in the same event format as polling,
-so a backfill can raise alerts for old findings if a subscription matches them. An
+so a backfill can raise alerts for old findings if an alert rule matches them. An
 interrupted run leaves a gap rather than a clean resumption point: the events queued when
 it stopped are not stored, and the fix is to run the backfill again over that range.
 
 **History is stored, not announced.** Events from a backfill carry a `historical` flag.
 cortex stores them exactly as it stores polled events — that is what lets a backfilled
 record and a polled one merge into each other — but skips alerting and the live feed for
-them. Loading ten years of advisories is not ten years of news, and a subscription
+them. Loading ten years of advisories is not ten years of news, and an alert rule
 matching them would otherwise fire thousands of times for findings long since fixed.
 
 **Retracted findings are not stored.** A CVE id can be assigned and then disowned — a
@@ -540,20 +540,33 @@ column; GraphQL `trackedRepositories { exposure { … } }`.
 
 ### 2.6 Real-time alerts
 
-**What it does.** A subscription is a standing rule — free text, minimum severity,
-packages, ecosystems, all AND-ed. Every ingested finding is matched against every rule at
+**What it does.** An alert rule is a standing request to be told — its criteria are free
+text, minimum severity, packages and ecosystems, all AND-ed. Every ingested finding is matched against every rule at
 once (Elasticsearch percolator), re-checked in the domain, de-duplicated in Redis for
 `CORTEX_ALERT_DEDUPE_WINDOW` (1h), and stored as an alert.
 
 **How to use.**
 
+deck's **Alerts** tab (§4.5), the GraphQL API (§3.1), or:
+
 ```bash
-task subscribe -- '{"tenant":"acme","name":"Next.js watch","rule":{"packages":[{"ecosystem":"ECOSYSTEM_NPM","name":"next"}]}}'
+task rule:add -- Log4j '{"term":"log4j","minSeverity":"HIGH"}'
+task rules
 task alerts
 ```
 
-**Limits.** gRPC only — not yet in GraphQL or deck. Alerts are stored, not delivered
-(no email, Slack or webhook yet). An empty rule is rejected.
+**A rule does not look back.** Matching happens as findings arrive, so a new rule alerts on
+what comes in from then on, not on the findings already stored — and backfilled history
+never alerts at all (§1.2). An empty alerts list under a new rule is expected, not broken.
+
+**Why "alert rule" and not "subscription".** They were called subscriptions until billing
+was on the way: credits and Lago will have subscriptions of their own, the kind people pay
+for, and two unrelated things under one name in one database is a misread waiting to
+happen. Migration `0010_alert_rules.sql` renamed the table (`alert_rules`, criteria in a
+`criteria` column) and `alerts.rule_id`; the contract, GraphQL and tasks moved with it.
+
+**Limits.** Alerts are stored, not delivered (no email, Slack or webhook yet — that is
+`herald`, v4). An empty rule is rejected.
 
 ### 2.6a Malware triage
 
@@ -612,21 +625,21 @@ modifiedAt, sources, affectedPackages { package versionRange }`.
 
 ### 3.1 Alerting through the gateway
 
-**What it does.** Subscriptions and alerts are served by nexus, like everything else a
+**What it does.** Alert rules and alerts are served by nexus, like everything else a
 user touches:
 
-| Operation   | GraphQL                                                                                             |
-| :---------- | :-------------------------------------------------------------------------------------------------- |
-| List rules  | `query { subscriptions { id name rule { term minSeverity } } }`                                     |
-| Create one  | `mutation { createSubscription(name: "Log4j", rule: {term: "log4j", minSeverity: "HIGH"}) { id } }` |
-| Remove one  | `mutation { deleteSubscription(id: "sub_…") }`                                                      |
-| Read alerts | `query { alerts(limit: 20) { cveId reason vulnerability { title } } }`                              |
+| Operation   | GraphQL                                                                                              |
+| :---------- | :--------------------------------------------------------------------------------------------------- |
+| List rules  | `query { alertRules { id name criteria { term minSeverity } } }`                                     |
+| Create one  | `mutation { createAlertRule(name: "Log4j", criteria: {term: "log4j", minSeverity: "HIGH"}) { id } }` |
+| Remove one  | `mutation { deleteAlertRule(id: "rule_…") }`                                                         |
+| Read alerts | `query { alerts(ruleId: "rule_…", limit: 20) { cveId ruleName reason vulnerability { title } } }`    |
 
 ```bash
-task subscribe -- Log4j '{"term":"log4j","minSeverity":"HIGH"}'
-task subscriptions
+task rule:add -- Log4j '{"term":"log4j","minSeverity":"HIGH"}'
+task rules
 task alerts
-task unsubscribe -- sub_1234
+task rule:rm -- rule_1234
 ```
 
 **Why it matters.** These were reachable only over gRPC on :50051, which made `grpcurl`
@@ -791,7 +804,34 @@ to a finding, and the finding's blast radius back to every repository it reaches
 | `r`     | reload                                                       |
 | `esc`   | back to the list                                             |
 
-### 4.5 Always
+### 4.5 Alerts (5)
+
+The alert rules in place, and what each has caught. Until this tab existed the only ways to
+see or manage alerting were GraphQL and `task`, which is why an empty `alerts` table read as
+"there is no way to set an alert".
+
+```
+  RULE                     ADDED      MATCHES
+▸ Log4j                    2h ago     "log4j" · high+
+  Next.js watch            1d ago     npm:next
+```
+
+| Key           | Does                                                                         |
+| :------------ | :--------------------------------------------------------------------------- |
+| `n`           | write a rule: its name, then the text to match (optional), then the severity |
+| `enter`       | the alerts that rule has raised, newest first                                |
+| `A`           | every rule's alerts together, each labelled with its rule                    |
+| `d`           | remove a rule and the alerts it raised (asks first)                          |
+| `enter` / `b` | on an alert: open its finding in **Details** / straight to the blast radius  |
+| `r`           | refresh                                                                      |
+
+While a name or text is being typed every key is text — `q` and `d` do not quit or delete.
+A rule with neither text nor a severity is refused before it is sent, because it would match
+every finding ever ingested; if the gateway refuses a rule, deck stays on the step that can
+fix it with what was typed intact. A new rule says, when it is added, that it alerts on
+findings arriving from now on — the first thing anyone expects to work differently.
+
+### 4.6 Always
 
 The logo stays pinned while there is room and steps aside in a small terminal; every frame
 is sized to the terminal so nothing scrolls off the top; a spinner turns only while a
@@ -801,23 +841,23 @@ request is in flight.
 
 ## 5. Operating the stack
 
-| Command                          | Does                                                                           |
-| :------------------------------- | :----------------------------------------------------------------------------- |
-| `task up`                        | Start Postgres, Elasticsearch, Neo4j, Redis, cortex, nexus and the ingest loop |
-| `task down`                      | Stop everything, containers included                                           |
-| `task restart`                   | Rebuild and restart cortex, nexus and ingest; databases keep running           |
-| `task status`                    | What is up, with row, document, node and relationship counts                   |
-| `task logs`                      | Tail the service logs                                                          |
-| `task ingest`                    | One foreground `siphon \| cortex` pipeline                                     |
-| `task backfill`                  | Load history (§1.2)                                                            |
-| `task scan`                      | Scan tracked repositories now (§1.5)                                           |
-| `task blast -- CVE-…`            | Blast radius over gRPC                                                         |
-| `task reindex`                   | Rebuild the search index from Postgres                                         |
-| `task subscribe` / `task alerts` | Create a subscription / list alerts                                            |
-| `task sources:check`             | Probe every feed                                                               |
-| `task test:go`                   | Unit tests                                                                     |
-| `task test:go:integration`       | Unit tests plus Postgres, Elasticsearch, Neo4j and Redis suites                |
-| `task codegen`                   | Regenerate Go from the protobuf contracts                                      |
+| Command                         | Does                                                                           |
+| :------------------------------ | :----------------------------------------------------------------------------- |
+| `task up`                       | Start Postgres, Elasticsearch, Neo4j, Redis, cortex, nexus and the ingest loop |
+| `task down`                     | Stop everything, containers included                                           |
+| `task restart`                  | Rebuild and restart cortex, nexus and ingest; databases keep running           |
+| `task status`                   | What is up, with row, document, node and relationship counts                   |
+| `task logs`                     | Tail the service logs                                                          |
+| `task ingest`                   | One foreground `siphon \| cortex` pipeline                                     |
+| `task backfill`                 | Load history (§1.2)                                                            |
+| `task scan`                     | Scan tracked repositories now (§1.5)                                           |
+| `task blast -- CVE-…`           | Blast radius over gRPC                                                         |
+| `task reindex`                  | Rebuild the search index from Postgres                                         |
+| `task rule:add` / `task alerts` | Create an alert rule / list alerts                                             |
+| `task sources:check`            | Probe every feed                                                               |
+| `task test:go`                  | Unit tests                                                                     |
+| `task test:go:integration`      | Unit tests plus Postgres, Elasticsearch, Neo4j and Redis suites                |
+| `task codegen`                  | Regenerate Go from the protobuf contracts                                      |
 
 Configuration lives in `.env` (documented key by key in `.env.sample`); a real environment
 variable always overrides it.

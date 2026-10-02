@@ -138,12 +138,17 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case reposMsg, reposPollMsg, discoverMsg, trackMsg, untrackMsg, exposureMsg:
 		return m.updateRepoMsg(msg)
 
+	case rulesMsg, ruleCreatedMsg, ruleDeletedMsg, raisedMsg:
+		return m.updateAlertMsg(msg)
+
 	case tea.KeyMsg:
 		switch {
 		case m.editing:
 			return m.updateEditing(msg)
 		case m.typingOwner():
 			return m.updateOwnerPrompt(msg)
+		case m.typingAlert():
+			return m.updateAlertInput(msg)
 		}
 		return m.updateBrowsing(msg)
 	}
@@ -191,8 +196,11 @@ func (m Model) updateEditing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // switchTo shows a tab, loading what it needs the first time it is shown.
 func (m Model) switchTo(t Tab) (tea.Model, tea.Cmd) {
 	m.tab = t
-	if t == TabRepos {
+	switch t {
+	case TabRepos:
 		return m.enterRepos()
+	case TabAlerts:
+		return m.enterAlerts()
 	}
 	return m, nil
 }
@@ -203,6 +211,11 @@ func (m Model) updateBrowsing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// is in the middle of something — picking, confirming — they come first.
 	if m.tab == TabRepos {
 		if next, cmd, handled := m.updateRepoKeys(msg); handled {
+			return next, cmd
+		}
+	}
+	if m.tab == TabAlerts {
+		if next, cmd, handled := m.updateAlertKeys(msg); handled {
 			return next, cmd
 		}
 	}
@@ -224,6 +237,8 @@ func (m Model) updateBrowsing(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.switchTo(TabGraph)
 	case "4":
 		return m.switchTo(TabRepos)
+	case "5":
+		return m.switchTo(TabAlerts)
 
 	case "esc":
 		// Back out of a finding to the list it came from.
