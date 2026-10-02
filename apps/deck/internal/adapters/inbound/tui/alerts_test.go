@@ -182,3 +182,25 @@ var _ = Describe("The Alerts tab", func() {
 		}
 	})
 })
+
+var _ = Describe("Going around the gateway", func() {
+	// DECK_TRANSPORT=grpc skips everything the edge enforces. It is for
+	// debugging, and it must not be something a reader can forget is on.
+	load := func(bypass bool) tui.Model {
+		GinkgoHelper()
+		m := tui.New(&stubSearch{feed: manyHits(3)}, &stubExplorer{},
+			tui.Options{PageSize: 25, Endpoint: "cortex localhost:50051", Bypass: bypass})
+		m, _ = apply(m, tea.WindowSizeMsg{Width: 140, Height: 40})
+		return settle(m, m.Init())
+	}
+
+	It("says so in the header for as long as it is in use", func() {
+		// After the first refresh the header shows when it last updated
+		// instead of the endpoint, so the endpoint alone is not enough.
+		Expect(stripANSI(load(true).View())).To(ContainSubstring("⚠ gateway bypassed"))
+	})
+
+	It("says nothing through the gateway", func() {
+		Expect(stripANSI(load(false).View())).ToNot(ContainSubstring("bypassed"))
+	})
+})

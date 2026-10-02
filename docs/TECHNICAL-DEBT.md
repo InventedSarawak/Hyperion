@@ -550,8 +550,13 @@ directly.
   from a laptop.
 - **Cost:** one extra network hop and a JSON encode/decode per query. Negligible
   against a human pressing keys; it would matter for a streaming firehose.
-- **Escape hatch:** `DECK_TRANSPORT=grpc` keeps the direct path for debugging a
-  cortex the gateway cannot reach.
+- **Escape hatch, and marked as one (2026-10-02):** `DECK_TRANSPORT=grpc` keeps
+  the direct path for debugging a cortex the gateway cannot reach. It was a
+  peer setting in `.env.sample` and invisible once deck had refreshed; it is now
+  commented out there as debugging-only, and deck's header shows
+  **⚠ gateway bypassed** for as long as it is in use. It stays, because a
+  gateway that is itself the problem must not take the only way to inspect
+  cortex down with it.
 
 ### 🟢 ~~Neo4j migrations are implicit~~ — REPAID (v3, 2026-09-17)
 

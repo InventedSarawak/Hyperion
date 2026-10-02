@@ -296,7 +296,7 @@ infrastructure** waits for the same v4 work that containerises the services.
 - [x] **Move the grpcurl tasks onto the gateway (2026-09-17).** `task blast`,
       `subscribe`, `subscriptions`, `unsubscribe` and `alerts` all go through nexus via
       `scripts/graphql.sh`. No task calls cortex directly any more.
-- [ ] **Retire `DECK_TRANSPORT=grpc`** as anything but a debugging escape hatch, and say
+- [x] **Retire `DECK_TRANSPORT=grpc` (2026-10-02)** as anything but a debugging escape hatch, and say
       so in the docs (registered in TECHNICAL-DEBT.md).
 - [ ] **API keys** issued and verified at nexus, as the first thing that makes the rule
       enforceable rather than a convention.

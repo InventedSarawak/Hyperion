@@ -655,7 +655,8 @@ alert freezing what was true when it fired.
 ## 4. Terminal UI (deck)
 
 `task run:deck`. Four tabs; `tab` / `shift+tab` cycle them, `1`–`4` jump, `q` quits.
-It goes through nexus by default (`DECK_TRANSPORT=grpc` talks to cortex directly).
+It goes through nexus. `DECK_TRANSPORT=grpc` reaches cortex directly for debugging only, and
+the header shows **⚠ gateway bypassed** for as long as it is on.
 
 ### 4.0 The live feed
 

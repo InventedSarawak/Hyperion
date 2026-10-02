@@ -77,7 +77,11 @@ func (m Model) header() string {
 		status = styleDim.Render("updated " + m.lastRefresh.Format("15:04:05"))
 	}
 
-	left := styleBrand.Render("HYPERION") + "  " + strings.Join(tabs, "")
+	brand := styleBrand.Render("HYPERION")
+	if m.opts.Bypass {
+		brand += " " + styleError.Render("⚠ gateway bypassed")
+	}
+	left := brand + "  " + strings.Join(tabs, "")
 	if m.width <= 0 || lipgloss.Width(left)+2+lipgloss.Width(status) <= m.width {
 		return m.spread(left, status)
 	}
@@ -86,7 +90,7 @@ func (m Model) header() string {
 	if lipgloss.Width(left) <= m.width {
 		return left
 	}
-	compact := styleBrand.Render("HYPERION") + " " + m.compactTabs()
+	compact := brand + " " + m.compactTabs()
 	if lipgloss.Width(compact) <= m.width {
 		return compact
 	}

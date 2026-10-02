@@ -105,6 +105,12 @@ type Options struct {
 	MaxDepth        int
 	RefreshInterval time.Duration
 	Endpoint        string
+	// Bypass says deck is talking to cortex directly rather than through the
+	// gateway. It is a debugging escape hatch, and the header says so for as
+	// long as it is in use: everything the edge enforces — authentication,
+	// rate limits, tenant scoping — is skipped, which should never be
+	// something a reader forgets they turned on.
+	Bypass bool
 
 	Details      VulnerabilityLoader
 	Repositories RepositoryManager

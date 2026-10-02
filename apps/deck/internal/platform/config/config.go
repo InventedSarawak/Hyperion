@@ -16,8 +16,10 @@ const (
 	DefaultCortexGRPCAddr = "localhost:50051"
 	DefaultGatewayURL     = "http://localhost:8080/graphql"
 	// TransportGateway routes through nexus, so deck inherits whatever the
-	// edge enforces. TransportGRPC talks to cortex directly and is for
-	// debugging a cortex the gateway cannot reach.
+	// edge enforces. TransportGRPC talks to cortex directly: a debugging
+	// escape hatch for a cortex the gateway cannot reach, not a choice of
+	// equals. It skips everything the edge enforces, and deck's header says
+	// so for as long as it is in use.
 	TransportGateway = "gateway"
 	TransportGRPC    = "grpc"
 	// No query is the live feed: the newest findings first. It used to
@@ -61,6 +63,9 @@ func (c Config) Describe() []config.Entry {
 	}
 	return c.loader.Describe()
 }
+
+// Bypass reports whether deck goes around the gateway.
+func (c Config) Bypass() bool { return c.Transport == TransportGRPC }
 
 // Endpoint describes where deck will connect, for display in the UI.
 func (c Config) Endpoint() string {

@@ -277,13 +277,17 @@ The terminal UI.
 task run:deck
 ```
 
-By default it talks to **nexus over GraphQL**, so it is subject to the same edge policy as
-every other client — authentication, rate limiting and per-tenant scoping, once those land
-in v4. Set `DECK_TRANSPORT=grpc` to bypass the gateway and query cortex directly; that is
-for debugging a cortex the gateway cannot reach, not for everyday use.
+It talks to **nexus over GraphQL**, so it is subject to the same edge policy as every
+other client — authentication, rate limiting and per-tenant scoping, once those land in v4.
+
+**Debugging only:** `DECK_TRANSPORT=grpc` goes around the gateway and queries cortex
+directly, for a cortex the gateway cannot reach. It skips everything the edge enforces, so
+deck's header shows **⚠ gateway bypassed** for as long as it is on — after the first
+refresh the endpoint is no longer on screen, and this is not something to forget you set.
+Once API keys exist the direct path will not carry them; it is for an operator on the host.
 
 Requires nexus and cortex to be up (`task up` does that). Configure it in `.env` with
-`DECK_TRANSPORT`, `DECK_GATEWAY_URL`, `DECK_FEED_QUERY`, `DECK_REFRESH_INTERVAL`.
+`DECK_GATEWAY_URL`, `DECK_FEED_QUERY`, `DECK_REFRESH_INTERVAL`.
 
 Four tabs — `tab` / `shift+tab` cycle, `1`–`4` jump:
 

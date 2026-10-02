@@ -1,9 +1,9 @@
 // Command tui is deck's entrypoint: the composition root that wires the gRPC
 // client into the use cases and runs the Bubble Tea program.
 //
-// deck reaches cortex through the nexus gateway by default, so it is subject to
-// the same edge policy as every other client; DECK_TRANSPORT=grpc talks to
-// cortex directly for debugging.
+// deck reaches cortex through the nexus gateway, so it is subject to the same
+// edge policy as every other client. DECK_TRANSPORT=grpc talks to cortex
+// directly — a debugging escape hatch, flagged in the header while in use.
 package main
 
 import (
@@ -45,6 +45,7 @@ func main() {
 			MaxDepth:        cfg.BlastRadiusMaxDepth,
 			RefreshInterval: cfg.RefreshInterval,
 			Endpoint:        cfg.Endpoint(),
+			Bypass:          cfg.Bypass(),
 			Details:         queries.NewGetVulnerability(client),
 			Repositories:    commands.NewManageWatchlist(client),
 			Findings:        queries.NewGetRepositoryExposure(client),
