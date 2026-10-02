@@ -40,23 +40,23 @@ type FindingStreamClient interface {
 }
 
 // WatchlistClient is an OUTBOUND port: the repositories cortex tracks.
-// AlertingClient is an OUTBOUND port: the subscriptions a user keeps and the
+// AlertingClient is an OUTBOUND port: the alert rules a user keeps and the
 // alerts they have raised.
 //
 // Its own port rather than part of IntelligenceClient: alerting is a separate
 // service in cortex, and a caller that only searches should not have to
-// implement subscription management to satisfy an interface.
+// implement alert rule management to satisfy an interface.
 type AlertingClient interface {
-	// Subscriptions lists the standing requests to be told about findings.
+	// AlertRules lists the standing requests to be told about findings.
 	// An empty tenant lists every tenant's, until auth scopes it (v4).
-	Subscriptions(ctx context.Context, tenant string) ([]model.Subscription, error)
-	// CreateSubscription records a new one and returns it as stored.
-	CreateSubscription(ctx context.Context, tenant, name string, rule model.AlertRule) (model.Subscription, error)
-	// DeleteSubscription removes one, reporting whether it existed.
-	DeleteSubscription(ctx context.Context, id string) (bool, error)
-	// Alerts lists what has already matched, newest first. subscriptionID is
+	AlertRules(ctx context.Context, tenant string) ([]model.AlertRule, error)
+	// CreateAlertRule records a new one and returns it as stored.
+	CreateAlertRule(ctx context.Context, tenant, name string, rule model.Criteria) (model.AlertRule, error)
+	// DeleteAlertRule removes one, reporting whether it existed.
+	DeleteAlertRule(ctx context.Context, id string) (bool, error)
+	// Alerts lists what has already matched, newest first. ruleID is
 	// an optional filter.
-	Alerts(ctx context.Context, tenant, subscriptionID string, limit int) ([]model.Alert, error)
+	Alerts(ctx context.Context, tenant, ruleID string, limit int) ([]model.Alert, error)
 }
 
 type WatchlistClient interface {

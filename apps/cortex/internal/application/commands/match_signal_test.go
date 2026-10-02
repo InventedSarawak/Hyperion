@@ -14,46 +14,46 @@ import (
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/valueobject"
 )
 
-// fakeMatcher returns canned candidate subscription ids.
+// fakeMatcher returns canned candidate alert rule ids.
 type fakeMatcher struct {
 	ids []string
 	err error
 }
 
-func (f *fakeMatcher) Register(context.Context, model.Subscription) error { return nil }
-func (f *fakeMatcher) Deregister(context.Context, string) error           { return nil }
-func (f *fakeMatcher) Ready(context.Context) error                        { return nil }
+func (f *fakeMatcher) Register(context.Context, model.AlertRule) error { return nil }
+func (f *fakeMatcher) Deregister(context.Context, string) error        { return nil }
+func (f *fakeMatcher) Ready(context.Context) error                     { return nil }
 func (f *fakeMatcher) Match(context.Context, model.Vulnerability) ([]string, error) {
 	return f.ids, f.err
 }
 
-// fakeSubs is an in-memory SubscriptionRepo.
+// fakeSubs is an in-memory AlertRuleRepo.
 type fakeSubs struct {
-	byID map[string]model.Subscription
+	byID map[string]model.AlertRule
 	err  error
 }
 
-func (f *fakeSubs) Save(_ context.Context, s model.Subscription) error {
+func (f *fakeSubs) Save(_ context.Context, s model.AlertRule) error {
 	f.byID[s.ID] = s
 	return nil
 }
 
-func (f *fakeSubs) Get(_ context.Context, id string) (model.Subscription, error) {
+func (f *fakeSubs) Get(_ context.Context, id string) (model.AlertRule, error) {
 	if f.err != nil {
-		return model.Subscription{}, f.err
+		return model.AlertRule{}, f.err
 	}
 	s, ok := f.byID[id]
 	if !ok {
-		return model.Subscription{}, ports.ErrSubscriptionNotFound
+		return model.AlertRule{}, ports.ErrAlertRuleNotFound
 	}
 	return s, nil
 }
 
-func (f *fakeSubs) List(_ context.Context, tenant string) ([]model.Subscription, error) {
+func (f *fakeSubs) List(_ context.Context, tenant string) ([]model.AlertRule, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	out := make([]model.Subscription, 0, len(f.byID))
+	out := make([]model.AlertRule, 0, len(f.byID))
 	for _, s := range f.byID {
 		if tenant == "" || s.Tenant == tenant {
 			out = append(out, s)
@@ -111,13 +111,13 @@ var _ = Describe("MatchSignal use case", func() {
 		CVEID: "CVE-2021-44228", Title: "Log4Shell in log4j",
 		Scores: []model.CVSS{{Severity: model.SeverityCritical}},
 	}
-	watch := model.Subscription{
+	watch := model.AlertRule{
 		ID: "sub-1", Tenant: "acme", Name: "Log4j watch",
-		Rule: model.AlertRule{Term: "log4j"},
+		Criteria: model.Criteria{Term: "log4j"},
 	}
 
-	setup := func(subs ...model.Subscription) (*fakeMatcher, *fakeSubs, *fakeAlerts, *fakeDedupe) {
-		repo := &fakeSubs{byID: map[string]model.Subscription{}}
+	setup := func(subs ...model.AlertRule) (*fakeMatcher, *fakeSubs, *fakeAlerts, *fakeDedupe) {
+		repo := &fakeSubs{byID: map[string]model.AlertRule{}}
 		ids := make([]string, 0, len(subs))
 		for _, s := range subs {
 			repo.byID[s.ID] = s
@@ -126,14 +126,14 @@ var _ = Describe("MatchSignal use case", func() {
 		return &fakeMatcher{ids: ids}, repo, &fakeAlerts{}, newFakeDedupe()
 	}
 
-	It("raises an alert for a matching subscription", func() {
+	It("raises an alert for a matching alert rule", func() {
 		matcher, subs, alerts, dedupe := setup(watch)
 
 		raised, err := commands.NewMatchSignal(matcher, subs, alerts, dedupe, time.Hour).Handle(ctx, log4j)
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(raised).To(HaveLen(1))
-		Expect(raised[0].SubscriptionID).To(Equal("sub-1"))
+		Expect(raised[0].RuleID).To(Equal("sub-1"))
 		Expect(raised[0].Tenant).To(Equal("acme"))
 		Expect(raised[0].Reason).To(ContainSubstring("log4j"))
 		Expect(alerts.appended).To(HaveLen(1))
@@ -168,8 +168,8 @@ var _ = Describe("MatchSignal use case", func() {
 	It("ignores a percolator hit the domain rule does not agree with", func() {
 		// The index is a fast candidate finder; the rule is the definition.
 		// A stale index must not be able to invent an alert.
-		mismatched := model.Subscription{ID: "sub-2", Name: "Next.js watch",
-			Rule: model.AlertRule{Packages: []valueobject.PackageRef{
+		mismatched := model.AlertRule{ID: "sub-2", Name: "Next.js watch",
+			Criteria: model.Criteria{Packages: []valueobject.PackageRef{
 				valueobject.NewPackageRef("npm", "next", "")}}}
 		matcher, subs, alerts, dedupe := setup(mismatched)
 
@@ -180,7 +180,7 @@ var _ = Describe("MatchSignal use case", func() {
 		Expect(alerts.appended).To(BeEmpty())
 	})
 
-	It("skips a subscription deleted after it was indexed", func() {
+	It("skips an alert rule deleted after it was indexed", func() {
 		matcher, subs, alerts, dedupe := setup(watch)
 		delete(subs.byID, "sub-1") // the index still names it
 
@@ -190,9 +190,9 @@ var _ = Describe("MatchSignal use case", func() {
 		Expect(raised).To(BeEmpty())
 	})
 
-	It("alerts every subscription that matches", func() {
-		second := model.Subscription{ID: "sub-2", Tenant: "acme", Name: "Critical only",
-			Rule: model.AlertRule{MinSeverity: model.SeverityCritical}}
+	It("alerts every alert rule that matches", func() {
+		second := model.AlertRule{ID: "sub-2", Tenant: "acme", Name: "Critical only",
+			Criteria: model.Criteria{MinSeverity: model.SeverityCritical}}
 		matcher, subs, alerts, dedupe := setup(watch, second)
 
 		raised, err := commands.NewMatchSignal(matcher, subs, alerts, dedupe, time.Hour).Handle(ctx, log4j)
@@ -201,9 +201,9 @@ var _ = Describe("MatchSignal use case", func() {
 		Expect(raised).To(HaveLen(2))
 	})
 
-	It("keeps alerting the others when one subscription fails", func() {
-		second := model.Subscription{ID: "sub-2", Tenant: "acme", Name: "Critical only",
-			Rule: model.AlertRule{MinSeverity: model.SeverityCritical}}
+	It("keeps alerting the others when one alert rule fails", func() {
+		second := model.AlertRule{ID: "sub-2", Tenant: "acme", Name: "Critical only",
+			Criteria: model.Criteria{MinSeverity: model.SeverityCritical}}
 		matcher, subs, alerts, dedupe := setup(watch, second)
 		alerts.err = errors.New("postgres down")
 
@@ -237,7 +237,7 @@ var _ = Describe("MatchSignal use case", func() {
 		Expect(err).To(MatchError(model.ErrMissingCVEID))
 	})
 
-	It("alerts separately for different CVEs matching one subscription", func() {
+	It("alerts separately for different CVEs matching one alert rule", func() {
 		matcher, subs, alerts, dedupe := setup(watch)
 		match := commands.NewMatchSignal(matcher, subs, alerts, dedupe, time.Hour)
 
@@ -249,7 +249,7 @@ var _ = Describe("MatchSignal use case", func() {
 		raised, err := match.Handle(ctx, other)
 
 		Expect(err).ToNot(HaveOccurred())
-		Expect(raised).To(HaveLen(1), "suppression is per CVE, not per subscription")
+		Expect(raised).To(HaveLen(1), "suppression is per CVE, not per alert rule")
 	})
 })
 
@@ -276,15 +276,15 @@ var _ = Describe("MatchSignal and malicious packages", func() {
 		Kind:  model.KindMalware,
 		Title: "malicious package",
 	}
-	anyRule := model.Subscription{
+	anyRule := model.AlertRule{
 		ID: "sub-1", Tenant: "acme", Name: "everything",
-		Rule: model.AlertRule{Term: "package"},
+		Criteria: model.Criteria{Term: "package"},
 	}
 
 	// A matcher that matches whatever it is given, so the only thing deciding
 	// the outcome is the triage under test.
 	setup := func() (*fakeMatcher, *fakeSubs, *fakeAlerts) {
-		repo := &fakeSubs{byID: map[string]model.Subscription{anyRule.ID: anyRule}}
+		repo := &fakeSubs{byID: map[string]model.AlertRule{anyRule.ID: anyRule}}
 		return &fakeMatcher{ids: []string{anyRule.ID}}, repo, &fakeAlerts{}
 	}
 

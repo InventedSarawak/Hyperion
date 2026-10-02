@@ -229,15 +229,22 @@ once and every incoming vulnerability is matched against every rule.
 
 ```bash
 # watch a library
-task subscribe -- '{"tenant":"acme","name":"Next.js watch",
-  "rule":{"packages":[{"ecosystem":"ECOSYSTEM_NPM","name":"next"}]}}'
+task rule:add -- "Next.js watch" '{"packages":["npm:next"]}'
 
 # watch by text and severity
-task subscribe -- '{"tenant":"acme","name":"Critical log4j",
-  "rule":{"term":"log4j","minSeverity":"SEVERITY_CRITICAL"}}'
+task rule:add -- "Critical log4j" '{"term":"log4j","minSeverity":"CRITICAL"}'
 
-task alerts        # what has matched so far
+task rules             # the rules in place
+task alerts            # what has matched so far
+task rule:rm -- rule_… # remove one, and the alerts it raised
 ```
+
+Or in deck: tab **5 Alerts** — `n` writes a rule (name, then text, then severity),
+`enter` shows what it caught, `A` shows every rule's alerts, `d` removes one.
+
+A rule only alerts on findings that **arrive after it exists** — it does not search
+history, and backfilled findings never alert. An empty list under a new rule means
+nothing new has matched yet.
 
 A rule's conditions are **AND-ed**, so each one narrows the match. A rule with no
 conditions is rejected rather than treated as "everything" — matching every advisory ever
@@ -250,13 +257,13 @@ repeating:
 - **Redis suppression** — the same rule stays quiet about the same CVE for
   `CORTEX_ALERT_DEDUPE_WINDOW` (default 1h). Advisories are re-observed on every poll and
   corrected for weeks.
-- **Deterministic alert ids** (`subscription:cve`) — even with suppression flushed, a
+- **Deterministic alert ids** (`rule:cve`) — even with suppression flushed, a
   re-observation refreshes the existing alert instead of stacking a new one.
 
 If Redis is unreachable, alerting **fails open**: alerts still fire, just without
 suppression. A duplicate alert is an annoyance; a suppressed one is a missed vulnerability.
 
-Verified: a `npm:next` subscription against a 7-year OSV backfill raised **57 alerts**,
+Verified: a `npm:next` rule against a 7-year OSV backfill raised **57 alerts**,
 re-ingesting the same advisories raised **0**, and flushing Redis then re-ingesting left
 the row count unchanged at 57.
 

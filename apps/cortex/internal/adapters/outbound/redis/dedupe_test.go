@@ -63,11 +63,11 @@ var _ = Describe("Redis DedupeStore (integration)", func() {
 
 		two, err := store.FirstSeen(ctx, prefix+"alert:sub-1:CVE-2", time.Minute)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(two).To(BeTrue(), "suppression is per CVE, not per subscription")
+		Expect(two).To(BeTrue(), "suppression is per CVE, not per alert rule")
 
 		three, err := store.FirstSeen(ctx, prefix+"alert:sub-2:CVE-1", time.Minute)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(three).To(BeTrue(), "suppression is per subscription, not per CVE")
+		Expect(three).To(BeTrue(), "suppression is per alert rule, not per CVE")
 	})
 
 	It("lets the key expire, so the window really is a window", func() {

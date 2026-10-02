@@ -89,7 +89,7 @@ func main() {
 
 	// Alerting: the percolator matches, Postgres remembers, Redis suppresses.
 	matcher := buildAlertMatcher(ctx, logger, cfg)
-	subsRepo := postgres.NewSubscriptionRepo(pool)
+	subsRepo := postgres.NewAlertRuleRepo(pool)
 	alertRepo := postgres.NewAlertRepo(pool)
 	dedupe, closeDedupe := buildDedupeStore(ctx, logger, cfg)
 	defer closeDedupe()
@@ -99,17 +99,17 @@ func main() {
 	// chances to alert on nothing.
 	match := commands.NewMatchSignal(matcher, subsRepo, alertRepo, dedupe, cfg.AlertDedupeWindow).
 		WithReach(graph)
-	manageSubs := commands.NewManageSubscriptions(subsRepo, matcher)
+	manageSubs := commands.NewManageAlertRules(subsRepo, matcher)
 	listAlerting := queries.NewListAlerting(subsRepo, alertRepo)
 
 	// The percolator holds no truth of its own, so an index that was lost or
 	// rebuilt is repaired from Postgres at boot rather than silently staying
-	// empty — an empty index means every subscription stops firing.
+	// empty — an empty index means every alert rule stops firing.
 	if matcher != nil {
 		if n, err := manageSubs.Reindex(ctx); err != nil {
-			logger.Warn("could not rebuild the subscription index; some rules may not fire", "error", err)
+			logger.Warn("could not rebuild the alert rule index; some rules may not fire", "error", err)
 		} else if n > 0 {
-			logger.Info("subscription index rebuilt", "subscriptions", n)
+			logger.Info("alert rule index rebuilt", "alert rules", n)
 		}
 	}
 
@@ -417,7 +417,7 @@ func serveGRPC(
 	search *queries.Search,
 	ingestDeps *commands.IngestDependency,
 	blast *queries.CalculateBlastRadius,
-	manageSubs *commands.ManageSubscriptions,
+	manageSubs *commands.ManageAlertRules,
 	listAlerting *queries.ListAlerting,
 	vulns *postgres.Repo,
 	watchlist *grpcadapter.WatchlistServer,
@@ -462,13 +462,13 @@ func serveGRPC(
 // Alerting simply does not run without it: there is no meaningful degraded
 // mode for "match this against every rule".
 func buildAlertMatcher(ctx context.Context, logger *slog.Logger, cfg config.Config) ports.AlertMatcher {
-	percolator := elasticsearch.NewPercolator(nil, cfg.ElasticsearchURL, cfg.SubscriptionIndex)
+	percolator := elasticsearch.NewPercolator(nil, cfg.ElasticsearchURL, cfg.AlertRuleIndex)
 	if err := percolator.Ready(ctx); err != nil {
 		logger.Warn("elasticsearch unavailable; alerting disabled, ingestion continues",
 			"url", cfg.ElasticsearchURL, "error", err)
 		return nil
 	}
-	logger.Info("alerting ready", "index", cfg.SubscriptionIndex)
+	logger.Info("alerting ready", "index", cfg.AlertRuleIndex)
 	return percolator
 }
 

@@ -58,7 +58,7 @@ func (c *IngestSignal) WithNotifier(n ports.FindingNotifier) *IngestSignal {
 	return c
 }
 
-// Alerter raises alerts for the subscriptions a vulnerability matches
+// Alerter raises alerts for the alert rules a vulnerability matches
 // (consumer-side interface; implemented by MatchSignal).
 type Alerter interface {
 	Handle(ctx context.Context, v model.Vulnerability) ([]model.Alert, error)
@@ -174,7 +174,7 @@ func (c *IngestSignal) Handle(ctx context.Context, obs Observation) error {
 	//
 	// Except for history. A backfill publishes the same events polling would —
 	// which is what makes them merge identically — but loading ten years of
-	// advisories is not ten years of news, and a subscription that matched
+	// advisories is not ten years of news, and an alert rule that matched
 	// them would fire thousands of times for things long since fixed.
 	if c.alerter != nil && !obs.Historical {
 		if _, err := c.alerter.Handle(ctx, incoming); err != nil {

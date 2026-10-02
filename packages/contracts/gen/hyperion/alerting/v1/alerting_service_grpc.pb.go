@@ -19,23 +19,27 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AlertingService_CreateSubscription_FullMethodName = "/hyperion.alerting.v1.AlertingService/CreateSubscription"
-	AlertingService_ListSubscriptions_FullMethodName  = "/hyperion.alerting.v1.AlertingService/ListSubscriptions"
-	AlertingService_DeleteSubscription_FullMethodName = "/hyperion.alerting.v1.AlertingService/DeleteSubscription"
-	AlertingService_ListAlerts_FullMethodName         = "/hyperion.alerting.v1.AlertingService/ListAlerts"
+	AlertingService_CreateAlertRule_FullMethodName = "/hyperion.alerting.v1.AlertingService/CreateAlertRule"
+	AlertingService_ListAlertRules_FullMethodName  = "/hyperion.alerting.v1.AlertingService/ListAlertRules"
+	AlertingService_DeleteAlertRule_FullMethodName = "/hyperion.alerting.v1.AlertingService/DeleteAlertRule"
+	AlertingService_ListAlerts_FullMethodName      = "/hyperion.alerting.v1.AlertingService/ListAlerts"
 )
 
 // AlertingServiceClient is the client API for AlertingService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// AlertingService is cortex's subscription and alert API. Subscribers describe
-// what they want to hear about once; every incoming vulnerability is matched
-// against every rule (reverse search), so nobody has to poll.
+// AlertingService is cortex's alert rule and alert API. A user describes what
+// they want to hear about once; every incoming vulnerability is matched against
+// every rule (reverse search), so nobody has to poll.
+//
+// These were called subscriptions until billing made that word mean something
+// else: an alert rule is a standing request to be told, not a thing anyone pays
+// for.
 type AlertingServiceClient interface {
-	CreateSubscription(ctx context.Context, in *CreateSubscriptionRequest, opts ...grpc.CallOption) (*CreateSubscriptionResponse, error)
-	ListSubscriptions(ctx context.Context, in *ListSubscriptionsRequest, opts ...grpc.CallOption) (*ListSubscriptionsResponse, error)
-	DeleteSubscription(ctx context.Context, in *DeleteSubscriptionRequest, opts ...grpc.CallOption) (*DeleteSubscriptionResponse, error)
+	CreateAlertRule(ctx context.Context, in *CreateAlertRuleRequest, opts ...grpc.CallOption) (*CreateAlertRuleResponse, error)
+	ListAlertRules(ctx context.Context, in *ListAlertRulesRequest, opts ...grpc.CallOption) (*ListAlertRulesResponse, error)
+	DeleteAlertRule(ctx context.Context, in *DeleteAlertRuleRequest, opts ...grpc.CallOption) (*DeleteAlertRuleResponse, error)
 	// ListAlerts returns what has already matched, newest first.
 	ListAlerts(ctx context.Context, in *ListAlertsRequest, opts ...grpc.CallOption) (*ListAlertsResponse, error)
 }
@@ -48,30 +52,30 @@ func NewAlertingServiceClient(cc grpc.ClientConnInterface) AlertingServiceClient
 	return &alertingServiceClient{cc}
 }
 
-func (c *alertingServiceClient) CreateSubscription(ctx context.Context, in *CreateSubscriptionRequest, opts ...grpc.CallOption) (*CreateSubscriptionResponse, error) {
+func (c *alertingServiceClient) CreateAlertRule(ctx context.Context, in *CreateAlertRuleRequest, opts ...grpc.CallOption) (*CreateAlertRuleResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CreateSubscriptionResponse)
-	err := c.cc.Invoke(ctx, AlertingService_CreateSubscription_FullMethodName, in, out, cOpts...)
+	out := new(CreateAlertRuleResponse)
+	err := c.cc.Invoke(ctx, AlertingService_CreateAlertRule_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *alertingServiceClient) ListSubscriptions(ctx context.Context, in *ListSubscriptionsRequest, opts ...grpc.CallOption) (*ListSubscriptionsResponse, error) {
+func (c *alertingServiceClient) ListAlertRules(ctx context.Context, in *ListAlertRulesRequest, opts ...grpc.CallOption) (*ListAlertRulesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListSubscriptionsResponse)
-	err := c.cc.Invoke(ctx, AlertingService_ListSubscriptions_FullMethodName, in, out, cOpts...)
+	out := new(ListAlertRulesResponse)
+	err := c.cc.Invoke(ctx, AlertingService_ListAlertRules_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *alertingServiceClient) DeleteSubscription(ctx context.Context, in *DeleteSubscriptionRequest, opts ...grpc.CallOption) (*DeleteSubscriptionResponse, error) {
+func (c *alertingServiceClient) DeleteAlertRule(ctx context.Context, in *DeleteAlertRuleRequest, opts ...grpc.CallOption) (*DeleteAlertRuleResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DeleteSubscriptionResponse)
-	err := c.cc.Invoke(ctx, AlertingService_DeleteSubscription_FullMethodName, in, out, cOpts...)
+	out := new(DeleteAlertRuleResponse)
+	err := c.cc.Invoke(ctx, AlertingService_DeleteAlertRule_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -92,13 +96,17 @@ func (c *alertingServiceClient) ListAlerts(ctx context.Context, in *ListAlertsRe
 // All implementations must embed UnimplementedAlertingServiceServer
 // for forward compatibility.
 //
-// AlertingService is cortex's subscription and alert API. Subscribers describe
-// what they want to hear about once; every incoming vulnerability is matched
-// against every rule (reverse search), so nobody has to poll.
+// AlertingService is cortex's alert rule and alert API. A user describes what
+// they want to hear about once; every incoming vulnerability is matched against
+// every rule (reverse search), so nobody has to poll.
+//
+// These were called subscriptions until billing made that word mean something
+// else: an alert rule is a standing request to be told, not a thing anyone pays
+// for.
 type AlertingServiceServer interface {
-	CreateSubscription(context.Context, *CreateSubscriptionRequest) (*CreateSubscriptionResponse, error)
-	ListSubscriptions(context.Context, *ListSubscriptionsRequest) (*ListSubscriptionsResponse, error)
-	DeleteSubscription(context.Context, *DeleteSubscriptionRequest) (*DeleteSubscriptionResponse, error)
+	CreateAlertRule(context.Context, *CreateAlertRuleRequest) (*CreateAlertRuleResponse, error)
+	ListAlertRules(context.Context, *ListAlertRulesRequest) (*ListAlertRulesResponse, error)
+	DeleteAlertRule(context.Context, *DeleteAlertRuleRequest) (*DeleteAlertRuleResponse, error)
 	// ListAlerts returns what has already matched, newest first.
 	ListAlerts(context.Context, *ListAlertsRequest) (*ListAlertsResponse, error)
 	mustEmbedUnimplementedAlertingServiceServer()
@@ -111,14 +119,14 @@ type AlertingServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedAlertingServiceServer struct{}
 
-func (UnimplementedAlertingServiceServer) CreateSubscription(context.Context, *CreateSubscriptionRequest) (*CreateSubscriptionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CreateSubscription not implemented")
+func (UnimplementedAlertingServiceServer) CreateAlertRule(context.Context, *CreateAlertRuleRequest) (*CreateAlertRuleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateAlertRule not implemented")
 }
-func (UnimplementedAlertingServiceServer) ListSubscriptions(context.Context, *ListSubscriptionsRequest) (*ListSubscriptionsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListSubscriptions not implemented")
+func (UnimplementedAlertingServiceServer) ListAlertRules(context.Context, *ListAlertRulesRequest) (*ListAlertRulesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListAlertRules not implemented")
 }
-func (UnimplementedAlertingServiceServer) DeleteSubscription(context.Context, *DeleteSubscriptionRequest) (*DeleteSubscriptionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method DeleteSubscription not implemented")
+func (UnimplementedAlertingServiceServer) DeleteAlertRule(context.Context, *DeleteAlertRuleRequest) (*DeleteAlertRuleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteAlertRule not implemented")
 }
 func (UnimplementedAlertingServiceServer) ListAlerts(context.Context, *ListAlertsRequest) (*ListAlertsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListAlerts not implemented")
@@ -144,56 +152,56 @@ func RegisterAlertingServiceServer(s grpc.ServiceRegistrar, srv AlertingServiceS
 	s.RegisterService(&AlertingService_ServiceDesc, srv)
 }
 
-func _AlertingService_CreateSubscription_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CreateSubscriptionRequest)
+func _AlertingService_CreateAlertRule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateAlertRuleRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(AlertingServiceServer).CreateSubscription(ctx, in)
+		return srv.(AlertingServiceServer).CreateAlertRule(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: AlertingService_CreateSubscription_FullMethodName,
+		FullMethod: AlertingService_CreateAlertRule_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AlertingServiceServer).CreateSubscription(ctx, req.(*CreateSubscriptionRequest))
+		return srv.(AlertingServiceServer).CreateAlertRule(ctx, req.(*CreateAlertRuleRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _AlertingService_ListSubscriptions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListSubscriptionsRequest)
+func _AlertingService_ListAlertRules_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListAlertRulesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(AlertingServiceServer).ListSubscriptions(ctx, in)
+		return srv.(AlertingServiceServer).ListAlertRules(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: AlertingService_ListSubscriptions_FullMethodName,
+		FullMethod: AlertingService_ListAlertRules_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AlertingServiceServer).ListSubscriptions(ctx, req.(*ListSubscriptionsRequest))
+		return srv.(AlertingServiceServer).ListAlertRules(ctx, req.(*ListAlertRulesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _AlertingService_DeleteSubscription_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DeleteSubscriptionRequest)
+func _AlertingService_DeleteAlertRule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteAlertRuleRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(AlertingServiceServer).DeleteSubscription(ctx, in)
+		return srv.(AlertingServiceServer).DeleteAlertRule(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: AlertingService_DeleteSubscription_FullMethodName,
+		FullMethod: AlertingService_DeleteAlertRule_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AlertingServiceServer).DeleteSubscription(ctx, req.(*DeleteSubscriptionRequest))
+		return srv.(AlertingServiceServer).DeleteAlertRule(ctx, req.(*DeleteAlertRuleRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -224,16 +232,16 @@ var AlertingService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*AlertingServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "CreateSubscription",
-			Handler:    _AlertingService_CreateSubscription_Handler,
+			MethodName: "CreateAlertRule",
+			Handler:    _AlertingService_CreateAlertRule_Handler,
 		},
 		{
-			MethodName: "ListSubscriptions",
-			Handler:    _AlertingService_ListSubscriptions_Handler,
+			MethodName: "ListAlertRules",
+			Handler:    _AlertingService_ListAlertRules_Handler,
 		},
 		{
-			MethodName: "DeleteSubscription",
-			Handler:    _AlertingService_DeleteSubscription_Handler,
+			MethodName: "DeleteAlertRule",
+			Handler:    _AlertingService_DeleteAlertRule_Handler,
 		},
 		{
 			MethodName: "ListAlerts",

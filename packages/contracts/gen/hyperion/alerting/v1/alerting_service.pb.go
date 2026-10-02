@@ -23,11 +23,11 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// AlertRule is what a subscriber wants to hear about. Every populated
-// condition must hold, so conditions narrow rather than widen. A rule with no
-// conditions at all is rejected: it would match every vulnerability ever
-// ingested, which is the alert fatigue this platform exists to prevent.
-type AlertRule struct {
+// AlertCriteria is what a rule matches. Every populated condition must hold,
+// so conditions narrow rather than widen. Criteria with no conditions at all
+// are rejected: they would match every vulnerability ever ingested, which is
+// the alert fatigue this platform exists to prevent.
+type AlertCriteria struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	Term        string                 `protobuf:"bytes,1,opt,name=term,proto3" json:"term,omitempty"`                                                                    // free text over cve id, title and description
 	MinSeverity v1.Severity            `protobuf:"varint,2,opt,name=min_severity,json=minSeverity,proto3,enum=hyperion.common.v1.Severity" json:"min_severity,omitempty"` // UNSPECIFIED = any severity
@@ -39,9 +39,79 @@ type AlertRule struct {
 	sizeCache     protoimpl.SizeCache
 }
 
+func (x *AlertCriteria) Reset() {
+	*x = AlertCriteria{}
+	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AlertCriteria) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AlertCriteria) ProtoMessage() {}
+
+func (x *AlertCriteria) ProtoReflect() protoreflect.Message {
+	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AlertCriteria.ProtoReflect.Descriptor instead.
+func (*AlertCriteria) Descriptor() ([]byte, []int) {
+	return file_hyperion_alerting_v1_alerting_service_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *AlertCriteria) GetTerm() string {
+	if x != nil {
+		return x.Term
+	}
+	return ""
+}
+
+func (x *AlertCriteria) GetMinSeverity() v1.Severity {
+	if x != nil {
+		return x.MinSeverity
+	}
+	return v1.Severity(0)
+}
+
+func (x *AlertCriteria) GetPackages() []*v1.PackageRef {
+	if x != nil {
+		return x.Packages
+	}
+	return nil
+}
+
+func (x *AlertCriteria) GetEcosystems() []v1.Ecosystem {
+	if x != nil {
+		return x.Ecosystems
+	}
+	return nil
+}
+
+// AlertRule is one user's standing interest.
+type AlertRule struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Tenant        string                 `protobuf:"bytes,2,opt,name=tenant,proto3" json:"tenant,omitempty"` // owner; per-tenant isolation arrives with auth in v4
+	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	Criteria      *AlertCriteria         `protobuf:"bytes,4,opt,name=criteria,proto3" json:"criteria,omitempty"`
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
 func (x *AlertRule) Reset() {
 	*x = AlertRule{}
-	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[0]
+	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -53,7 +123,7 @@ func (x *AlertRule) String() string {
 func (*AlertRule) ProtoMessage() {}
 
 func (x *AlertRule) ProtoReflect() protoreflect.Message {
-	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[0]
+	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -66,122 +136,52 @@ func (x *AlertRule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AlertRule.ProtoReflect.Descriptor instead.
 func (*AlertRule) Descriptor() ([]byte, []int) {
-	return file_hyperion_alerting_v1_alerting_service_proto_rawDescGZIP(), []int{0}
-}
-
-func (x *AlertRule) GetTerm() string {
-	if x != nil {
-		return x.Term
-	}
-	return ""
-}
-
-func (x *AlertRule) GetMinSeverity() v1.Severity {
-	if x != nil {
-		return x.MinSeverity
-	}
-	return v1.Severity(0)
-}
-
-func (x *AlertRule) GetPackages() []*v1.PackageRef {
-	if x != nil {
-		return x.Packages
-	}
-	return nil
-}
-
-func (x *AlertRule) GetEcosystems() []v1.Ecosystem {
-	if x != nil {
-		return x.Ecosystems
-	}
-	return nil
-}
-
-// Subscription is one subscriber's standing interest.
-type Subscription struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Tenant        string                 `protobuf:"bytes,2,opt,name=tenant,proto3" json:"tenant,omitempty"` // owner; per-tenant isolation arrives with auth in v4
-	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
-	Rule          *AlertRule             `protobuf:"bytes,4,opt,name=rule,proto3" json:"rule,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *Subscription) Reset() {
-	*x = Subscription{}
-	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *Subscription) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*Subscription) ProtoMessage() {}
-
-func (x *Subscription) ProtoReflect() protoreflect.Message {
-	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[1]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use Subscription.ProtoReflect.Descriptor instead.
-func (*Subscription) Descriptor() ([]byte, []int) {
 	return file_hyperion_alerting_v1_alerting_service_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *Subscription) GetId() string {
+func (x *AlertRule) GetId() string {
 	if x != nil {
 		return x.Id
 	}
 	return ""
 }
 
-func (x *Subscription) GetTenant() string {
+func (x *AlertRule) GetTenant() string {
 	if x != nil {
 		return x.Tenant
 	}
 	return ""
 }
 
-func (x *Subscription) GetName() string {
+func (x *AlertRule) GetName() string {
 	if x != nil {
 		return x.Name
 	}
 	return ""
 }
 
-func (x *Subscription) GetRule() *AlertRule {
+func (x *AlertRule) GetCriteria() *AlertCriteria {
 	if x != nil {
-		return x.Rule
+		return x.Criteria
 	}
 	return nil
 }
 
-func (x *Subscription) GetCreatedAt() *timestamppb.Timestamp {
+func (x *AlertRule) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
 	}
 	return nil
 }
 
-// Alert is one vulnerability matching one subscription.
+// Alert is one vulnerability matching one rule.
 type Alert struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	Id               string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	SubscriptionId   string                 `protobuf:"bytes,2,opt,name=subscription_id,json=subscriptionId,proto3" json:"subscription_id,omitempty"`
-	SubscriptionName string                 `protobuf:"bytes,3,opt,name=subscription_name,json=subscriptionName,proto3" json:"subscription_name,omitempty"`
-	Tenant           string                 `protobuf:"bytes,4,opt,name=tenant,proto3" json:"tenant,omitempty"`
-	CveId            string                 `protobuf:"bytes,5,opt,name=cve_id,json=cveId,proto3" json:"cve_id,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Id       string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	RuleId   string                 `protobuf:"bytes,2,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
+	RuleName string                 `protobuf:"bytes,3,opt,name=rule_name,json=ruleName,proto3" json:"rule_name,omitempty"`
+	Tenant   string                 `protobuf:"bytes,4,opt,name=tenant,proto3" json:"tenant,omitempty"`
+	CveId    string                 `protobuf:"bytes,5,opt,name=cve_id,json=cveId,proto3" json:"cve_id,omitempty"`
 	// The matching vulnerability, resolved on read. Alerts store only the CVE
 	// id, so a later correction to the record is reflected rather than frozen.
 	Vulnerability *v1.Vulnerability      `protobuf:"bytes,6,opt,name=vulnerability,proto3" json:"vulnerability,omitempty"`
@@ -228,16 +228,16 @@ func (x *Alert) GetId() string {
 	return ""
 }
 
-func (x *Alert) GetSubscriptionId() string {
+func (x *Alert) GetRuleId() string {
 	if x != nil {
-		return x.SubscriptionId
+		return x.RuleId
 	}
 	return ""
 }
 
-func (x *Alert) GetSubscriptionName() string {
+func (x *Alert) GetRuleName() string {
 	if x != nil {
-		return x.SubscriptionName
+		return x.RuleName
 	}
 	return ""
 }
@@ -277,29 +277,29 @@ func (x *Alert) GetCreatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-type CreateSubscriptionRequest struct {
+type CreateAlertRuleRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Tenant        string                 `protobuf:"bytes,1,opt,name=tenant,proto3" json:"tenant,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Rule          *AlertRule             `protobuf:"bytes,3,opt,name=rule,proto3" json:"rule,omitempty"`
+	Criteria      *AlertCriteria         `protobuf:"bytes,3,opt,name=criteria,proto3" json:"criteria,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CreateSubscriptionRequest) Reset() {
-	*x = CreateSubscriptionRequest{}
+func (x *CreateAlertRuleRequest) Reset() {
+	*x = CreateAlertRuleRequest{}
 	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CreateSubscriptionRequest) String() string {
+func (x *CreateAlertRuleRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CreateSubscriptionRequest) ProtoMessage() {}
+func (*CreateAlertRuleRequest) ProtoMessage() {}
 
-func (x *CreateSubscriptionRequest) ProtoReflect() protoreflect.Message {
+func (x *CreateAlertRuleRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -311,97 +311,97 @@ func (x *CreateSubscriptionRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CreateSubscriptionRequest.ProtoReflect.Descriptor instead.
-func (*CreateSubscriptionRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use CreateAlertRuleRequest.ProtoReflect.Descriptor instead.
+func (*CreateAlertRuleRequest) Descriptor() ([]byte, []int) {
 	return file_hyperion_alerting_v1_alerting_service_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *CreateSubscriptionRequest) GetTenant() string {
+func (x *CreateAlertRuleRequest) GetTenant() string {
 	if x != nil {
 		return x.Tenant
 	}
 	return ""
 }
 
-func (x *CreateSubscriptionRequest) GetName() string {
+func (x *CreateAlertRuleRequest) GetName() string {
 	if x != nil {
 		return x.Name
 	}
 	return ""
 }
 
-func (x *CreateSubscriptionRequest) GetRule() *AlertRule {
+func (x *CreateAlertRuleRequest) GetCriteria() *AlertCriteria {
+	if x != nil {
+		return x.Criteria
+	}
+	return nil
+}
+
+type CreateAlertRuleResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Rule          *AlertRule             `protobuf:"bytes,1,opt,name=rule,proto3" json:"rule,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateAlertRuleResponse) Reset() {
+	*x = CreateAlertRuleResponse{}
+	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateAlertRuleResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateAlertRuleResponse) ProtoMessage() {}
+
+func (x *CreateAlertRuleResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateAlertRuleResponse.ProtoReflect.Descriptor instead.
+func (*CreateAlertRuleResponse) Descriptor() ([]byte, []int) {
+	return file_hyperion_alerting_v1_alerting_service_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *CreateAlertRuleResponse) GetRule() *AlertRule {
 	if x != nil {
 		return x.Rule
 	}
 	return nil
 }
 
-type CreateSubscriptionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Subscription  *Subscription          `protobuf:"bytes,1,opt,name=subscription,proto3" json:"subscription,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CreateSubscriptionResponse) Reset() {
-	*x = CreateSubscriptionResponse{}
-	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CreateSubscriptionResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CreateSubscriptionResponse) ProtoMessage() {}
-
-func (x *CreateSubscriptionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CreateSubscriptionResponse.ProtoReflect.Descriptor instead.
-func (*CreateSubscriptionResponse) Descriptor() ([]byte, []int) {
-	return file_hyperion_alerting_v1_alerting_service_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *CreateSubscriptionResponse) GetSubscription() *Subscription {
-	if x != nil {
-		return x.Subscription
-	}
-	return nil
-}
-
-type ListSubscriptionsRequest struct {
+type ListAlertRulesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Tenant        string                 `protobuf:"bytes,1,opt,name=tenant,proto3" json:"tenant,omitempty"` // empty lists every tenant's, until auth scopes it (v4)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ListSubscriptionsRequest) Reset() {
-	*x = ListSubscriptionsRequest{}
+func (x *ListAlertRulesRequest) Reset() {
+	*x = ListAlertRulesRequest{}
 	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ListSubscriptionsRequest) String() string {
+func (x *ListAlertRulesRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ListSubscriptionsRequest) ProtoMessage() {}
+func (*ListAlertRulesRequest) ProtoMessage() {}
 
-func (x *ListSubscriptionsRequest) ProtoReflect() protoreflect.Message {
+func (x *ListAlertRulesRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -413,39 +413,39 @@ func (x *ListSubscriptionsRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ListSubscriptionsRequest.ProtoReflect.Descriptor instead.
-func (*ListSubscriptionsRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use ListAlertRulesRequest.ProtoReflect.Descriptor instead.
+func (*ListAlertRulesRequest) Descriptor() ([]byte, []int) {
 	return file_hyperion_alerting_v1_alerting_service_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *ListSubscriptionsRequest) GetTenant() string {
+func (x *ListAlertRulesRequest) GetTenant() string {
 	if x != nil {
 		return x.Tenant
 	}
 	return ""
 }
 
-type ListSubscriptionsResponse struct {
+type ListAlertRulesResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Subscriptions []*Subscription        `protobuf:"bytes,1,rep,name=subscriptions,proto3" json:"subscriptions,omitempty"`
+	Rules         []*AlertRule           `protobuf:"bytes,1,rep,name=rules,proto3" json:"rules,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ListSubscriptionsResponse) Reset() {
-	*x = ListSubscriptionsResponse{}
+func (x *ListAlertRulesResponse) Reset() {
+	*x = ListAlertRulesResponse{}
 	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ListSubscriptionsResponse) String() string {
+func (x *ListAlertRulesResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ListSubscriptionsResponse) ProtoMessage() {}
+func (*ListAlertRulesResponse) ProtoMessage() {}
 
-func (x *ListSubscriptionsResponse) ProtoReflect() protoreflect.Message {
+func (x *ListAlertRulesResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -457,39 +457,39 @@ func (x *ListSubscriptionsResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ListSubscriptionsResponse.ProtoReflect.Descriptor instead.
-func (*ListSubscriptionsResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use ListAlertRulesResponse.ProtoReflect.Descriptor instead.
+func (*ListAlertRulesResponse) Descriptor() ([]byte, []int) {
 	return file_hyperion_alerting_v1_alerting_service_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *ListSubscriptionsResponse) GetSubscriptions() []*Subscription {
+func (x *ListAlertRulesResponse) GetRules() []*AlertRule {
 	if x != nil {
-		return x.Subscriptions
+		return x.Rules
 	}
 	return nil
 }
 
-type DeleteSubscriptionRequest struct {
+type DeleteAlertRuleRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *DeleteSubscriptionRequest) Reset() {
-	*x = DeleteSubscriptionRequest{}
+func (x *DeleteAlertRuleRequest) Reset() {
+	*x = DeleteAlertRuleRequest{}
 	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *DeleteSubscriptionRequest) String() string {
+func (x *DeleteAlertRuleRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*DeleteSubscriptionRequest) ProtoMessage() {}
+func (*DeleteAlertRuleRequest) ProtoMessage() {}
 
-func (x *DeleteSubscriptionRequest) ProtoReflect() protoreflect.Message {
+func (x *DeleteAlertRuleRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -501,39 +501,39 @@ func (x *DeleteSubscriptionRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use DeleteSubscriptionRequest.ProtoReflect.Descriptor instead.
-func (*DeleteSubscriptionRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use DeleteAlertRuleRequest.ProtoReflect.Descriptor instead.
+func (*DeleteAlertRuleRequest) Descriptor() ([]byte, []int) {
 	return file_hyperion_alerting_v1_alerting_service_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *DeleteSubscriptionRequest) GetId() string {
+func (x *DeleteAlertRuleRequest) GetId() string {
 	if x != nil {
 		return x.Id
 	}
 	return ""
 }
 
-type DeleteSubscriptionResponse struct {
+type DeleteAlertRuleResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Deleted       bool                   `protobuf:"varint,1,opt,name=deleted,proto3" json:"deleted,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *DeleteSubscriptionResponse) Reset() {
-	*x = DeleteSubscriptionResponse{}
+func (x *DeleteAlertRuleResponse) Reset() {
+	*x = DeleteAlertRuleResponse{}
 	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *DeleteSubscriptionResponse) String() string {
+func (x *DeleteAlertRuleResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*DeleteSubscriptionResponse) ProtoMessage() {}
+func (*DeleteAlertRuleResponse) ProtoMessage() {}
 
-func (x *DeleteSubscriptionResponse) ProtoReflect() protoreflect.Message {
+func (x *DeleteAlertRuleResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_hyperion_alerting_v1_alerting_service_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -545,12 +545,12 @@ func (x *DeleteSubscriptionResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use DeleteSubscriptionResponse.ProtoReflect.Descriptor instead.
-func (*DeleteSubscriptionResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use DeleteAlertRuleResponse.ProtoReflect.Descriptor instead.
+func (*DeleteAlertRuleResponse) Descriptor() ([]byte, []int) {
 	return file_hyperion_alerting_v1_alerting_service_proto_rawDescGZIP(), []int{8}
 }
 
-func (x *DeleteSubscriptionResponse) GetDeleted() bool {
+func (x *DeleteAlertRuleResponse) GetDeleted() bool {
 	if x != nil {
 		return x.Deleted
 	}
@@ -558,12 +558,12 @@ func (x *DeleteSubscriptionResponse) GetDeleted() bool {
 }
 
 type ListAlertsRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	Tenant         string                 `protobuf:"bytes,1,opt,name=tenant,proto3" json:"tenant,omitempty"`
-	SubscriptionId string                 `protobuf:"bytes,2,opt,name=subscription_id,json=subscriptionId,proto3" json:"subscription_id,omitempty"` // optional filter
-	Limit          int32                  `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tenant        string                 `protobuf:"bytes,1,opt,name=tenant,proto3" json:"tenant,omitempty"`
+	RuleId        string                 `protobuf:"bytes,2,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"` // optional filter
+	Limit         int32                  `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ListAlertsRequest) Reset() {
@@ -603,9 +603,9 @@ func (x *ListAlertsRequest) GetTenant() string {
 	return ""
 }
 
-func (x *ListAlertsRequest) GetSubscriptionId() string {
+func (x *ListAlertsRequest) GetRuleId() string {
 	if x != nil {
-		return x.SubscriptionId
+		return x.RuleId
 	}
 	return ""
 }
@@ -665,55 +665,55 @@ var File_hyperion_alerting_v1_alerting_service_proto protoreflect.FileDescriptor
 
 const file_hyperion_alerting_v1_alerting_service_proto_rawDesc = "" +
 	"\n" +
-	"+hyperion/alerting/v1/alerting_service.proto\x12\x14hyperion.alerting.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a hyperion/common/v1/package.proto\x1a&hyperion/common/v1/vulnerability.proto\"\xdb\x01\n" +
-	"\tAlertRule\x12\x12\n" +
+	"+hyperion/alerting/v1/alerting_service.proto\x12\x14hyperion.alerting.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a hyperion/common/v1/package.proto\x1a&hyperion/common/v1/vulnerability.proto\"\xdf\x01\n" +
+	"\rAlertCriteria\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\tR\x04term\x12?\n" +
 	"\fmin_severity\x18\x02 \x01(\x0e2\x1c.hyperion.common.v1.SeverityR\vminSeverity\x12:\n" +
 	"\bpackages\x18\x03 \x03(\v2\x1e.hyperion.common.v1.PackageRefR\bpackages\x12=\n" +
 	"\n" +
 	"ecosystems\x18\x04 \x03(\x0e2\x1d.hyperion.common.v1.EcosystemR\n" +
-	"ecosystems\"\xba\x01\n" +
-	"\fSubscription\x12\x0e\n" +
+	"ecosystems\"\xc3\x01\n" +
+	"\tAlertRule\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06tenant\x18\x02 \x01(\tR\x06tenant\x12\x12\n" +
-	"\x04name\x18\x03 \x01(\tR\x04name\x123\n" +
-	"\x04rule\x18\x04 \x01(\v2\x1f.hyperion.alerting.v1.AlertRuleR\x04rule\x129\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12?\n" +
+	"\bcriteria\x18\x04 \x01(\v2#.hyperion.alerting.v1.AlertCriteriaR\bcriteria\x129\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xb8\x02\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x98\x02\n" +
 	"\x05Alert\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
-	"\x0fsubscription_id\x18\x02 \x01(\tR\x0esubscriptionId\x12+\n" +
-	"\x11subscription_name\x18\x03 \x01(\tR\x10subscriptionName\x12\x16\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
+	"\arule_id\x18\x02 \x01(\tR\x06ruleId\x12\x1b\n" +
+	"\trule_name\x18\x03 \x01(\tR\bruleName\x12\x16\n" +
 	"\x06tenant\x18\x04 \x01(\tR\x06tenant\x12\x15\n" +
 	"\x06cve_id\x18\x05 \x01(\tR\x05cveId\x12G\n" +
 	"\rvulnerability\x18\x06 \x01(\v2!.hyperion.common.v1.VulnerabilityR\rvulnerability\x12\x16\n" +
 	"\x06reason\x18\a \x01(\tR\x06reason\x129\n" +
 	"\n" +
-	"created_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"|\n" +
-	"\x19CreateSubscriptionRequest\x12\x16\n" +
+	"created_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x85\x01\n" +
+	"\x16CreateAlertRuleRequest\x12\x16\n" +
 	"\x06tenant\x18\x01 \x01(\tR\x06tenant\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x123\n" +
-	"\x04rule\x18\x03 \x01(\v2\x1f.hyperion.alerting.v1.AlertRuleR\x04rule\"d\n" +
-	"\x1aCreateSubscriptionResponse\x12F\n" +
-	"\fsubscription\x18\x01 \x01(\v2\".hyperion.alerting.v1.SubscriptionR\fsubscription\"2\n" +
-	"\x18ListSubscriptionsRequest\x12\x16\n" +
-	"\x06tenant\x18\x01 \x01(\tR\x06tenant\"e\n" +
-	"\x19ListSubscriptionsResponse\x12H\n" +
-	"\rsubscriptions\x18\x01 \x03(\v2\".hyperion.alerting.v1.SubscriptionR\rsubscriptions\"+\n" +
-	"\x19DeleteSubscriptionRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"6\n" +
-	"\x1aDeleteSubscriptionResponse\x12\x18\n" +
-	"\adeleted\x18\x01 \x01(\bR\adeleted\"j\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12?\n" +
+	"\bcriteria\x18\x03 \x01(\v2#.hyperion.alerting.v1.AlertCriteriaR\bcriteria\"N\n" +
+	"\x17CreateAlertRuleResponse\x123\n" +
+	"\x04rule\x18\x01 \x01(\v2\x1f.hyperion.alerting.v1.AlertRuleR\x04rule\"/\n" +
+	"\x15ListAlertRulesRequest\x12\x16\n" +
+	"\x06tenant\x18\x01 \x01(\tR\x06tenant\"O\n" +
+	"\x16ListAlertRulesResponse\x125\n" +
+	"\x05rules\x18\x01 \x03(\v2\x1f.hyperion.alerting.v1.AlertRuleR\x05rules\"(\n" +
+	"\x16DeleteAlertRuleRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"3\n" +
+	"\x17DeleteAlertRuleResponse\x12\x18\n" +
+	"\adeleted\x18\x01 \x01(\bR\adeleted\"Z\n" +
 	"\x11ListAlertsRequest\x12\x16\n" +
-	"\x06tenant\x18\x01 \x01(\tR\x06tenant\x12'\n" +
-	"\x0fsubscription_id\x18\x02 \x01(\tR\x0esubscriptionId\x12\x14\n" +
+	"\x06tenant\x18\x01 \x01(\tR\x06tenant\x12\x17\n" +
+	"\arule_id\x18\x02 \x01(\tR\x06ruleId\x12\x14\n" +
 	"\x05limit\x18\x03 \x01(\x05R\x05limit\"I\n" +
 	"\x12ListAlertsResponse\x123\n" +
-	"\x06alerts\x18\x01 \x03(\v2\x1b.hyperion.alerting.v1.AlertR\x06alerts2\xda\x03\n" +
-	"\x0fAlertingService\x12w\n" +
-	"\x12CreateSubscription\x12/.hyperion.alerting.v1.CreateSubscriptionRequest\x1a0.hyperion.alerting.v1.CreateSubscriptionResponse\x12t\n" +
-	"\x11ListSubscriptions\x12..hyperion.alerting.v1.ListSubscriptionsRequest\x1a/.hyperion.alerting.v1.ListSubscriptionsResponse\x12w\n" +
-	"\x12DeleteSubscription\x12/.hyperion.alerting.v1.DeleteSubscriptionRequest\x1a0.hyperion.alerting.v1.DeleteSubscriptionResponse\x12_\n" +
+	"\x06alerts\x18\x01 \x03(\v2\x1b.hyperion.alerting.v1.AlertR\x06alerts2\xbf\x03\n" +
+	"\x0fAlertingService\x12n\n" +
+	"\x0fCreateAlertRule\x12,.hyperion.alerting.v1.CreateAlertRuleRequest\x1a-.hyperion.alerting.v1.CreateAlertRuleResponse\x12k\n" +
+	"\x0eListAlertRules\x12+.hyperion.alerting.v1.ListAlertRulesRequest\x1a,.hyperion.alerting.v1.ListAlertRulesResponse\x12n\n" +
+	"\x0fDeleteAlertRule\x12,.hyperion.alerting.v1.DeleteAlertRuleRequest\x1a-.hyperion.alerting.v1.DeleteAlertRuleResponse\x12_\n" +
 	"\n" +
 	"ListAlerts\x12'.hyperion.alerting.v1.ListAlertsRequest\x1a(.hyperion.alerting.v1.ListAlertsResponseB\xfe\x01\n" +
 	"\x18com.hyperion.alerting.v1B\x14AlertingServiceProtoP\x01ZZgithub.com/inventedsarawak/hyperion/packages/contracts/gen/hyperion/alerting/v1;alertingv1\xa2\x02\x03HAX\xaa\x02\x14Hyperion.Alerting.V1\xca\x02\x14Hyperion\\Alerting\\V1\xe2\x02 Hyperion\\Alerting\\V1\\GPBMetadata\xea\x02\x16Hyperion::Alerting::V1b\x06proto3"
@@ -732,42 +732,42 @@ func file_hyperion_alerting_v1_alerting_service_proto_rawDescGZIP() []byte {
 
 var file_hyperion_alerting_v1_alerting_service_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_hyperion_alerting_v1_alerting_service_proto_goTypes = []any{
-	(*AlertRule)(nil),                  // 0: hyperion.alerting.v1.AlertRule
-	(*Subscription)(nil),               // 1: hyperion.alerting.v1.Subscription
-	(*Alert)(nil),                      // 2: hyperion.alerting.v1.Alert
-	(*CreateSubscriptionRequest)(nil),  // 3: hyperion.alerting.v1.CreateSubscriptionRequest
-	(*CreateSubscriptionResponse)(nil), // 4: hyperion.alerting.v1.CreateSubscriptionResponse
-	(*ListSubscriptionsRequest)(nil),   // 5: hyperion.alerting.v1.ListSubscriptionsRequest
-	(*ListSubscriptionsResponse)(nil),  // 6: hyperion.alerting.v1.ListSubscriptionsResponse
-	(*DeleteSubscriptionRequest)(nil),  // 7: hyperion.alerting.v1.DeleteSubscriptionRequest
-	(*DeleteSubscriptionResponse)(nil), // 8: hyperion.alerting.v1.DeleteSubscriptionResponse
-	(*ListAlertsRequest)(nil),          // 9: hyperion.alerting.v1.ListAlertsRequest
-	(*ListAlertsResponse)(nil),         // 10: hyperion.alerting.v1.ListAlertsResponse
-	(v1.Severity)(0),                   // 11: hyperion.common.v1.Severity
-	(*v1.PackageRef)(nil),              // 12: hyperion.common.v1.PackageRef
-	(v1.Ecosystem)(0),                  // 13: hyperion.common.v1.Ecosystem
-	(*timestamppb.Timestamp)(nil),      // 14: google.protobuf.Timestamp
-	(*v1.Vulnerability)(nil),           // 15: hyperion.common.v1.Vulnerability
+	(*AlertCriteria)(nil),           // 0: hyperion.alerting.v1.AlertCriteria
+	(*AlertRule)(nil),               // 1: hyperion.alerting.v1.AlertRule
+	(*Alert)(nil),                   // 2: hyperion.alerting.v1.Alert
+	(*CreateAlertRuleRequest)(nil),  // 3: hyperion.alerting.v1.CreateAlertRuleRequest
+	(*CreateAlertRuleResponse)(nil), // 4: hyperion.alerting.v1.CreateAlertRuleResponse
+	(*ListAlertRulesRequest)(nil),   // 5: hyperion.alerting.v1.ListAlertRulesRequest
+	(*ListAlertRulesResponse)(nil),  // 6: hyperion.alerting.v1.ListAlertRulesResponse
+	(*DeleteAlertRuleRequest)(nil),  // 7: hyperion.alerting.v1.DeleteAlertRuleRequest
+	(*DeleteAlertRuleResponse)(nil), // 8: hyperion.alerting.v1.DeleteAlertRuleResponse
+	(*ListAlertsRequest)(nil),       // 9: hyperion.alerting.v1.ListAlertsRequest
+	(*ListAlertsResponse)(nil),      // 10: hyperion.alerting.v1.ListAlertsResponse
+	(v1.Severity)(0),                // 11: hyperion.common.v1.Severity
+	(*v1.PackageRef)(nil),           // 12: hyperion.common.v1.PackageRef
+	(v1.Ecosystem)(0),               // 13: hyperion.common.v1.Ecosystem
+	(*timestamppb.Timestamp)(nil),   // 14: google.protobuf.Timestamp
+	(*v1.Vulnerability)(nil),        // 15: hyperion.common.v1.Vulnerability
 }
 var file_hyperion_alerting_v1_alerting_service_proto_depIdxs = []int32{
-	11, // 0: hyperion.alerting.v1.AlertRule.min_severity:type_name -> hyperion.common.v1.Severity
-	12, // 1: hyperion.alerting.v1.AlertRule.packages:type_name -> hyperion.common.v1.PackageRef
-	13, // 2: hyperion.alerting.v1.AlertRule.ecosystems:type_name -> hyperion.common.v1.Ecosystem
-	0,  // 3: hyperion.alerting.v1.Subscription.rule:type_name -> hyperion.alerting.v1.AlertRule
-	14, // 4: hyperion.alerting.v1.Subscription.created_at:type_name -> google.protobuf.Timestamp
+	11, // 0: hyperion.alerting.v1.AlertCriteria.min_severity:type_name -> hyperion.common.v1.Severity
+	12, // 1: hyperion.alerting.v1.AlertCriteria.packages:type_name -> hyperion.common.v1.PackageRef
+	13, // 2: hyperion.alerting.v1.AlertCriteria.ecosystems:type_name -> hyperion.common.v1.Ecosystem
+	0,  // 3: hyperion.alerting.v1.AlertRule.criteria:type_name -> hyperion.alerting.v1.AlertCriteria
+	14, // 4: hyperion.alerting.v1.AlertRule.created_at:type_name -> google.protobuf.Timestamp
 	15, // 5: hyperion.alerting.v1.Alert.vulnerability:type_name -> hyperion.common.v1.Vulnerability
 	14, // 6: hyperion.alerting.v1.Alert.created_at:type_name -> google.protobuf.Timestamp
-	0,  // 7: hyperion.alerting.v1.CreateSubscriptionRequest.rule:type_name -> hyperion.alerting.v1.AlertRule
-	1,  // 8: hyperion.alerting.v1.CreateSubscriptionResponse.subscription:type_name -> hyperion.alerting.v1.Subscription
-	1,  // 9: hyperion.alerting.v1.ListSubscriptionsResponse.subscriptions:type_name -> hyperion.alerting.v1.Subscription
+	0,  // 7: hyperion.alerting.v1.CreateAlertRuleRequest.criteria:type_name -> hyperion.alerting.v1.AlertCriteria
+	1,  // 8: hyperion.alerting.v1.CreateAlertRuleResponse.rule:type_name -> hyperion.alerting.v1.AlertRule
+	1,  // 9: hyperion.alerting.v1.ListAlertRulesResponse.rules:type_name -> hyperion.alerting.v1.AlertRule
 	2,  // 10: hyperion.alerting.v1.ListAlertsResponse.alerts:type_name -> hyperion.alerting.v1.Alert
-	3,  // 11: hyperion.alerting.v1.AlertingService.CreateSubscription:input_type -> hyperion.alerting.v1.CreateSubscriptionRequest
-	5,  // 12: hyperion.alerting.v1.AlertingService.ListSubscriptions:input_type -> hyperion.alerting.v1.ListSubscriptionsRequest
-	7,  // 13: hyperion.alerting.v1.AlertingService.DeleteSubscription:input_type -> hyperion.alerting.v1.DeleteSubscriptionRequest
+	3,  // 11: hyperion.alerting.v1.AlertingService.CreateAlertRule:input_type -> hyperion.alerting.v1.CreateAlertRuleRequest
+	5,  // 12: hyperion.alerting.v1.AlertingService.ListAlertRules:input_type -> hyperion.alerting.v1.ListAlertRulesRequest
+	7,  // 13: hyperion.alerting.v1.AlertingService.DeleteAlertRule:input_type -> hyperion.alerting.v1.DeleteAlertRuleRequest
 	9,  // 14: hyperion.alerting.v1.AlertingService.ListAlerts:input_type -> hyperion.alerting.v1.ListAlertsRequest
-	4,  // 15: hyperion.alerting.v1.AlertingService.CreateSubscription:output_type -> hyperion.alerting.v1.CreateSubscriptionResponse
-	6,  // 16: hyperion.alerting.v1.AlertingService.ListSubscriptions:output_type -> hyperion.alerting.v1.ListSubscriptionsResponse
-	8,  // 17: hyperion.alerting.v1.AlertingService.DeleteSubscription:output_type -> hyperion.alerting.v1.DeleteSubscriptionResponse
+	4,  // 15: hyperion.alerting.v1.AlertingService.CreateAlertRule:output_type -> hyperion.alerting.v1.CreateAlertRuleResponse
+	6,  // 16: hyperion.alerting.v1.AlertingService.ListAlertRules:output_type -> hyperion.alerting.v1.ListAlertRulesResponse
+	8,  // 17: hyperion.alerting.v1.AlertingService.DeleteAlertRule:output_type -> hyperion.alerting.v1.DeleteAlertRuleResponse
 	10, // 18: hyperion.alerting.v1.AlertingService.ListAlerts:output_type -> hyperion.alerting.v1.ListAlertsResponse
 	15, // [15:19] is the sub-list for method output_type
 	11, // [11:15] is the sub-list for method input_type

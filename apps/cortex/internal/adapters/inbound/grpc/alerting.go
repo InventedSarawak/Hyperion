@@ -14,16 +14,16 @@ import (
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/ports"
 )
 
-// SubscriptionManager creates and removes alert rules (consumer-side interface).
-type SubscriptionManager interface {
-	Create(ctx context.Context, tenant, name string, rule model.AlertRule) (model.Subscription, error)
+// AlertRuleManager creates and removes alert rules (consumer-side interface).
+type AlertRuleManager interface {
+	Create(ctx context.Context, tenant, name string, rule model.Criteria) (model.AlertRule, error)
 	Delete(ctx context.Context, id string) error
 }
 
 // AlertingReader lists rules and the alerts they have raised.
 type AlertingReader interface {
-	Subscriptions(ctx context.Context, tenant string) ([]model.Subscription, error)
-	Alerts(ctx context.Context, tenant, subscriptionID string, limit int) ([]model.Alert, error)
+	AlertRules(ctx context.Context, tenant string) ([]model.AlertRule, error)
+	Alerts(ctx context.Context, tenant, ruleID string, limit int) ([]model.Alert, error)
 }
 
 // VulnerabilityLookup resolves the record an alert points at, so a listing can
@@ -35,56 +35,56 @@ type VulnerabilityLookup interface {
 // AlertingServer implements alertingv1.AlertingServiceServer.
 type AlertingServer struct {
 	alertingv1.UnimplementedAlertingServiceServer
-	manager SubscriptionManager
+	manager AlertRuleManager
 	reader  AlertingReader
 	vulns   VulnerabilityLookup
 }
 
 // NewAlertingServer wires the gRPC adapter to the alerting use cases.
-func NewAlertingServer(manager SubscriptionManager, reader AlertingReader, vulns VulnerabilityLookup) *AlertingServer {
+func NewAlertingServer(manager AlertRuleManager, reader AlertingReader, vulns VulnerabilityLookup) *AlertingServer {
 	return &AlertingServer{manager: manager, reader: reader, vulns: vulns}
 }
 
-// CreateSubscription registers a standing interest.
-func (s *AlertingServer) CreateSubscription(ctx context.Context, req *alertingv1.CreateSubscriptionRequest) (*alertingv1.CreateSubscriptionResponse, error) {
+// CreateAlertRule registers a standing interest.
+func (s *AlertingServer) CreateAlertRule(ctx context.Context, req *alertingv1.CreateAlertRuleRequest) (*alertingv1.CreateAlertRuleResponse, error) {
 	if s.manager == nil {
 		return nil, status.Error(codes.Unavailable, "alerting: not configured")
 	}
 
-	sub, err := s.manager.Create(ctx, req.GetTenant(), req.GetName(), toDomainRule(req.GetRule()))
+	sub, err := s.manager.Create(ctx, req.GetTenant(), req.GetName(), toDomainCriteria(req.GetCriteria()))
 	if err != nil {
 		return nil, mapAlertingError(err)
 	}
-	return &alertingv1.CreateSubscriptionResponse{Subscription: toProtoSubscription(sub)}, nil
+	return &alertingv1.CreateAlertRuleResponse{Rule: toProtoAlertRule(sub)}, nil
 }
 
-// ListSubscriptions returns the rules a tenant has.
-func (s *AlertingServer) ListSubscriptions(ctx context.Context, req *alertingv1.ListSubscriptionsRequest) (*alertingv1.ListSubscriptionsResponse, error) {
+// ListAlertRules returns the rules a tenant has.
+func (s *AlertingServer) ListAlertRules(ctx context.Context, req *alertingv1.ListAlertRulesRequest) (*alertingv1.ListAlertRulesResponse, error) {
 	if s.reader == nil {
 		return nil, status.Error(codes.Unavailable, "alerting: not configured")
 	}
 
-	subs, err := s.reader.Subscriptions(ctx, req.GetTenant())
+	subs, err := s.reader.AlertRules(ctx, req.GetTenant())
 	if err != nil {
 		return nil, mapAlertingError(err)
 	}
 
-	out := make([]*alertingv1.Subscription, 0, len(subs))
+	out := make([]*alertingv1.AlertRule, 0, len(subs))
 	for _, sub := range subs {
-		out = append(out, toProtoSubscription(sub))
+		out = append(out, toProtoAlertRule(sub))
 	}
-	return &alertingv1.ListSubscriptionsResponse{Subscriptions: out}, nil
+	return &alertingv1.ListAlertRulesResponse{Rules: out}, nil
 }
 
-// DeleteSubscription removes a rule and stops it matching.
-func (s *AlertingServer) DeleteSubscription(ctx context.Context, req *alertingv1.DeleteSubscriptionRequest) (*alertingv1.DeleteSubscriptionResponse, error) {
+// DeleteAlertRule removes a rule and stops it matching.
+func (s *AlertingServer) DeleteAlertRule(ctx context.Context, req *alertingv1.DeleteAlertRuleRequest) (*alertingv1.DeleteAlertRuleResponse, error) {
 	if s.manager == nil {
 		return nil, status.Error(codes.Unavailable, "alerting: not configured")
 	}
 	if err := s.manager.Delete(ctx, req.GetId()); err != nil {
 		return nil, mapAlertingError(err)
 	}
-	return &alertingv1.DeleteSubscriptionResponse{Deleted: true}, nil
+	return &alertingv1.DeleteAlertRuleResponse{Deleted: true}, nil
 }
 
 // ListAlerts returns what has matched, newest first, with each alert's
@@ -94,36 +94,36 @@ func (s *AlertingServer) ListAlerts(ctx context.Context, req *alertingv1.ListAle
 		return nil, status.Error(codes.Unavailable, "alerting: not configured")
 	}
 
-	alerts, err := s.reader.Alerts(ctx, req.GetTenant(), req.GetSubscriptionId(), int(req.GetLimit()))
+	alerts, err := s.reader.Alerts(ctx, req.GetTenant(), req.GetRuleId(), int(req.GetLimit()))
 	if err != nil {
 		return nil, mapAlertingError(err)
 	}
 
-	// Subscription names are looked up once rather than per alert: a listing
+	// Rule names are looked up once rather than per alert: a listing
 	// is usually many alerts from a handful of rules.
-	names := s.subscriptionNames(ctx, req.GetTenant())
+	names := s.ruleNames(ctx, req.GetTenant())
 
 	out := make([]*alertingv1.Alert, 0, len(alerts))
 	for _, a := range alerts {
 		out = append(out, &alertingv1.Alert{
-			Id:               a.ID,
-			SubscriptionId:   a.SubscriptionID,
-			SubscriptionName: names[a.SubscriptionID],
-			Tenant:           a.Tenant,
-			CveId:            a.CVEID,
-			Vulnerability:    s.lookup(ctx, a.CVEID),
-			Reason:           a.Reason,
-			CreatedAt:        toTimestamp(a.CreatedAt),
+			Id:            a.ID,
+			RuleId:        a.RuleID,
+			RuleName:      names[a.RuleID],
+			Tenant:        a.Tenant,
+			CveId:         a.CVEID,
+			Vulnerability: s.lookup(ctx, a.CVEID),
+			Reason:        a.Reason,
+			CreatedAt:     toTimestamp(a.CreatedAt),
 		})
 	}
 	return &alertingv1.ListAlertsResponse{Alerts: out}, nil
 }
 
-// subscriptionNames maps id -> name, tolerating a lookup failure: a missing
+// ruleNames maps id -> name, tolerating a lookup failure: a missing
 // name is cosmetic, and must not fail the listing.
-func (s *AlertingServer) subscriptionNames(ctx context.Context, tenant string) map[string]string {
+func (s *AlertingServer) ruleNames(ctx context.Context, tenant string) map[string]string {
 	names := map[string]string{}
-	subs, err := s.reader.Subscriptions(ctx, tenant)
+	subs, err := s.reader.AlertRules(ctx, tenant)
 	if err != nil {
 		return names
 	}
@@ -149,11 +149,11 @@ func (s *AlertingServer) lookup(ctx context.Context, cveID string) *commonv1.Vul
 // mapAlertingError translates domain failures into gRPC statuses.
 func mapAlertingError(err error) error {
 	switch {
-	case errors.Is(err, model.ErrEmptyAlertRule),
-		errors.Is(err, model.ErrMissingSubscriptionName),
+	case errors.Is(err, model.ErrEmptyCriteria),
+		errors.Is(err, model.ErrMissingRuleName),
 		errors.Is(err, model.ErrIncompleteAlert):
 		return status.Error(codes.InvalidArgument, err.Error())
-	case errors.Is(err, ports.ErrSubscriptionNotFound):
+	case errors.Is(err, ports.ErrAlertRuleNotFound):
 		return status.Error(codes.NotFound, err.Error())
 	default:
 		return status.Error(codes.Internal, err.Error())
@@ -162,11 +162,11 @@ func mapAlertingError(err error) error {
 
 // --- mapping ---
 
-func toDomainRule(r *alertingv1.AlertRule) model.AlertRule {
+func toDomainCriteria(r *alertingv1.AlertCriteria) model.Criteria {
 	if r == nil {
-		return model.AlertRule{}
+		return model.Criteria{}
 	}
-	rule := model.AlertRule{
+	rule := model.Criteria{
 		Term:        r.GetTerm(),
 		MinSeverity: fromProtoSeverity(r.GetMinSeverity()),
 	}
@@ -179,18 +179,18 @@ func toDomainRule(r *alertingv1.AlertRule) model.AlertRule {
 	return rule
 }
 
-func toProtoSubscription(s model.Subscription) *alertingv1.Subscription {
-	return &alertingv1.Subscription{
+func toProtoAlertRule(s model.AlertRule) *alertingv1.AlertRule {
+	return &alertingv1.AlertRule{
 		Id:        s.ID,
 		Tenant:    s.Tenant,
 		Name:      s.Name,
-		Rule:      toProtoRule(s.Rule),
+		Criteria:  toProtoCriteria(s.Criteria),
 		CreatedAt: toTimestamp(s.CreatedAt),
 	}
 }
 
-func toProtoRule(r model.AlertRule) *alertingv1.AlertRule {
-	out := &alertingv1.AlertRule{
+func toProtoCriteria(r model.Criteria) *alertingv1.AlertCriteria {
+	out := &alertingv1.AlertCriteria{
 		Term:        r.Term,
 		MinSeverity: toProtoSeverity(r.MinSeverity),
 		Packages:    toProtoPackageRefs(r.Packages),

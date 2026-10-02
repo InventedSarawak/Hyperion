@@ -11,60 +11,60 @@ import (
 	"github.com/inventedsarawak/hyperion/apps/nexus/internal/domain/model"
 )
 
-// Subscriptions lists the standing requests to be told about findings.
-func (c *Client) Subscriptions(ctx context.Context, tenant string) ([]model.Subscription, error) {
+// AlertRules lists the standing requests to be told about findings.
+func (c *Client) AlertRules(ctx context.Context, tenant string) ([]model.AlertRule, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timout)
 	defer cancel()
 
-	resp, err := c.alerting.ListSubscriptions(ctx, &alertingv1.ListSubscriptionsRequest{Tenant: tenant})
+	resp, err := c.alerting.ListAlertRules(ctx, &alertingv1.ListAlertRulesRequest{Tenant: tenant})
 	if err != nil {
-		return nil, fmt.Errorf("grpc: list subscriptions: %w", err)
+		return nil, fmt.Errorf("grpc: list alert rules: %w", err)
 	}
 
-	out := make([]model.Subscription, 0, len(resp.GetSubscriptions()))
-	for _, s := range resp.GetSubscriptions() {
-		out = append(out, toSubscription(s))
+	out := make([]model.AlertRule, 0, len(resp.GetRules()))
+	for _, s := range resp.GetRules() {
+		out = append(out, toAlertRule(s))
 	}
 	return out, nil
 }
 
-// CreateSubscription records a new subscription and returns it as stored.
-func (c *Client) CreateSubscription(ctx context.Context, tenant, name string, rule model.AlertRule) (model.Subscription, error) {
+// CreateAlertRule records a new alert rule and returns it as stored.
+func (c *Client) CreateAlertRule(ctx context.Context, tenant, name string, rule model.Criteria) (model.AlertRule, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timout)
 	defer cancel()
 
-	resp, err := c.alerting.CreateSubscription(ctx, &alertingv1.CreateSubscriptionRequest{
-		Tenant: tenant,
-		Name:   name,
-		Rule:   toWireRule(rule),
+	resp, err := c.alerting.CreateAlertRule(ctx, &alertingv1.CreateAlertRuleRequest{
+		Tenant:   tenant,
+		Name:     name,
+		Criteria: toWireCriteria(rule),
 	})
 	if err != nil {
-		return model.Subscription{}, fmt.Errorf("grpc: create subscription: %w", err)
+		return model.AlertRule{}, fmt.Errorf("grpc: create alert rule: %w", err)
 	}
-	return toSubscription(resp.GetSubscription()), nil
+	return toAlertRule(resp.GetRule()), nil
 }
 
-// DeleteSubscription removes one, reporting whether it existed.
-func (c *Client) DeleteSubscription(ctx context.Context, id string) (bool, error) {
+// DeleteAlertRule removes one, reporting whether it existed.
+func (c *Client) DeleteAlertRule(ctx context.Context, id string) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timout)
 	defer cancel()
 
-	resp, err := c.alerting.DeleteSubscription(ctx, &alertingv1.DeleteSubscriptionRequest{Id: id})
+	resp, err := c.alerting.DeleteAlertRule(ctx, &alertingv1.DeleteAlertRuleRequest{Id: id})
 	if err != nil {
-		return false, fmt.Errorf("grpc: delete subscription: %w", err)
+		return false, fmt.Errorf("grpc: delete alert rule: %w", err)
 	}
 	return resp.GetDeleted(), nil
 }
 
 // Alerts lists what has already matched, newest first.
-func (c *Client) Alerts(ctx context.Context, tenant, subscriptionID string, limit int) ([]model.Alert, error) {
+func (c *Client) Alerts(ctx context.Context, tenant, ruleID string, limit int) ([]model.Alert, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timout)
 	defer cancel()
 
 	resp, err := c.alerting.ListAlerts(ctx, &alertingv1.ListAlertsRequest{
-		Tenant:         tenant,
-		SubscriptionId: subscriptionID,
-		Limit:          int32(limit),
+		Tenant: tenant,
+		RuleId: ruleID,
+		Limit:  int32(limit),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("grpc: list alerts: %w", err)
@@ -73,14 +73,14 @@ func (c *Client) Alerts(ctx context.Context, tenant, subscriptionID string, limi
 	out := make([]model.Alert, 0, len(resp.GetAlerts()))
 	for _, a := range resp.GetAlerts() {
 		out = append(out, model.Alert{
-			ID:               a.GetId(),
-			SubscriptionID:   a.GetSubscriptionId(),
-			SubscriptionName: a.GetSubscriptionName(),
-			Tenant:           a.GetTenant(),
-			CVEID:            a.GetCveId(),
-			Vulnerability:    toViewModel(a.GetVulnerability()),
-			Reason:           a.GetReason(),
-			CreatedAt:        fromTimestamp(a.GetCreatedAt()),
+			ID:            a.GetId(),
+			RuleID:        a.GetRuleId(),
+			RuleName:      a.GetRuleName(),
+			Tenant:        a.GetTenant(),
+			CVEID:         a.GetCveId(),
+			Vulnerability: toViewModel(a.GetVulnerability()),
+			Reason:        a.GetReason(),
+			CreatedAt:     fromTimestamp(a.GetCreatedAt()),
 		})
 	}
 	return out, nil
@@ -88,21 +88,21 @@ func (c *Client) Alerts(ctx context.Context, tenant, subscriptionID string, limi
 
 // --- mapping: wire contract <-> view model ---
 
-func toSubscription(s *alertingv1.Subscription) model.Subscription {
-	return model.Subscription{
+func toAlertRule(s *alertingv1.AlertRule) model.AlertRule {
+	return model.AlertRule{
 		ID:        s.GetId(),
 		Tenant:    s.GetTenant(),
 		Name:      s.GetName(),
-		Rule:      toRule(s.GetRule()),
+		Criteria:  toCriteria(s.GetCriteria()),
 		CreatedAt: fromTimestamp(s.GetCreatedAt()),
 	}
 }
 
-func toRule(r *alertingv1.AlertRule) model.AlertRule {
+func toCriteria(r *alertingv1.AlertCriteria) model.Criteria {
 	if r == nil {
-		return model.AlertRule{}
+		return model.Criteria{}
 	}
-	rule := model.AlertRule{
+	rule := model.Criteria{
 		Term:        r.GetTerm(),
 		MinSeverity: severityLabel(r.GetMinSeverity()),
 		Packages:    toAffectedPackages(r.GetPackages()),
@@ -113,13 +113,13 @@ func toRule(r *alertingv1.AlertRule) model.AlertRule {
 	return rule
 }
 
-// toWireRule maps a rule from the edge onto the contract.
+// toWireCriteria maps a rule from the edge onto the contract.
 //
 // The severity and ecosystem names arrive as the strings the GraphQL enums
 // use, which are the same spellings the contract enums carry — so the mapping
 // is a lookup rather than a translation table that could drift.
-func toWireRule(r model.AlertRule) *alertingv1.AlertRule {
-	out := &alertingv1.AlertRule{
+func toWireCriteria(r model.Criteria) *alertingv1.AlertCriteria {
+	out := &alertingv1.AlertCriteria{
 		Term:        r.Term,
 		MinSeverity: wireSeverity(r.MinSeverity),
 	}

@@ -18,7 +18,7 @@ import (
 var _ = Describe("Postgres alerting (integration)", func() {
 	var (
 		ctx    = context.Background()
-		subs   *postgres.SubscriptionRepo
+		subs   *postgres.AlertRuleRepo
 		alerts *postgres.AlertRepo
 	)
 
@@ -48,22 +48,22 @@ var _ = Describe("Postgres alerting (integration)", func() {
 			}
 		})
 
-		subs = postgres.NewSubscriptionRepo(pool)
+		subs = postgres.NewAlertRuleRepo(pool)
 		alerts = postgres.NewAlertRepo(pool)
 	})
 
-	rule := model.AlertRule{
+	rule := model.Criteria{
 		Term:        "log4j",
 		MinSeverity: model.SeverityHigh,
 		Packages:    []valueobject.PackageRef{valueobject.NewPackageRef("maven", "org.apache.logging.log4j:log4j-core", "")},
 		Ecosystems:  []valueobject.Ecosystem{valueobject.EcosystemMaven},
 	}
-	watch := model.Subscription{
-		ID: "sub-1", Tenant: "acme", Name: "Log4j watch", Rule: rule,
+	watch := model.AlertRule{
+		ID: "sub-1", Tenant: "acme", Name: "Log4j watch", Criteria: rule,
 		CreatedAt: time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC),
 	}
 
-	Describe("subscriptions", func() {
+	Describe("alert rules", func() {
 		It("round-trips a rule with every condition set", func() {
 			Expect(subs.Save(ctx, watch)).To(Succeed())
 
@@ -71,16 +71,16 @@ var _ = Describe("Postgres alerting (integration)", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(got.Name).To(Equal("Log4j watch"))
 			Expect(got.Tenant).To(Equal("acme"))
-			Expect(got.Rule.Term).To(Equal("log4j"))
-			Expect(got.Rule.MinSeverity).To(Equal(model.SeverityHigh))
-			Expect(got.Rule.Packages).To(HaveLen(1))
-			Expect(got.Rule.Packages[0].Key()).To(Equal("maven:org.apache.logging.log4j:log4j-core"))
-			Expect(got.Rule.Ecosystems).To(ConsistOf(valueobject.EcosystemMaven))
+			Expect(got.Criteria.Term).To(Equal("log4j"))
+			Expect(got.Criteria.MinSeverity).To(Equal(model.SeverityHigh))
+			Expect(got.Criteria.Packages).To(HaveLen(1))
+			Expect(got.Criteria.Packages[0].Key()).To(Equal("maven:org.apache.logging.log4j:log4j-core"))
+			Expect(got.Criteria.Ecosystems).To(ConsistOf(valueobject.EcosystemMaven))
 		})
 
-		It("reports a missing subscription distinctly", func() {
+		It("reports a missing alert rule distinctly", func() {
 			_, err := subs.Get(ctx, "nope")
-			Expect(err).To(MatchError(ports.ErrSubscriptionNotFound))
+			Expect(err).To(MatchError(ports.ErrAlertRuleNotFound))
 		})
 
 		It("updates in place rather than duplicating", func() {
@@ -111,8 +111,8 @@ var _ = Describe("Postgres alerting (integration)", func() {
 		})
 
 		It("refuses to store a rule that matches everything", func() {
-			Expect(subs.Save(ctx, model.Subscription{ID: "s", Name: "all"})).
-				To(MatchError(model.ErrEmptyAlertRule))
+			Expect(subs.Save(ctx, model.AlertRule{ID: "s", Name: "all"})).
+				To(MatchError(model.ErrEmptyCriteria))
 		})
 	})
 
@@ -131,7 +131,7 @@ var _ = Describe("Postgres alerting (integration)", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(got).To(HaveLen(1))
 			Expect(got[0].CVEID).To(Equal("CVE-2021-44228"))
-			Expect(got[0].SubscriptionID).To(Equal("sub-1"))
+			Expect(got[0].RuleID).To(Equal("sub-1"))
 			Expect(got[0].Reason).ToNot(BeEmpty())
 		})
 
@@ -157,7 +157,7 @@ var _ = Describe("Postgres alerting (integration)", func() {
 			Expect(got[0].CVEID).To(Equal("CVE-3"))
 		})
 
-		It("filters to one subscription", func() {
+		It("filters to one alert rule", func() {
 			second := watch
 			second.ID, second.Name = "sub-2", "Second"
 			Expect(subs.Save(ctx, second)).To(Succeed())
@@ -167,10 +167,10 @@ var _ = Describe("Postgres alerting (integration)", func() {
 			got, err := alerts.List(ctx, "acme", "sub-2", 10)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(got).To(HaveLen(1))
-			Expect(got[0].SubscriptionID).To(Equal("sub-2"))
+			Expect(got[0].RuleID).To(Equal("sub-2"))
 		})
 
-		It("removes a subscription's alerts along with the rule", func() {
+		It("removes an alert rule's alerts along with the rule", func() {
 			// An alert only means something next to the rule that raised it.
 			Expect(alerts.Append(ctx, model.NewAlert(watch, vuln, time.Now()))).To(Succeed())
 			Expect(subs.Delete(ctx, "sub-1")).To(Succeed())
@@ -186,10 +186,10 @@ var _ = Describe("Postgres alerting (integration)", func() {
 	})
 })
 
-var _ = Describe("one alert per subscription and finding (integration)", func() {
+var _ = Describe("one alert per alert rule and finding (integration)", func() {
 	var (
 		ctx   = context.Background()
-		subs  *postgres.SubscriptionRepo
+		subs  *postgres.AlertRuleRepo
 		repo  *postgres.Repo
 		alert *postgres.AlertRepo
 	)
@@ -219,12 +219,12 @@ var _ = Describe("one alert per subscription and finding (integration)", func() 
 				cleanup.Close()
 			}
 		})
-		subs, repo, alert = postgres.NewSubscriptionRepo(pool), postgres.NewRepo(pool), postgres.NewAlertRepo(pool)
+		subs, repo, alert = postgres.NewAlertRuleRepo(pool), postgres.NewRepo(pool), postgres.NewAlertRepo(pool)
 	})
 
-	watch := model.Subscription{
+	watch := model.AlertRule{
 		ID: "sub-1", Tenant: "acme", Name: "log4j",
-		Rule: model.AlertRule{Term: "log4j"},
+		Criteria: model.Criteria{Term: "log4j"},
 	}
 
 	It("does not alert twice when a finding moves to a new id", func() {
@@ -232,7 +232,7 @@ var _ = Describe("one alert per subscription and finding (integration)", func() 
 
 		ghsa, cve := "GHSA-jfh8-c2jp-5v3q", "CVE-2021-44228"
 
-		// Stored under its GHSA, and the subscriber is told.
+		// Stored under its GHSA, and the user is told.
 		stored := model.Vulnerability{CVEID: ghsa, Sources: []string{"github_advisory"}}.Normalized()
 		Expect(repo.Upsert(ctx, stored)).To(Succeed())
 		Expect(alert.Append(ctx, model.NewAlert(watch, stored, time.Now()))).To(Succeed())
@@ -244,7 +244,7 @@ var _ = Describe("one alert per subscription and finding (integration)", func() 
 		// The next observation matches the same rule, under the new id.
 		Expect(alert.Append(ctx, model.NewAlert(watch, merged, time.Now()))).To(Succeed())
 
-		// Still one alert: the subscriber has already been told about this
+		// Still one alert: the user has already been told about this
 		// finding, and re-keying it is not news.
 		raised, err := alert.List(ctx, "", "", 50)
 		Expect(err).ToNot(HaveOccurred())

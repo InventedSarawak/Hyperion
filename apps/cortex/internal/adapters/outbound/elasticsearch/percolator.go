@@ -14,8 +14,8 @@ import (
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/valueobject"
 )
 
-// DefaultSubscriptionIndex is the index alert rules are percolated from.
-const DefaultSubscriptionIndex = "hyperion-subscriptions"
+// DefaultAlertRuleIndex is the index alert rules are percolated from.
+const DefaultAlertRuleIndex = "hyperion-alert-rules"
 
 // maxCandidates bounds one percolation. A rule set larger than this is a
 // scaling problem to solve deliberately, not silently by truncating alerts.
@@ -27,7 +27,7 @@ const maxCandidates = 1000
 // percolator index stores *queries* and you "search" it with a document,
 // getting back the queries that document satisfies. That inversion is what
 // lets one pass over an incoming vulnerability find every interested
-// subscriber, instead of replaying every rule as a separate search.
+// user, instead of replaying every rule as a separate search.
 type Percolator struct {
 	http    *http.Client
 	baseURL string
@@ -35,13 +35,13 @@ type Percolator struct {
 }
 
 // NewPercolator builds the matcher. An empty index name falls back to
-// DefaultSubscriptionIndex.
+// DefaultAlertRuleIndex.
 func NewPercolator(httpClient *http.Client, baseURL, indexName string) *Percolator {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 15 * time.Second}
 	}
 	if indexName == "" {
-		indexName = DefaultSubscriptionIndex
+		indexName = DefaultAlertRuleIndex
 	}
 	return &Percolator{
 		http:    httpClient,
@@ -58,7 +58,7 @@ const percolatorMapping = `{
   "mappings": {
     "properties": {
       "query":             {"type": "percolator"},
-      "subscription_id":   {"type": "keyword"},
+      "rule_id":   {"type": "keyword"},
       "tenant":            {"type": "keyword"},
       "cve_id":            {"type": "keyword", "fields": {"text": {"type": "text"}}},
       "title":             {"type": "text"},
@@ -94,28 +94,28 @@ func (p *Percolator) Ready(ctx context.Context) error {
 	return nil
 }
 
-// Register stores a subscription's rule as a percolator query.
+// Register stores an alert rule's criteria as a percolator query.
 //
 // The query is built from the structured rule rather than accepting raw query
-// DSL from a caller: a subscriber describes what they care about, and this
+// DSL from a caller: a user describes what they care about, and this
 // decides how to ask Elasticsearch. Letting rules carry DSL would make every
-// subscription a way to run arbitrary queries against the cluster.
-func (p *Percolator) Register(ctx context.Context, s model.Subscription) error {
+// alert rule a way to run arbitrary queries against the cluster.
+func (p *Percolator) Register(ctx context.Context, s model.AlertRule) error {
 	if err := s.Validate(); err != nil {
 		return err
 	}
 
 	body, err := json.Marshal(map[string]any{
-		"query":           ruleQuery(s.Rule),
-		"subscription_id": s.ID,
-		"tenant":          s.Tenant,
+		"query":   criteriaQuery(s.Criteria),
+		"rule_id": s.ID,
+		"tenant":  s.Tenant,
 	})
 	if err != nil {
 		return fmt.Errorf("percolator: marshal rule %s: %w", s.ID, err)
 	}
 
 	// refresh=true so a rule is matchable immediately after it is created —
-	// otherwise a subscription can miss the very advisory that prompted it.
+	// otherwise an alert rule can miss the very advisory that prompted it.
 	path := fmt.Sprintf("/%s/_doc/%s?refresh=true", p.name, s.ID)
 	resp, err := p.do(ctx, http.MethodPut, path, bytes.NewReader(body))
 	if err != nil {
@@ -149,7 +149,7 @@ func (p *Percolator) Deregister(ctx context.Context, id string) error {
 	return nil
 }
 
-// Match percolates a vulnerability and returns the subscriptions it satisfies.
+// Match percolates a vulnerability and returns the alert rules it satisfies.
 func (p *Percolator) Match(ctx context.Context, v model.Vulnerability) ([]string, error) {
 	body, err := json.Marshal(map[string]any{
 		"size": maxCandidates,
@@ -185,7 +185,7 @@ func (p *Percolator) Match(ctx context.Context, v model.Vulnerability) ([]string
 		Hits struct {
 			Hits []struct {
 				Source struct {
-					SubscriptionID string `json:"subscription_id"`
+					RuleID string `json:"rule_id"`
 				} `json:"_source"`
 			} `json:"hits"`
 		} `json:"hits"`
@@ -196,16 +196,16 @@ func (p *Percolator) Match(ctx context.Context, v model.Vulnerability) ([]string
 
 	ids := make([]string, 0, len(out.Hits.Hits))
 	for _, hit := range out.Hits.Hits {
-		if hit.Source.SubscriptionID != "" {
-			ids = append(ids, hit.Source.SubscriptionID)
+		if hit.Source.RuleID != "" {
+			ids = append(ids, hit.Source.RuleID)
 		}
 	}
 	return ids, nil
 }
 
-// ruleQuery translates a domain rule into Elasticsearch query DSL. Conditions
+// criteriaQuery translates a domain rule into Elasticsearch query DSL. Conditions
 // are AND-ed via `filter`, matching the domain's meaning exactly.
-func ruleQuery(rule model.AlertRule) map[string]any {
+func criteriaQuery(rule model.Criteria) map[string]any {
 	filters := make([]map[string]any, 0, 4)
 
 	if term := strings.TrimSpace(rule.Term); term != "" {

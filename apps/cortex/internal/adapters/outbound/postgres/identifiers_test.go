@@ -78,8 +78,8 @@ var _ = Describe("Postgres finding identifiers (integration)", func() {
 		Expect(repo.Upsert(ctx, model.Vulnerability{CVEID: ghsa, Title: "log4shell"})).To(Succeed())
 		_, err := pool.Exec(ctx, `UPDATE vulnerabilities SET first_seen_at = '2020-01-01' WHERE cve_id = $1`, ghsa)
 		Expect(err).ToNot(HaveOccurred())
-		_, err = pool.Exec(ctx, `INSERT INTO subscriptions (id, tenant, name) VALUES ('s1', 't', 'n');
-			INSERT INTO alerts (id, subscription_id, tenant, cve_id) VALUES ('a1', 's1', 't', '`+ghsa+`')`)
+		_, err = pool.Exec(ctx, `INSERT INTO alert_rules (id, tenant, name) VALUES ('s1', 't', 'n');
+			INSERT INTO alerts (id, rule_id, tenant, cve_id) VALUES ('a1', 's1', 't', '`+ghsa+`')`)
 		Expect(err).ToNot(HaveOccurred())
 
 		Expect(repo.Upsert(ctx, model.Vulnerability{CVEID: cve, Aliases: []string{ghsa}, Title: "log4shell"}, ghsa)).To(Succeed())

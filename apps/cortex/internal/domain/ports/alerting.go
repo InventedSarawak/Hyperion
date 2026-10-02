@@ -8,29 +8,29 @@ import (
 	"github.com/inventedsarawak/hyperion/apps/cortex/internal/domain/model"
 )
 
-// ErrSubscriptionNotFound is returned when no subscription matches an id.
-var ErrSubscriptionNotFound = errors.New("subscription not found")
+// ErrAlertRuleNotFound is returned when no alert rule matches an id.
+var ErrAlertRuleNotFound = errors.New("alert rule not found")
 
-// SubscriptionRepo is an OUTBOUND port: durable storage for alert rules.
-type SubscriptionRepo interface {
-	Save(ctx context.Context, s model.Subscription) error
-	Get(ctx context.Context, id string) (model.Subscription, error)
-	List(ctx context.Context, tenant string) ([]model.Subscription, error)
+// AlertRuleRepo is an OUTBOUND port: durable storage for alert rules.
+type AlertRuleRepo interface {
+	Save(ctx context.Context, s model.AlertRule) error
+	Get(ctx context.Context, id string) (model.AlertRule, error)
+	List(ctx context.Context, tenant string) ([]model.AlertRule, error)
 	Delete(ctx context.Context, id string) error
 }
 
 // AlertMatcher is an OUTBOUND port: reverse search. Where a normal index finds
 // documents matching a query, this finds the queries matching a document —
 // which is what lets one pass over an incoming vulnerability identify every
-// subscriber who cares, instead of replaying every rule as a search.
+// user who cares, instead of replaying every rule as a search.
 //
 // Implemented by the Elasticsearch percolator adapter.
 type AlertMatcher interface {
-	// Register makes a subscription's rule matchable.
-	Register(ctx context.Context, s model.Subscription) error
+	// Register makes an alert rule's criteria matchable.
+	Register(ctx context.Context, s model.AlertRule) error
 	// Deregister removes it.
 	Deregister(ctx context.Context, id string) error
-	// Match returns the ids of the subscriptions a vulnerability satisfies.
+	// Match returns the ids of the alert rules a vulnerability satisfies.
 	Match(ctx context.Context, v model.Vulnerability) ([]string, error)
 	// Ready reports whether the backend is reachable and usable.
 	Ready(ctx context.Context) error
@@ -40,8 +40,8 @@ type AlertMatcher interface {
 type AlertRepo interface {
 	// Append records an alert, replacing any earlier one with the same id.
 	Append(ctx context.Context, a model.Alert) error
-	// List returns alerts newest first, optionally filtered to one subscription.
-	List(ctx context.Context, tenant, subscriptionID string, limit int) ([]model.Alert, error)
+	// List returns alerts newest first, optionally filtered to one alert rule.
+	List(ctx context.Context, tenant, ruleID string, limit int) ([]model.Alert, error)
 }
 
 // DedupeStore is an OUTBOUND port: short-lived "have I seen this?" memory.

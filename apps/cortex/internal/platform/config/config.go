@@ -20,14 +20,14 @@ const (
 	// DefaultRelevanceFloor mirrors elasticsearch.DefaultRelevanceFloor,
 	// which carries the reasoning and the measurements. Config does not
 	// import the adapter — a spec holds the two together instead.
-	DefaultRelevanceFloor  = 0.15
-	DefaultGRPCAddr        = ":50051"
-	DefaultNeo4jURI        = "bolt://localhost:7687"
-	DefaultNeo4jUsername   = "neo4j"
-	DefaultNeo4jPassword   = "hyperion"
-	DefaultNeo4jDatabase   = "neo4j"
-	DefaultRedisAddr       = "localhost:6379"
-	DefaultSubscriptionIdx = "hyperion-subscriptions"
+	DefaultRelevanceFloor = 0.15
+	DefaultGRPCAddr       = ":50051"
+	DefaultNeo4jURI       = "bolt://localhost:7687"
+	DefaultNeo4jUsername  = "neo4j"
+	DefaultNeo4jPassword  = "hyperion"
+	DefaultNeo4jDatabase  = "neo4j"
+	DefaultRedisAddr      = "localhost:6379"
+	DefaultAlertRuleIdx   = "hyperion-alert-rules"
 	// DefaultConsumerGroup names cortex's ingest group on the signal topic.
 	DefaultConsumerGroup = "intel-indexer"
 	// DefaultDependencyGroup names cortex's group on the dependency topic.
@@ -77,7 +77,7 @@ type Config struct {
 	BlastRadiusMaxDepth int
 
 	RedisAddr         string
-	SubscriptionIndex string
+	AlertRuleIndex    string
 	AlertDedupeWindow time.Duration
 
 	// GitHubBaseURL and GitHubToken drive repository discovery for the
@@ -161,8 +161,8 @@ func Load() Config {
 		// enough to stay fast on a dense graph.
 		BlastRadiusMaxDepth: l.Int("BLAST_RADIUS_MAX_DEPTH", 3),
 
-		RedisAddr:         l.String("REDIS_ADDR", DefaultRedisAddr),
-		SubscriptionIndex: l.String("SUBSCRIPTION_INDEX", DefaultSubscriptionIdx),
+		RedisAddr:      l.String("REDIS_ADDR", DefaultRedisAddr),
+		AlertRuleIndex: l.String("ALERT_RULE_INDEX", DefaultAlertRuleIdx),
 		// Advisories are re-observed on every poll and corrected for weeks;
 		// an hour is long enough to stop the repeats without hiding a genuinely
 		// new finding.

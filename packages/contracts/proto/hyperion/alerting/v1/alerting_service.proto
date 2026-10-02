@@ -6,22 +6,26 @@ import "google/protobuf/timestamp.proto";
 import "hyperion/common/v1/package.proto";
 import "hyperion/common/v1/vulnerability.proto";
 
-// AlertingService is cortex's subscription and alert API. Subscribers describe
-// what they want to hear about once; every incoming vulnerability is matched
-// against every rule (reverse search), so nobody has to poll.
+// AlertingService is cortex's alert rule and alert API. A user describes what
+// they want to hear about once; every incoming vulnerability is matched against
+// every rule (reverse search), so nobody has to poll.
+//
+// These were called subscriptions until billing made that word mean something
+// else: an alert rule is a standing request to be told, not a thing anyone pays
+// for.
 service AlertingService {
-  rpc CreateSubscription(CreateSubscriptionRequest) returns (CreateSubscriptionResponse);
-  rpc ListSubscriptions(ListSubscriptionsRequest) returns (ListSubscriptionsResponse);
-  rpc DeleteSubscription(DeleteSubscriptionRequest) returns (DeleteSubscriptionResponse);
+  rpc CreateAlertRule(CreateAlertRuleRequest) returns (CreateAlertRuleResponse);
+  rpc ListAlertRules(ListAlertRulesRequest) returns (ListAlertRulesResponse);
+  rpc DeleteAlertRule(DeleteAlertRuleRequest) returns (DeleteAlertRuleResponse);
   // ListAlerts returns what has already matched, newest first.
   rpc ListAlerts(ListAlertsRequest) returns (ListAlertsResponse);
 }
 
-// AlertRule is what a subscriber wants to hear about. Every populated
-// condition must hold, so conditions narrow rather than widen. A rule with no
-// conditions at all is rejected: it would match every vulnerability ever
-// ingested, which is the alert fatigue this platform exists to prevent.
-message AlertRule {
+// AlertCriteria is what a rule matches. Every populated condition must hold,
+// so conditions narrow rather than widen. Criteria with no conditions at all
+// are rejected: they would match every vulnerability ever ingested, which is
+// the alert fatigue this platform exists to prevent.
+message AlertCriteria {
   string term = 1; // free text over cve id, title and description
   hyperion.common.v1.Severity min_severity = 2; // UNSPECIFIED = any severity
   // Match when the vulnerability affects any of these libraries. Version is
@@ -30,20 +34,20 @@ message AlertRule {
   repeated hyperion.common.v1.Ecosystem ecosystems = 4;
 }
 
-// Subscription is one subscriber's standing interest.
-message Subscription {
+// AlertRule is one user's standing interest.
+message AlertRule {
   string id = 1;
   string tenant = 2; // owner; per-tenant isolation arrives with auth in v4
   string name = 3;
-  AlertRule rule = 4;
+  AlertCriteria criteria = 4;
   google.protobuf.Timestamp created_at = 5;
 }
 
-// Alert is one vulnerability matching one subscription.
+// Alert is one vulnerability matching one rule.
 message Alert {
   string id = 1;
-  string subscription_id = 2;
-  string subscription_name = 3;
+  string rule_id = 2;
+  string rule_name = 3;
   string tenant = 4;
   string cve_id = 5;
   // The matching vulnerability, resolved on read. Alerts store only the CVE
@@ -53,35 +57,35 @@ message Alert {
   google.protobuf.Timestamp created_at = 8;
 }
 
-message CreateSubscriptionRequest {
+message CreateAlertRuleRequest {
   string tenant = 1;
   string name = 2;
-  AlertRule rule = 3;
+  AlertCriteria criteria = 3;
 }
 
-message CreateSubscriptionResponse {
-  Subscription subscription = 1;
+message CreateAlertRuleResponse {
+  AlertRule rule = 1;
 }
 
-message ListSubscriptionsRequest {
+message ListAlertRulesRequest {
   string tenant = 1; // empty lists every tenant's, until auth scopes it (v4)
 }
 
-message ListSubscriptionsResponse {
-  repeated Subscription subscriptions = 1;
+message ListAlertRulesResponse {
+  repeated AlertRule rules = 1;
 }
 
-message DeleteSubscriptionRequest {
+message DeleteAlertRuleRequest {
   string id = 1;
 }
 
-message DeleteSubscriptionResponse {
+message DeleteAlertRuleResponse {
   bool deleted = 1;
 }
 
 message ListAlertsRequest {
   string tenant = 1;
-  string subscription_id = 2; // optional filter
+  string rule_id = 2; // optional filter
   int32 limit = 3;
 }
 

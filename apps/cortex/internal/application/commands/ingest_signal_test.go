@@ -447,7 +447,7 @@ var _ = Describe("IngestSignal and replayed history", func() {
 
 		Expect(err).ToNot(HaveOccurred())
 		// Loading ten years of advisories is not ten years of news: a
-		// subscription matching them would fire thousands of times for things
+		// alert rule matching them would fire thousands of times for things
 		// fixed long ago.
 		Expect(alerter.seen).To(BeEmpty())
 	})
