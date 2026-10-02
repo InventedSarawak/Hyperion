@@ -79,9 +79,13 @@ Deliberate choices:
   would have had an opinion about.
 - **First-party actions plus `go install`.** A CI pipeline for a security tool
   that pulls a dozen third-party actions into its own supply chain is not an
-  argument worth having to make. Every tool version is pinned, and the protoc
-  plugins are pinned to the versions in `packages/contracts/go.mod` so the
-  generated code is byte-identical to a workstation's.
+  argument worth having to make. Every tool version is pinned. The protoc
+  plugins are the exception: their versions are read from the stamp each one
+  writes at the top of the committed generated code, so CI generates with
+  exactly what generated it. They were first pinned from
+  `packages/contracts/go.mod`, which records the runtime library rather than
+  the plugin that wrote the code — v1.36.12 and v1.5.1 against a real v1.36.11
+  and v1.6.1 — and the very first run on GitHub failed the drift check on it.
 - **`HYPERION_INGEST=0`.** siphon would poll NVD, GitHub and eight other feeds
   from a shared runner IP with no API keys. The end-to-end tests do not need it.
 - **The store is seeded through the pipeline.** A fresh runner has an empty

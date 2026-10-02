@@ -25,10 +25,6 @@ permissions:
   contents: read
 
 env:
-  # Local plugin versions, matched to packages/contracts/go.mod so the code
-  # generated here is byte-identical to the code generated on a workstation.
-  PROTOC_GEN_GO_VERSION: v1.36.12
-  PROTOC_GEN_GO_GRPC_VERSION: v1.5.1
   BUF_VERSION: v1.72.0
   TASK_VERSION: v3.53.1
   GRPCURL_VERSION: v1.9.3
@@ -104,10 +100,21 @@ jobs:
           cache-dependency-path: "**/go.sum"
 
       - name: Install buf and the protoc plugins
+        # The plugin versions are read from the stamp at the top of the
+        # committed generated code, not pinned here. Each plugin writes its
+        # version into what it generates, so a different version is drift by
+        # construction; pinning them by hand once already guessed wrong (from
+        # go.mod, which records the runtime library, not the plugin that
+        # wrote the code). Regenerating with newer tools updates the stamp, and
+        # this follows it.
         run: |
+          stamp=packages/contracts/gen/hyperion/alerting/v1
+          go_v=$(grep -m1 -oE 'protoc-gen-go v[0-9.]+' $stamp/alerting_service.pb.go | cut -d' ' -f2)
+          grpc_v=v$(grep -m1 -oE 'protoc-gen-go-grpc v?[0-9.]+' $stamp/alerting_service_grpc.pb.go | grep -oE '[0-9.]+$')
+          echo "plugins from the committed stamp: protoc-gen-go $go_v, protoc-gen-go-grpc $grpc_v"
           go install github.com/bufbuild/buf/cmd/buf@${BUF_VERSION}
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}
-          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@${PROTOC_GEN_GO_GRPC_VERSION}
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@${go_v}
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@${grpc_v}
 
       - name: buf lint
         working-directory: packages/contracts
@@ -120,6 +127,7 @@ jobs:
           if ! git diff --quiet -- gen; then
             echo "::error::generated code is stale — run 'task codegen' and commit the result"
             git diff --stat -- gen
+            git diff -- gen | head -40
             exit 1
           fi
 
