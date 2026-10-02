@@ -44,6 +44,7 @@ and the repository scanner use it.
 | `8081`  | Kafka console (web UI)          |
 | `50051` | cortex (gRPC)                   |
 | `8080`  | nexus (GraphQL + `/playground`) |
+| `8082`  | siphon (`/healthz`)             |
 
 If another project already holds one of these, `task up` fails to bind and the stack comes
 up half-started — see [Troubleshooting](#7-troubleshooting).
@@ -118,6 +119,38 @@ task logs       # tail cortex and nexus logs together
 
 Elasticsearch reporting `yellow` is expected on a single node — replicas cannot be
 assigned. It is cosmetic locally.
+
+### In containers instead
+
+`task up` runs the infrastructure in containers and cortex, nexus and siphon as native
+processes, because a native rebuild takes a second. The same three services also run as
+images — how they would be deployed:
+
+```bash
+task down              # the native stack holds the same ports; stop it first
+task up:containers     # build the images and start everything; returns once all are healthy
+task down:containers   # stop it (add -- -v to drop the data volumes too)
+task images            # just build the images
+```
+
+The images are built from `deploy/docker/go-service.Dockerfile`: static binaries on
+distroless, running as nonroot, with no shell. To get inside one, use its logs and its
+health endpoint rather than `docker exec … sh` — there is no `sh`:
+
+```bash
+docker logs hyperion-cortex
+docker exec hyperion-cortex /probe grpc 127.0.0.1:50051   # exit 0 when serving
+docker exec hyperion-nexus  /probe http://127.0.0.1:8080/healthz
+```
+
+`.env` is read for secrets (API tokens and keys); every address is then overridden with the
+compose network's, so a `.env` written for the native loop works unchanged. Each service
+restarts unless you stopped it yourself — `docker kill` counts as that — and has a memory
+ceiling (cortex 1 GiB, nexus 256 MiB, siphon 1 GiB).
+
+siphon does not wait for cortex, by design. If its first repository-scan tick logs
+`lookup cortex … server misbehaving`, cortex was still starting; the next tick, 30s later,
+succeeds.
 
 ---
 

@@ -349,11 +349,14 @@ infrastructure** waits for the same v4 work that containerises the services.
 > Infra debt registered in `docs/TECHNICAL-DEBT.md`. `deploy/k8s/` and
 > `deploy/terraform/` are currently **empty directories**.
 
-- [ ] **Dockerfiles:** multi-stage build per Go service (repays AGENTS.md Rule 7 —
-      services currently run natively via `scripts/system.sh`)
-- [ ] Add the Go services to `docker-compose.yml` with `restart: unless-stopped`
-- [ ] Add resource limits to all compose services
-- [ ] **CI:** `.github/workflows/` is empty — add build + test + lint + typecheck
+- [x] **Dockerfiles (2026-10-02):** one multi-stage, distroless build for every Go
+      service (repays AGENTS.md Rule 7)
+- [x] Add the Go services to `docker-compose.yml` with `restart: unless-stopped`
+      (profile `apps`; `task up:containers`)
+- [ ] Add resource limits to all compose services — done for Hyperion's services;
+      the infrastructure containers still need theirs, measured against their heaps
+- [x] **CI (2026-09-18):** static checks, contract drift, integration, end-to-end;
+      a containers job runs the end-to-end suite against the images
 - [ ] Decide whether `deploy/terraform/` is real (fill it) or aspirational (delete it)
 - [ ] Create `deploy/k8s/helm-chart`
 - [ ] Setup local **K3s** cluster

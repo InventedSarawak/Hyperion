@@ -107,7 +107,9 @@ Hyperion leverages containerization and container orchestration to manage its co
 - **Rule 4: Polyglot Discipline.** Do not force relational data into Neo4j, and do not try to do graph traversals in Postgres. Route data to its designated persistence layer based on its query pattern.
 - **Rule 5: AI Must Remain Local.** Do not route sensitive internal architecture, vulnerability data, or explicit exploit requests to public OpenAI/Anthropic APIs. Always default to the local Ollama instance for the CTF Copilot.
 - **Rule 6: Delegate the UI.** Do not build custom authentication screens or billing dashboards. Rely strictly on Keycloak for identity flows and Lago/Stripe for checkout and metering. Focus engineering cycles on the core threat engine.
-- **Rule 7: Containerize Everything.** _(Currently VIOLATED in local dev: the Go
-  services run natively via `scripts/system.sh`; only Postgres and Elasticsearch are
-  containers. Tracked in `docs/TECHNICAL-DEBT.md`, to be repaid in v4.)_ Code is not "done" until it runs seamlessly inside a Docker container and can be orchestrated via standard K8s manifests or Helm charts.
+- **Rule 7: Containerize Everything.** _(Met as of 2026-10-02: cortex, nexus and
+  siphon build into distroless images and run in compose via `task up:containers`,
+  and CI runs the end-to-end suite against them. `task up` still runs the services
+  natively by default, for the one-second rebuild — the same compose file, the same
+  health checks. Kubernetes manifests are still to come.)_ Code is not "done" until it runs seamlessly inside a Docker container and can be orchestrated via standard K8s manifests or Helm charts.
 - **Rule 8: Keep the Docs True.** Every change that alters behaviour updates, in the same change: [`docs/CURRENT-FUNCTIONALITIES.md`](docs/CURRENT-FUNCTIONALITIES.md) (what the system can do, function by function — add, change or remove the entry and bump its "Last updated" date), the changelog and latest-update section of [`CURRENT_PROGRESS.md`](CURRENT_PROGRESS.md), [`docs/TECHNICAL-DEBT.md`](docs/TECHNICAL-DEBT.md) when a corner is cut or repaid, and [`docs/RUNBOOK.md`](docs/RUNBOOK.md) when a command, key or setting changes. A document that disagrees with the code is a bug.

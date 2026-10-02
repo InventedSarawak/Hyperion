@@ -13,18 +13,52 @@ should be paid off. Update this file whenever a corner is cut or repaid.
 
 ## 1. Deployment & Infrastructure
 
-### 🔴 No Dockerfiles — Go services run as native host processes
+### 🟢 ~~No Dockerfiles — Go services run as native host processes~~ — REPAID (2026-10-02)
 
-`cortex` and `nexus` are compiled to `.run/bin/` and started with `setsid` by
-`scripts/system.sh`. Only Postgres and Elasticsearch are containers.
+cortex, nexus and siphon now build into images and run in compose
+(`task up:containers`), satisfying **AGENTS.md Rule 7**.
 
-- **Why:** a `go build` dev loop is ~1s; a Docker image rebuild per code change is not.
-- **Cost:** the system lives in two places — `docker ps` shows only half of it.
-  Services do not restart on crash, and they die on desktop logout (their parent is
-  `systemd --user`) while the containers survive. This directly contradicts
-  **AGENTS.md Rule 7** ("Code is not done until it runs inside a container").
-- **Fix in v4:** multi-stage Dockerfiles per service, added to `docker-compose.yml`
-  with `restart: unless-stopped`. Keep a bind-mount dev target so the fast loop survives.
+- **One Dockerfile** (`deploy/docker/go-service.Dockerfile`), the service chosen
+  by build argument: three copies of the same build would drift. Static binaries
+  (`CGO_ENABLED=0`) on **distroless, nonroot, no shell** — every tool in an image
+  is one an intruder can use. Images are 44 MB (cortex), 27 MB (nexus), 40 MB
+  (siphon).
+- **Healthchecks without a shell.** Distroless has no curl, so each image carries
+  one tool: `/probe` (`packages/common/health/cmd/probe`), which asks the health
+  endpoints built earlier — `grpc.health.v1` for cortex, `/healthz` for nexus and
+  siphon. `--wait` therefore means _serving_, not _started_.
+- **An allowlist `.dockerignore`.** The context is the repository root, and
+  everything is excluded except the three apps and two shared packages — so
+  `.env` and its API tokens can never be baked into an image by someone
+  forgetting to list it.
+- **Addresses set after `.env`.** Compose reads `.env` for secrets, then overrides
+  every address with the compose network's (`postgres:5432`, `kafka:29092`), so a
+  `.env` written for the native loop cannot send a container looking for a
+  database inside itself.
+- **siphon does not wait for cortex**, keeping the independence the broker was
+  for. Its repository scan asks cortex for the watchlist, so its first tick can
+  fail while cortex is still starting; the next tick 30s later succeeds. Seen
+  live, and left as designed.
+
+Containerising found a real bug on the way: **siphon's and deck's `go.mod` were
+incomplete as standalone modules.** The Go workspace supplied what they had
+forgotten to require, so every local build and test passed, and the modules
+were broken the moment they were built alone — which is how an image builds
+them. CI now builds every module with `GOWORK=off`.
+
+Verified: the whole stack up from images and healthy, the end-to-end suite
+passing against it, all ten feeds polled from inside the siphon container (572
+findings published over TLS), and nexus reporting 503 while cortex was stopped
+and 200 again 30s after it returned. A new **containers** CI job builds the
+images and runs the end-to-end suite against them on every push.
+
+- **What remains:** the native loop is still the default `task up`, on purpose —
+  a one-second rebuild beats an image rebuild for development, and the two now
+  share one compose file and one set of health checks. No image is published to
+  a registry (nothing deploys them yet); no Kubernetes manifests (below). The
+  crash-restart half of `restart: unless-stopped` is configured but not
+  demonstrated: `docker kill` counts as a manual stop, which the policy
+  deliberately respects, and killing the process from the host needs root.
 
 ### 🔴 `deploy/k8s/` and `deploy/terraform/` are empty directories
 
@@ -99,13 +133,19 @@ Deliberate choices:
   deployed. Nothing enforces the pipeline as a required check on the branch;
   that is a repository setting rather than a file.
 
-### 🟡 No restart policies or resource limits in compose
+### 🟡 ~~No restart policies or resource limits in compose~~ — PARTLY REPAID (2026-10-02)
 
-Containers have healthchecks but no `restart:` policy and no memory/CPU bounds
-(beyond Elasticsearch's `ES_JAVA_OPTS` heap).
+Hyperion's own services have `restart: unless-stopped` and a memory ceiling
+(cortex 1 GiB, nexus 256 MiB, siphon 1 GiB) — about fifty times their ~20 MiB
+idle, set as a guard against a runaway rather than a budget, because their peaks
+(a backfill, an OSV bulk parse) have not been measured. A tight limit that
+killed a legitimate backfill would be worse than none.
 
-- **Cost:** a crashed container stays down; a runaway one can starve the host.
-- **Fix in v4:** `restart: unless-stopped` plus `deploy.resources.limits`.
+- **What remains:** the infrastructure containers still have neither. Their
+  memory is governed by their own settings (Elasticsearch's and Kafka's heaps,
+  Neo4j's heap and page cache), and a container limit must agree with those or
+  it becomes an out-of-memory kill waiting to happen — worth doing together
+  with measuring the services' real peaks.
 
 ---
 

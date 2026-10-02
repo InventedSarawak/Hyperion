@@ -1,0 +1,19 @@
+# An allowlist, not a denylist: everything is excluded, and only what the Go
+# service images build from is let back in.
+#
+# The build context is the repository root, because a service image needs its
+# own module and the shared packages beside it. A denylist would have to keep up
+# with every new directory — and the one that matters is .env, which holds API
+# tokens. Excluding by default means a secret can never be baked into an image
+# by someone forgetting to list it here.
+*
+
+!apps/cortex
+!apps/nexus
+!apps/siphon
+!packages/common
+!packages/contracts
+
+# Tests are not built into an image, and fixtures can be large.
+**/*_test.go
+**/testdata

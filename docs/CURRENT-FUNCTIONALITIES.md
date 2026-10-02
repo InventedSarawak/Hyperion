@@ -906,13 +906,26 @@ may go quiet — generous, because a full cycle over ten rate-limited feeds take
 `task status` reports what each service says about itself, and `task up` waits for
 cortex to say it is serving rather than for its port to open.
 
-### 5.2 Continuous integration
+### 5.2 Containers
+
+cortex, nexus and siphon run from images as well as natively: `task up:containers` builds
+them and starts the whole stack in compose, returning only when every healthcheck passes.
+One Dockerfile builds all three (static binaries on distroless, nonroot, no shell — 44, 27
+and 40 MB); each image carries a single tool, `/probe`, which its healthcheck runs against
+the service's own health endpoint. They restart unless stopped and have a memory ceiling.
+`task up` still runs the services natively by default for the one-second rebuild; the two
+share one compose file and cannot run at once, since they bind the same ports.
+
+### 5.3 Continuous integration
 
 `.github/workflows/ci.yml` runs on every push to `main` or a `v*` branch and on every
 pull request: **static** (prettier, gofmt, eslint, tsc, `go vet`), **contracts**
 (`buf lint`, plus a check that the generated Go is already committed), and **tests**
 (`task build:go`, the integration suites against real backing services from the same
-compose file, then the end-to-end tests against a started stack).
+compose file, then the end-to-end tests against a started stack), and **containers** (the
+images built and the end-to-end tests run again against them). The static job also builds
+every module on its own (`GOWORK=off`): the workspace hides a dependency a module forgot to
+require, and an image build is where that surfaces.
 
 It runs the same `task` commands as `.husky/pre-commit`, so a green hook and a green
 pipeline mean the same thing — the hook stays the fast loop, the pipeline is where the

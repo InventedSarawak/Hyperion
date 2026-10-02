@@ -30,6 +30,23 @@ tasks:
     cmds:
       - ./scripts/system.sh status
 
+  up:containers:
+    desc: 'Run the whole stack in containers — infrastructure and services, built from deploy/docker (stop the native stack first: task down)'
+    cmds:
+      # --wait holds until every healthcheck passes, so "up" means serving,
+      # not merely started.
+      - docker compose -f deploy/docker-compose.yml --profile apps up -d --build --wait
+
+  down:containers:
+    desc: Stop the containerised stack (add -- -v to also drop volumes)
+    cmds:
+      - docker compose -f deploy/docker-compose.yml --profile apps down {{.CLI_ARGS}}
+
+  images:
+    desc: Build the cortex, nexus and siphon images
+    cmds:
+      - docker compose -f deploy/docker-compose.yml --profile apps build
+
   logs:
     desc: Tail the running service logs
     cmds:

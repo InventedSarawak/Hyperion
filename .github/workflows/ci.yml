@@ -77,6 +77,19 @@ jobs:
       - name: typescript
         run: pnpm run check-types
 
+      - name: each module builds on its own
+        # The workspace (go.work) fills in any dependency a module forgot to
+        # require, so every local build passes — and the module is broken the
+        # moment it is built alone, which is how a container builds it. siphon
+        # and deck were, for a milestone, and only an image build noticed.
+        run: |
+          set -e
+          for mod in apps/* packages/common packages/contracts; do
+            [ -f "$mod/go.mod" ] || continue
+            echo "standalone: $mod"
+            (cd "$mod" && GOWORK=off go build ./...)
+          done
+
       - name: go vet
         run: |
           set -e
@@ -223,3 +236,57 @@ jobs:
             echo "::endgroup::"
           done
           docker compose -f deploy/docker-compose.yml logs --tail 100
+
+  # The services as they are deployed: built into their images and run from
+  # them, then asked the same end-to-end questions as the native stack above.
+  # Passing there and failing here means the image is wrong — a missing file,
+  # a wrong address, a module that only built inside the workspace.
+  containers:
+    name: containers
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache-dependency-path: "**/go.sum"
+
+      - name: Install task
+        run: go install github.com/go-task/task/v3/cmd/task@${TASK_VERSION}
+
+      - name: Build the images
+        run: task images
+
+      - name: Start cortex and nexus in containers
+        # Their infrastructure comes up with them through depends_on, and
+        # --wait holds until every healthcheck passes — the images' own
+        # /probe, so this also proves the healthchecks work. siphon is left
+        # out for the reason the tests job leaves it out: it would poll ten
+        # public feeds from a shared runner with no API keys.
+        run: docker compose -f deploy/docker-compose.yml --profile apps up -d --wait cortex nexus
+
+      - name: Seed the pipeline
+        # Into Kafka from the runner, out through the containerised cortex.
+        run: |
+          task loadtest -- -topic hyperion.signals.v1 -no-consume -count 500 -rate 0
+          for _ in $(seq 1 60); do
+            total=$(./scripts/graphql.sh '{ search(sort: NEWEST, pageSize: 1) { totalResults } }' 2>/dev/null \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["search"]["totalResults"])' 2>/dev/null || echo 0)
+            if [ "${total:-0}" -gt 0 ]; then
+              echo "seeded: $total findings searchable"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::published findings never became searchable through the containers"
+          exit 1
+
+      - name: End-to-end tests against the containers
+        run: task test:e2e
+
+      - name: Container logs
+        if: failure()
+        run: |
+          docker compose -f deploy/docker-compose.yml --profile apps ps
+          docker compose -f deploy/docker-compose.yml --profile apps logs --tail 150 cortex nexus

@@ -146,6 +146,139 @@ services:
       - ./kafka-console.yaml:/etc/hyperion/console.yaml:ro
       - ../packages/contracts/proto:/etc/hyperion/proto:ro
 
+  # ---------------------------------------------------------------------------
+  # Hyperion's own services, containerised (AGENTS.md Rule 7).
+  #
+  # Behind the "apps" profile, so `task up` — infrastructure in containers, the
+  # Go services native for a one-second rebuild — is unchanged, and the
+  # containerised stack is asked for explicitly: `task up:containers`. The two
+  # bind the same host ports and cannot run side by side.
+  #
+  # Every image is built from deploy/docker/go-service.Dockerfile: static
+  # binaries on distroless, nonroot, no shell. Addresses point at the compose
+  # network (postgres:5432, kafka:29092 …) and are set here, after .env, so a
+  # .env written for the native loop — localhost everywhere — cannot send a
+  # container looking for a database inside itself. .env still supplies the
+  # secrets: API tokens and keys.
+  # ---------------------------------------------------------------------------
+
+  cortex:
+    profiles: [apps]
+    image: hyperion/cortex:dev
+    build:
+      context: ..
+      dockerfile: deploy/docker/go-service.Dockerfile
+      args: { APP: cortex, CMD: server }
+    container_name: hyperion-cortex
+    # A ceiling against a runaway, not a budget: idle is ~20 MiB, and peaks
+    # (a backfill, an OSV bulk parse) are not measured yet. Generous on
+    # purpose — an out-of-memory kill mid-ingest is worse than the host
+    # running a little warm.
+    mem_limit: 1g
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      CORTEX_DATABASE_URL: postgres://hyperion:hyperion@postgres:5432/hyperion?sslmode=disable
+      CORTEX_ELASTICSEARCH_URL: http://elasticsearch:9200
+      CORTEX_NEO4J_URI: bolt://neo4j:7687
+      CORTEX_REDIS_ADDR: redis:6379
+      CORTEX_KAFKA_BROKERS: kafka:29092
+      CORTEX_GRPC_ADDR: ":50051"
+    ports:
+      - "50051:50051"
+    depends_on:
+      postgres: { condition: service_healthy }
+      elasticsearch: { condition: service_healthy }
+      neo4j: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    restart: unless-stopped
+    healthcheck:
+      # grpc.health.v1: SERVING only while Postgres answers. Elasticsearch or
+      # Neo4j being down leaves it serving on purpose — ingest carries on
+      # without them, and a restart would turn degraded into stopped.
+      test: ["CMD", "/probe", "grpc", "127.0.0.1:50051"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      # Migrations, the index alias and the alert rule index all settle
+      # before cortex first reports serving.
+      start_period: 60s
+
+  nexus:
+    profiles: [apps]
+    image: hyperion/nexus:dev
+    build:
+      context: ..
+      dockerfile: deploy/docker/go-service.Dockerfile
+      args: { APP: nexus, CMD: server }
+    container_name: hyperion-nexus
+    # A ceiling against a runaway, not a budget: idle is ~20 MiB, and peaks
+    # (a backfill, an OSV bulk parse) are not measured yet. Generous on
+    # purpose — an out-of-memory kill mid-ingest is worse than the host
+    # running a little warm.
+    mem_limit: 256m
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      NEXUS_HTTP_ADDR: ":8080"
+      NEXUS_CORTEX_GRPC_ADDR: cortex:50051
+    ports:
+      - "8080:8080"
+    depends_on:
+      cortex: { condition: service_healthy }
+    restart: unless-stopped
+    healthcheck:
+      # Unhealthy whenever cortex is: a gateway that cannot reach the service
+      # behind it should not be sent traffic it will fail.
+      test: ["CMD", "/probe", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  siphon:
+    profiles: [apps]
+    image: hyperion/siphon:dev
+    build:
+      context: ..
+      dockerfile: deploy/docker/go-service.Dockerfile
+      args: { APP: siphon, CMD: worker }
+    container_name: hyperion-siphon
+    # A ceiling against a runaway, not a budget: idle is ~20 MiB, and peaks
+    # (a backfill, an OSV bulk parse) are not measured yet. Generous on
+    # purpose — an out-of-memory kill mid-ingest is worse than the host
+    # running a little warm.
+    mem_limit: 1g
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      SIPHON_KAFKA_BROKERS: kafka:29092
+      SIPHON_REDIS_ADDR: redis:6379
+      SIPHON_CORTEX_GRPC_ADDR: cortex:50051
+      SIPHON_HEALTH_ADDR: ":8082"
+    ports:
+      - "8082:8082"
+    # Not on cortex: siphon publishes to Kafka, and keeps publishing while
+    # cortex is down. That independence is what the broker was for.
+    depends_on:
+      kafka: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+    healthcheck:
+      # Its required check is the poll heartbeat: a wedged worker answers a
+      # port probe as happily as a working one.
+      test: ["CMD", "/probe", "http://127.0.0.1:8082/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # The first poll across ten feeds takes a while; it is unhealthy until
+      # that poll has started.
+      start_period: 60s
+
 volumes:
   postgres_data:
   elasticsearch_data:

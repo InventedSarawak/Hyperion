@@ -463,6 +463,12 @@ not started.**
 
 ## Changelog
 
+- **2026-10-02** — Containers: one distroless Dockerfile for cortex, nexus and siphon,
+  compose services behind the `apps` profile (`task up:containers`) with `/probe`
+  healthchecks, restart policies and memory ceilings, an allowlist `.dockerignore`, and a
+  CI job running the end-to-end suite against the images. Found siphon's and deck's
+  `go.mod` incomplete outside the workspace. deck's direct gRPC transport marked as the
+  debugging escape hatch it is.
 - **2026-10-02** — Alerting renamed from subscriptions to alert rules (migration 0010,
   contract, GraphQL, tasks); deck tab 5 **Alerts**. 39 live alerts verified through the
   renamed schema.
